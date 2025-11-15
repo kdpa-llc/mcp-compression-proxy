@@ -16,6 +16,7 @@ export default {
   testMatch: [
     '**/tests/**/*.test.ts',
     '**/__tests__/**/*.test.ts',
+    '!**/tests/e2e-real/**', // Exclude real LLM tests from default run
   ],
   collectCoverageFrom: [
     'src/**/*.ts',

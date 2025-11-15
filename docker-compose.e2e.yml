@@ -1,0 +1,83 @@
+version: '3.8'
+
+services:
+  # Ollama service with LLM
+  ollama:
+    image: ollama/ollama:latest
+    container_name: mcp-test-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - mcp-test-network
+
+  # Pull the model after Ollama starts
+  ollama-setup:
+    image: ollama/ollama:latest
+    container_name: mcp-test-ollama-setup
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: |
+      sh -c "
+        echo '📥 Pulling Llama 3.2 1B model...'
+        ollama pull llama3.2:1b --host http://ollama:11434
+        echo '✓ Model ready'
+      "
+    networks:
+      - mcp-test-network
+
+  # Build and prepare MCP server
+  mcp-server-build:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: mcp-test-build
+    volumes:
+      - ./dist:/app/dist
+      - ./node_modules:/app/node_modules
+    command: npm run build
+    networks:
+      - mcp-test-network
+
+  # Run E2E tests with real LLM
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: mcp-test-runner
+    depends_on:
+      - ollama-setup
+      - mcp-server-build
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - OLLAMA_MODEL=llama3.2:1b
+      - NODE_ENV=test
+    volumes:
+      - ./dist:/app/dist
+      - ./tests:/app/tests
+      - ./src:/app/src
+      - ./node_modules:/app/node_modules
+      - ./coverage:/app/coverage
+    command: |
+      sh -c "
+        echo '🧪 Running real LLM E2E tests...'
+        npm test -- tests/e2e-real --testTimeout=120000
+      "
+    networks:
+      - mcp-test-network
+
+volumes:
+  ollama_data:
+    name: mcp-test-ollama-data
+
+networks:
+  mcp-test-network:
+    name: mcp-test-network
+    driver: bridge

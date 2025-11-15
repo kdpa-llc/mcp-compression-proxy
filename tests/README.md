@@ -28,9 +28,13 @@ tests/
 │   └── servers-config.test.ts
 ├── integration/            # Integration tests for module interactions (1 file)
 │   └── compression-session-integration.test.ts
-├── e2e/                    # End-to-end tests for complete workflows (2 files)
+├── e2e/                    # End-to-end tests with mocked LLM (2 files)
 │   ├── tool-aggregation-workflow.test.ts
-│   └── user-journey.test.ts              # ⭐ NEW: Comprehensive user journey
+│   └── user-journey.test.ts              # ⭐ Comprehensive user journey
+├── e2e-real/               # 🚀 Real LLM integration tests (optional)
+│   ├── real-llm-integration.test.ts      # Tests with actual Ollama/LLM
+│   ├── ollama-client.ts                  # Ollama integration utilities
+│   └── README.md                         # Real LLM testing guide
 ├── FEATURE_COVERAGE.md     # Feature test coverage analysis
 └── README.md               # This file
 ```
@@ -100,6 +104,27 @@ E2E tests validate complete workflows:
   - **Management Tools API testing** - validates all management tools work together
   - **Concurrent session testing** - verifies 3+ simultaneous sessions work correctly
 
+### 🚀 Real LLM Integration Tests (Optional)
+
+**New!** Tests with actual AI using Ollama:
+
+- **Real LLM Integration** (`e2e-real/real-llm-integration.test.ts`)
+  - Uses **real language model** (Ollama with Llama 3.2) instead of mocks
+  - Validates actual MCP protocol stdio communication
+  - Tests real LLM compression intelligence
+  - Verifies LLM understands tool descriptions and follows workflows
+  - Confirms end-to-end system works with actual AI inference
+
+**Prerequisites:** Requires Ollama installed and running locally
+- Install: `curl -fsSL https://ollama.com/install.sh | sh`
+- Start: `ollama serve`
+- Run: `npm run test:e2e:real-llm`
+- Or use Docker: `npm run docker:e2e`
+
+See [`e2e-real/README.md`](./e2e-real/README.md) for detailed setup and usage.
+
+**Note:** Real LLM tests are excluded from default `npm test` run. Must be run explicitly.
+
 ## Running Tests
 
 ### All Tests
@@ -122,9 +147,18 @@ npm run test:unit
 npm run test:integration
 ```
 
-### E2E Tests Only
+### E2E Tests Only (Mocked)
 ```bash
 npm run test:e2e
+```
+
+### 🚀 Real LLM E2E Tests (Requires Ollama)
+```bash
+# Local testing (requires Ollama running)
+npm run test:e2e:real-llm
+
+# Docker testing (handles Ollama automatically)
+npm run docker:e2e
 ```
 
 ### Coverage Report

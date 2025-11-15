@@ -1,0 +1,148 @@
+name: E2E Tests with Real LLM
+
+on:
+  push:
+    branches: [main, development]
+  pull_request:
+    branches: [main, development]
+  workflow_dispatch:  # Allow manual trigger
+    inputs:
+      model:
+        description: 'Ollama model to use'
+        required: false
+        default: 'llama3.2:1b'
+
+jobs:
+  real-llm-e2e:
+    name: Real LLM Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Build project
+      run: npm run build
+
+    - name: Install Ollama
+      run: |
+        echo "📥 Installing Ollama..."
+        curl -fsSL https://ollama.com/install.sh | sh
+
+    - name: Start Ollama service
+      run: |
+        echo "🚀 Starting Ollama service..."
+        ollama serve &
+        OLLAMA_PID=$!
+        echo $OLLAMA_PID > ollama.pid
+
+        # Wait for Ollama to be ready
+        echo "⏳ Waiting for Ollama to start..."
+        for i in {1..30}; do
+          if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
+            echo "✓ Ollama is ready"
+            break
+          fi
+          echo "  Attempt $i/30..."
+          sleep 2
+        done
+
+        # Verify Ollama is running
+        if ! curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
+          echo "❌ Ollama failed to start"
+          exit 1
+        fi
+
+    - name: Pull LLM model
+      run: |
+        MODEL="${{ github.event.inputs.model || 'llama3.2:1b' }}"
+        echo "📥 Pulling model: $MODEL"
+        ollama pull $MODEL
+        echo "✓ Model ready"
+
+    - name: Run real LLM E2E tests
+      run: |
+        echo "🧪 Running real LLM integration tests..."
+        npm test -- tests/e2e-real --testTimeout=120000
+      env:
+        OLLAMA_HOST: http://localhost:11434
+        NODE_ENV: test
+
+    - name: Cleanup
+      if: always()
+      run: |
+        echo "🧹 Cleaning up..."
+        if [ -f ollama.pid ]; then
+          kill $(cat ollama.pid) 2>/dev/null || true
+          rm ollama.pid
+        fi
+        pkill ollama || true
+
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: real-llm-test-results
+        path: |
+          coverage/
+          *.log
+        retention-days: 7
+
+  # Optional: Run with different models
+  real-llm-matrix:
+    name: Real LLM Tests (Multiple Models)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    timeout-minutes: 45
+    strategy:
+      matrix:
+        model:
+          - 'llama3.2:1b'    # Fast, lightweight
+          - 'llama3.2:3b'    # Better quality
+      fail-fast: false
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Build project
+      run: npm run build
+
+    - name: Install Ollama
+      run: curl -fsSL https://ollama.com/install.sh | sh
+
+    - name: Start Ollama and run tests
+      run: |
+        ollama serve &
+        sleep 10
+        ollama pull ${{ matrix.model }}
+        npm test -- tests/e2e-real --testTimeout=120000
+      env:
+        OLLAMA_HOST: http://localhost:11434
+        OLLAMA_MODEL: ${{ matrix.model }}
+
+    - name: Report results
+      if: always()
+      run: |
+        echo "## Test Results for ${{ matrix.model }}" >> $GITHUB_STEP_SUMMARY
+        echo "Model: ${{ matrix.model }}" >> $GITHUB_STEP_SUMMARY
+        echo "Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
