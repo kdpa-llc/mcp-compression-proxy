@@ -15,7 +15,7 @@
     "test:unit": "jest --testPathPattern=unit",
     "test:integration": "jest --testPathPattern=integration",
     "test:e2e": "jest --testPathPattern=e2e",
-    "test:e2e:real-llm": "jest tests/e2e-real --testTimeout=120000",
+    "test:e2e:real-llm": "jest tests/e2e-real --testTimeout=120000 --testPathIgnorePatterns='/node_modules/'",
     "docker:e2e": "docker-compose -f docker-compose.e2e.yml up --abort-on-container-exit"
   },
   "bin": {

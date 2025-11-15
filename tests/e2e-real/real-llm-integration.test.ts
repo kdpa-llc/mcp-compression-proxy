@@ -17,19 +17,13 @@
 import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { OllamaClient, waitForOllama } from './ollama-client.js';
-import { spawn, ChildProcess } from 'child_process';
+import { OllamaClient } from './ollama-client.js';
 import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 describe('Real LLM E2E Integration', () => {
   let mcpClient: Client;
   let transport: StdioClientTransport;
   let ollamaClient: OllamaClient;
-  let ollamaProcess: ChildProcess | null = null;
 
   beforeAll(async () => {
     console.log('\n🚀 Setting up Real LLM E2E Test Environment...\n');
@@ -58,7 +52,7 @@ describe('Real LLM E2E Integration', () => {
 
     // Start MCP server
     console.log('🔧 Starting MCP Tool Aggregator server...');
-    const serverPath = path.join(__dirname, '../../dist/index.js');
+    const serverPath = path.join(process.cwd(), 'dist/index.js');
 
     transport = new StdioClientTransport({
       command: 'node',
@@ -82,9 +76,6 @@ describe('Real LLM E2E Integration', () => {
   afterAll(async () => {
     if (mcpClient) {
       await mcpClient.close();
-    }
-    if (ollamaProcess) {
-      ollamaProcess.kill();
     }
   });
 
@@ -110,9 +101,11 @@ describe('Real LLM E2E Integration', () => {
     });
 
     expect(compressResult.content).toBeDefined();
-    expect(compressResult.content[0].type).toBe('text');
+    expect(Array.isArray(compressResult.content)).toBe(true);
+    const content = compressResult.content as Array<{ type: string; text: string }>;
+    expect(content[0].type).toBe('text');
 
-    const responseText = (compressResult.content[0] as any).text;
+    const responseText = content[0].text;
     console.log(`   Response preview: ${responseText.substring(0, 100)}...`);
 
     // Extract tools from response
@@ -155,8 +148,9 @@ describe('Real LLM E2E Integration', () => {
       },
     });
 
-    expect(saveResult.content[0].type).toBe('text');
-    const saveText = (saveResult.content[0] as any).text;
+    const saveContent = saveResult.content as Array<{ type: string; text: string }>;
+    expect(saveContent[0].type).toBe('text');
+    const saveText = saveContent[0].text;
     console.log(`   ${saveText}`);
     expect(saveText).toContain('Saved');
 
@@ -204,7 +198,8 @@ describe('Real LLM E2E Integration', () => {
       arguments: {},
     });
 
-    const sessionText = (sessionResult.content[0] as any).text;
+    const sessionContent = sessionResult.content as Array<{ type: string; text: string }>;
+    const sessionText = sessionContent[0].text;
     const sessionMatch = sessionText.match(/Session created: ([\w-]+)/);
     expect(sessionMatch).toBeTruthy();
 
@@ -220,7 +215,8 @@ describe('Real LLM E2E Integration', () => {
       },
     });
 
-    const expandText = (expandResult.content[0] as any).text;
+    const expandContent = expandResult.content as Array<{ type: string; text: string }>;
+    const expandText = expandContent[0].text;
     console.log(`   ✓ Expanded tool: ${expandText.substring(0, 50)}...`);
     expect(expandText).toContain('expanded');
 

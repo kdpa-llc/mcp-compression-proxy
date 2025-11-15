@@ -69,7 +69,7 @@ export class OllamaClient {
       throw new Error(`Ollama generate failed: ${response.statusText}`);
     }
 
-    const data = await response.json();
+    const data = await response.json() as { response: string };
     return data.response;
   }
 
@@ -94,7 +94,7 @@ export class OllamaClient {
       throw new Error(`Ollama chat failed: ${response.statusText}`);
     }
 
-    const data = await response.json();
+    const data = await response.json() as { message: { content: string } };
     return data.message.content;
   }
 

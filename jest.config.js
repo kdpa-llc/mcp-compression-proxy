@@ -10,13 +10,20 @@ export default {
       'ts-jest',
       {
         useESM: true,
+        tsconfig: {
+          module: 'ESNext',
+          target: 'ES2022',
+        },
       },
     ],
   },
   testMatch: [
     '**/tests/**/*.test.ts',
     '**/__tests__/**/*.test.ts',
-    '!**/tests/e2e-real/**', // Exclude real LLM tests from default run
+  ],
+  testPathIgnorePatterns: [
+    '/node_modules/',
+    '/tests/e2e-real/', // Exclude real LLM tests from default run
   ],
   collectCoverageFrom: [
     'src/**/*.ts',
