@@ -257,6 +257,29 @@ npm run build  # Build for production
 npm start      # Run production build
 ```
 
+## Testing
+
+The project includes comprehensive test coverage:
+
+```bash
+npm test                 # Run all tests
+npm run test:unit        # Run unit tests only
+npm run test:integration # Run integration tests only
+npm run test:e2e         # Run end-to-end tests only
+npm run test:coverage    # Generate coverage report
+npm run test:watch       # Run tests in watch mode
+```
+
+### Test Coverage
+
+- **Unit Tests**: Individual module testing (CompressionCache, SessionManager, MCPClientManager)
+- **Integration Tests**: Module interaction testing (compression + session integration)
+- **E2E Tests**: Complete workflow testing (full aggregation and compression cycles)
+
+Coverage thresholds: 80% for branches, functions, lines, and statements.
+
+See [tests/README.md](./tests/README.md) for detailed testing documentation.
+
 ## Environment Variables
 
 - `LOG_LEVEL` - Logging level (debug, info, warn, error). Default: `info`

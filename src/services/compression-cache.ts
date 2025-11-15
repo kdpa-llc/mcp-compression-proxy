@@ -7,7 +7,6 @@ import type { Logger } from 'pino';
  */
 export class CompressionCache {
   private cache: CompressedToolCache = {};
-  private expandedTools: Set<string> = new Set();
   private logger: Logger;
 
   constructor(logger: Logger) {
