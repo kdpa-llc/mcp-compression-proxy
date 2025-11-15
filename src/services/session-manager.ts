@@ -9,12 +9,13 @@ export class SessionManager {
   private sessions: Map<string, SessionInfo> = new Map();
   private logger: Logger;
   private readonly SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+  private cleanupTimer: NodeJS.Timeout;
 
   constructor(logger: Logger) {
     this.logger = logger;
 
     // Cleanup expired sessions every 5 minutes
-    setInterval(() => this.cleanupExpiredSessions(), 5 * 60 * 1000);
+    this.cleanupTimer = setInterval(() => this.cleanupExpiredSessions(), 5 * 60 * 1000);
   }
 
   /**
@@ -195,5 +196,13 @@ export class SessionManager {
     const count = this.sessions.size;
     this.sessions.clear();
     this.logger.info({ count }, 'Cleared all sessions');
+  }
+
+  /**
+   * Destroy the session manager and cleanup resources
+   */
+  destroy(): void {
+    clearInterval(this.cleanupTimer);
+    this.clearAllSessions();
   }
 }

@@ -20,6 +20,7 @@ describe('SessionManager', () => {
   });
 
   afterEach(() => {
+    sessionManager.destroy();
     jest.clearAllTimers();
     jest.useRealTimers();
   });

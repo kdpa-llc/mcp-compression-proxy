@@ -73,7 +73,7 @@ jobs:
     - name: Run real LLM E2E tests
       run: |
         echo "🧪 Running real LLM integration tests..."
-        npm test -- tests/e2e-real --testTimeout=120000
+        npm run test:e2e:real-llm
       env:
         OLLAMA_HOST: http://localhost:11434
         NODE_ENV: test
@@ -135,7 +135,7 @@ jobs:
         ollama serve &
         sleep 10
         ollama pull ${{ matrix.model }}
-        npm test -- tests/e2e-real --testTimeout=120000
+        npm run test:e2e:real-llm
       env:
         OLLAMA_HOST: http://localhost:11434
         OLLAMA_MODEL: ${{ matrix.model }}

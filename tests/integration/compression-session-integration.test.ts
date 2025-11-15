@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, jest } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { CompressionCache } from '../../src/services/compression-cache.js';
 import { SessionManager } from '../../src/services/session-manager.js';
 import type { Logger } from 'pino';
@@ -18,6 +18,11 @@ describe('CompressionCache and SessionManager Integration', () => {
 
     cache = new CompressionCache(mockLogger);
     sessionManager = new SessionManager(mockLogger);
+  });
+
+  afterEach(() => {
+    // Clean up the session manager's interval timer
+    sessionManager.destroy();
   });
 
   describe('Tool expansion workflow', () => {
