@@ -1,0 +1,50 @@
+# Source files
+src/
+tests/
+*.test.ts
+*.spec.ts
+
+# Configuration files
+.github/
+.husky/
+tsconfig.json
+jest.config.js
+commitlint.config.js
+.releaserc.json
+.prettierrc
+.prettierignore
+.eslintrc*
+eslint.config.js
+
+# Development files
+.vscode/
+.idea/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Testing
+coverage/
+.nyc_output/
+
+# Docker
+docker-compose*.yml
+Dockerfile*
+install-docker-ollama.sh
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Documentation (already in files field)
+CONTRIBUTING.md
+CODE_OF_CONDUCT.md
+SECURITY.md
+
+# Misc
+.DS_Store
+*.swp
+*.swo
+*~
