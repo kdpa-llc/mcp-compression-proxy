@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🗜️ MCP Tool Aggregator
+# 🗜️ MCP Compression Proxy
 
 **Aggregate tools from multiple MCP servers with intelligent LLM-based description compression**
 
@@ -33,7 +33,7 @@
 
 ## 📑 Table of Contents
 
-- [What is MCP Tool Aggregator?](#what-is-mcp-tool-aggregator)
+- [What is MCP Compression Proxy?](#what-is-mcp-compression-proxy)
 - [✨ Features](#-features)
 - [🚀 Quick Start](#-quick-start)
 - [🎯 Usage](#-usage)
@@ -44,7 +44,7 @@
 
 ---
 
-## What is MCP Tool Aggregator?
+## What is MCP Compression Proxy?
 
 A **Model Context Protocol (MCP) server** that aggregates tools from multiple MCP servers with **LLM-based description compression** to optimize context usage. Reduce token consumption by 50-80% while maintaining full tool functionality.
 
@@ -339,7 +339,7 @@ While MCP Tool Aggregator optimizes your tool descriptions, [Local Skills MCP][l
 
 ## 💖 Support This Project
 
-If you find MCP Tool Aggregator useful, please consider supporting its development!
+If you find MCP Compression Proxy useful, please consider supporting its development!
 
 <div align="center">
 
@@ -383,7 +383,7 @@ Built with [Model Context Protocol SDK][mcp-sdk]
 
 <div align="center">
 
-**[⬆ Back to Top](#-mcp-tool-aggregator)**
+**[⬆ Back to Top](#-mcp-compression-proxy)**
 
 Made with ❤️ by KDPA
 
@@ -392,10 +392,10 @@ Made with ❤️ by KDPA
 <!-- Reference Links -->
 <!-- Badges - Top of README -->
 
-[npm-version-badge]: https://img.shields.io/npm/v/mcp-tool-aggregator.svg
-[npm-package]: https://www.npmjs.com/package/mcp-tool-aggregator
-[npm-downloads-badge]: https://img.shields.io/npm/dm/mcp-tool-aggregator
-[npm-types-badge]: https://img.shields.io/npm/types/mcp-tool-aggregator
+[npm-version-badge]: https://img.shields.io/npm/v/mcp-compression-proxy.svg
+[npm-package]: https://www.npmjs.com/package/mcp-compression-proxy
+[npm-downloads-badge]: https://img.shields.io/npm/dm/mcp-compression-proxy
+[npm-types-badge]: https://img.shields.io/npm/types/mcp-compression-proxy
 [license-badge]: https://img.shields.io/badge/License-MIT-yellow.svg
 [license]: https://opensource.org/licenses/MIT
 [node-badge]: https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg

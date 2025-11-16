@@ -19,7 +19,7 @@ import pino from 'pino';
  */
 
 const logger = pino({
-  name: 'mcp-aggregator',
+  name: 'mcp-compression-proxy',
   level: process.env.LOG_LEVEL || 'info',
   transport: {
     target: 'pino-pretty',
@@ -42,7 +42,7 @@ let currentSessionId: string | undefined;
 // Create MCP server
 const server = new Server(
   {
-    name: 'mcp-tool-aggregator',
+    name: 'mcp-compression-proxy',
     version: '0.1.0',
   },
   {
