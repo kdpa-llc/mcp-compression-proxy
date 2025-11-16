@@ -1,5 +1,6 @@
 import type { CompressedToolCache, CompressionStats } from '../types/compression.js';
 import type { Logger } from 'pino';
+import { CompressionPersistence } from './compression-persistence.js';
 
 /**
  * In-memory cache for compressed tool descriptions
@@ -8,9 +9,11 @@ import type { Logger } from 'pino';
 export class CompressionCache {
   private cache: CompressedToolCache = {};
   private logger: Logger;
+  private persistence: CompressionPersistence;
 
-  constructor(logger: Logger) {
+  constructor(logger: Logger, persistence?: CompressionPersistence) {
     this.logger = logger;
+    this.persistence = persistence || new CompressionPersistence(logger);
   }
 
   /**
@@ -124,5 +127,39 @@ export class CompressionCache {
       const [serverName, toolName] = key.split(':');
       return { serverName, toolName };
     });
+  }
+
+  /**
+   * Load cache from disk
+   */
+  async loadFromDisk(): Promise<void> {
+    const loadedCache = await this.persistence.load();
+
+    // Convert Map to cache object
+    for (const [key, value] of loadedCache.entries()) {
+      this.cache[key] = value;
+    }
+
+    this.logger.info(
+      { count: Object.keys(this.cache).length },
+      'Loaded compression cache into memory'
+    );
+  }
+
+  /**
+   * Save cache to disk
+   */
+  async saveToDisk(): Promise<void> {
+    // Convert cache object to Map
+    const cacheMap = new Map(Object.entries(this.cache));
+    await this.persistence.save(cacheMap);
+  }
+
+  /**
+   * Clear cache from both memory and disk
+   */
+  async clearAll(): Promise<void> {
+    this.clear();
+    await this.persistence.clear();
   }
 }
