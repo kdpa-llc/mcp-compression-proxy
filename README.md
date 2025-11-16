@@ -315,6 +315,28 @@ Quick start:
 
 Note: This project follows a [Code of Conduct][code-of-conduct].
 
+## 🔗 Complementary Projects
+
+**Maximize your MCP workflow with these complementary tools:**
+
+### [Local Skills MCP][local-skills-mcp]
+
+**Portable, reusable prompt libraries for any MCP client**
+
+While MCP Tool Aggregator optimizes your tool descriptions, [Local Skills MCP][local-skills-mcp] provides expert-level prompt instructions that work across any MCP-compatible client.
+
+**Perfect combination:**
+- **MCP Tool Aggregator** - Aggregates and compresses tool descriptions (50-80% token reduction)
+- **Local Skills MCP** - Provides expert skills with lazy loading (~50 tokens/skill)
+
+**Together they enable:**
+- 🎯 Optimized context usage across tools AND prompts
+- 🔄 Portable workflows that work with Claude, Cline, Continue.dev, and more
+- ⚡ Efficient AI interactions with minimal context consumption
+- 🚀 Professional-grade AI agent capabilities
+
+[Learn more about Local Skills MCP →][local-skills-mcp]
+
 ## 💖 Support This Project
 
 If you find MCP Tool Aggregator useful, please consider supporting its development!
@@ -426,3 +448,4 @@ Made with ❤️ by KDPA
 <!-- External Links -->
 
 [mcp-sdk]: https://github.com/modelcontextprotocol/sdk
+[local-skills-mcp]: https://github.com/kdpa-llc/local-skills-mcp
