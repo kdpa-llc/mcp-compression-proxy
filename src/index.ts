@@ -343,11 +343,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       savedCount++;
     }
 
+    // Persist to disk
+    try {
+      await compressionCache.saveToDisk();
+      logger.info('Compression cache persisted to disk');
+    } catch (error) {
+      logger.error({ error }, 'Failed to persist cache to disk');
+    }
+
     return {
       content: [
         {
           type: 'text',
-          text: `Saved ${savedCount} compressed tool descriptions. These will now be used when listing tools.`,
+          text: `Saved ${savedCount} compressed tool descriptions. These will now be used when listing tools and have been persisted to disk.`,
         },
       ],
     };
@@ -482,10 +490,38 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 /**
+ * Parse command-line arguments
+ */
+function parseArgs(): { clearCache: boolean } {
+  const args = process.argv.slice(2);
+  return {
+    clearCache: args.includes('--clear-cache'),
+  };
+}
+
+/**
  * Start the server
  */
 async function main() {
   logger.info('Starting MCP Tool Aggregator Server');
+
+  // Parse command-line arguments
+  const { clearCache } = parseArgs();
+
+  // Handle --clear-cache flag
+  if (clearCache) {
+    logger.info('Clearing compression cache...');
+    await compressionCache.clearAll();
+    logger.info('Cache cleared successfully');
+    process.exit(0);
+  }
+
+  // Load cached compressions from disk
+  try {
+    await compressionCache.loadFromDisk();
+  } catch (error) {
+    logger.warn({ error }, 'Failed to load cache, continuing with empty cache');
+  }
 
   // Initialize MCP clients
   const servers = getEnabledServers();

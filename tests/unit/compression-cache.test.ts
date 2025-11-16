@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { CompressionCache } from '../../src/services/compression-cache.js';
+import { CompressionPersistence } from '../../src/services/compression-persistence.js';
 import type { Logger } from 'pino';
 
 describe('CompressionCache', () => {
   let cache: CompressionCache;
   let mockLogger: Logger;
+  let mockPersistence: jest.Mocked<CompressionPersistence>;
 
   beforeEach(() => {
     mockLogger = {
@@ -14,7 +16,14 @@ describe('CompressionCache', () => {
       error: jest.fn(),
     } as unknown as Logger;
 
-    cache = new CompressionCache(mockLogger);
+    mockPersistence = {
+      load: jest.fn(),
+      save: jest.fn(),
+      clear: jest.fn(),
+      getCacheFilePath: jest.fn(),
+    } as unknown as jest.Mocked<CompressionPersistence>;
+
+    cache = new CompressionCache(mockLogger, mockPersistence);
   });
 
   describe('saveCompressed', () => {
@@ -238,6 +247,78 @@ describe('CompressionCache', () => {
       cache.saveCompressed('server1', 'tool1', longDesc, longDesc);
 
       expect(cache.getCompressedDescription('server1', 'tool1')).toBe(longDesc);
+    });
+  });
+
+  describe('persistence integration', () => {
+    describe('loadFromDisk', () => {
+      it('should load cache from persistence', async () => {
+        const mockCache = new Map([
+          [
+            'filesystem:read_file',
+            {
+              original: 'Read file original',
+              compressed: 'Read file compressed',
+              compressedAt: '2024-01-01T00:00:00.000Z',
+            },
+          ],
+        ]);
+
+        mockPersistence.load.mockResolvedValue(mockCache);
+
+        await cache.loadFromDisk();
+
+        expect(mockPersistence.load).toHaveBeenCalled();
+        expect(cache.hasCompressed('filesystem', 'read_file')).toBe(true);
+        expect(cache.getCompressedDescription('filesystem', 'read_file')).toBe(
+          'Read file compressed'
+        );
+      });
+
+      it('should handle empty cache from disk', async () => {
+        mockPersistence.load.mockResolvedValue(new Map());
+
+        await cache.loadFromDisk();
+
+        expect(cache.getStats().totalTools).toBe(0);
+      });
+    });
+
+    describe('saveToDisk', () => {
+      it('should save cache to persistence', async () => {
+        cache.saveCompressed('server1', 'tool1', 'compressed', 'original');
+
+        await cache.saveToDisk();
+
+        expect(mockPersistence.save).toHaveBeenCalled();
+        const savedMap = (mockPersistence.save as jest.Mock).mock.calls[0][0] as Map<string, { original?: string; compressed: string; compressedAt: string }>;
+        expect(savedMap.size).toBe(1);
+        expect(savedMap.get('server1:tool1')).toMatchObject({
+          compressed: 'compressed',
+          original: 'original',
+        });
+      });
+
+      it('should save empty cache', async () => {
+        await cache.saveToDisk();
+
+        expect(mockPersistence.save).toHaveBeenCalled();
+        const savedMap = (mockPersistence.save as jest.Mock).mock.calls[0][0] as Map<string, { original?: string; compressed: string; compressedAt: string }>;
+        expect(savedMap.size).toBe(0);
+      });
+    });
+
+    describe('clearAll', () => {
+      it('should clear both memory and disk', async () => {
+        cache.saveCompressed('server1', 'tool1', 'compressed');
+
+        expect(cache.hasCompressed('server1', 'tool1')).toBe(true);
+
+        await cache.clearAll();
+
+        expect(cache.hasCompressed('server1', 'tool1')).toBe(false);
+        expect(mockPersistence.clear).toHaveBeenCalled();
+      });
     });
   });
 });

@@ -54,6 +54,7 @@ Access tools from filesystem, GitHub, databases, and more through a single MCP c
 
 - **🔗 Multi-Server Aggregation** - Access tools from multiple MCP servers through one connection
 - **🤖 LLM-Based Compression** - Intelligent description compression (50-80% token reduction)
+- **💾 Persistent Storage** - Compressed descriptions saved to disk and restored on restart
 - **🎭 Session-Based Expansion** - Independent expansion state per conversation
 - **⚡ Eager Loading** - All servers connect at startup for zero-latency access
 - **🎯 Selective Expansion** - Compress all tools, expand only what you need
@@ -190,6 +191,15 @@ Claude: I have access to these tools:
 
 **Result**: 70% fewer tokens used for tool listings!
 
+#### Persistent Storage
+
+Compressed descriptions are automatically saved to disk at `~/.mcp-compression-cache/compressed-tools.json` and loaded on server restart. No need to re-compress after restarting!
+
+**Clear cache if needed:**
+```bash
+node dist/index.js --clear-cache
+```
+
 ## 🔧 Configuration
 
 ### Server Configuration
@@ -215,6 +225,14 @@ export const mcpServers: MCPServerConfig[] = [
 - `LOG_LEVEL` - Logging level (debug, info, warn, error). Default: `info`
 - `GITHUB_TOKEN` - GitHub personal access token (if using GitHub server)
 - Any environment variables needed by underlying MCP servers
+
+### Command-Line Options
+
+- `--clear-cache` - Clear the persistent compression cache and exit
+
+```bash
+node dist/index.js --clear-cache
+```
 
 ### Debugging
 
@@ -286,7 +304,12 @@ matching file paths. Case-sensitive by default."
 
 <details>
 <summary><strong>Q: Is compression permanent?</strong></summary>
-<p>Compression is cached in-memory and resets on server restart. Session-based expansions are temporary.</p>
+<p>Compressed descriptions are persisted to disk at <code>~/.mcp-compression-cache/compressed-tools.json</code> and automatically restored on server restart. Session-based expansions are temporary and reset per session.</p>
+</details>
+
+<details>
+<summary><strong>Q: Where is the compression cache stored?</strong></summary>
+<p>Cache is stored at <code>~/.mcp-compression-cache/compressed-tools.json</code>. Use <code>--clear-cache</code> flag to clear it if needed.</p>
 </details>
 
 <details>
