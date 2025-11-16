@@ -98,32 +98,57 @@ Add to your MCP client configuration (e.g., Claude Desktop config):
 
 ### Configure Servers
 
-Edit `src/config/servers.ts` to add MCP servers:
+Create a JSON configuration file to add MCP servers. You can choose one of two locations:
 
-```typescript
-export const mcpServers: MCPServerConfig[] = [
-  {
-    name: 'filesystem',
-    command: 'npx',
-    args: ['-y', '@modelcontextprotocol/server-filesystem', '/tmp'],
-    enabled: true,
-  },
-  {
-    name: 'github',
-    command: 'npx',
-    args: ['-y', '@modelcontextprotocol/server-github'],
-    env: {
-      GITHUB_PERSONAL_ACCESS_TOKEN: process.env.GITHUB_TOKEN || '',
+**Option 1: User-level config** (recommended for personal use)
+- `~/.mcp-aggregator/servers.json`
+
+**Option 2: Project-level config** (recommended for team projects)
+- `./servers.json` (in the mcp-compression-proxy directory)
+
+Example configuration:
+
+```json
+{
+  "mcpServers": [
+    {
+      "name": "filesystem",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+      "enabled": true
     },
-    enabled: true,
-  },
-];
+    {
+      "name": "github",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      },
+      "enabled": true
+    }
+  ]
+}
 ```
 
-Rebuild after changes:
+**No rebuild needed!** Just edit the JSON file and restart your MCP client.
+
+#### Migration from TypeScript Config
+
+If you're upgrading from a previous version that used TypeScript configuration:
+
 ```bash
-npm run build
+# Migrate to user-level config
+npm run migrate-config
+
+# Or migrate to project-level config
+npm run migrate-config ./servers.json
 ```
+
+The migration script will:
+1. Read your TypeScript configuration
+2. Convert it to JSON format
+3. Save it to the specified location
+4. Warn if config already exists (prevents accidental overwrites)
 
 ### Restart Client
 
@@ -194,21 +219,65 @@ Claude: I have access to these tools:
 
 ### Server Configuration
 
-Edit `src/config/servers.ts`:
+Create or edit your JSON configuration file at:
+- `~/.mcp-aggregator/servers.json` (user-level), or
+- `./servers.json` (project-level)
 
-```typescript
-export const mcpServers: MCPServerConfig[] = [
-  {
-    name: 'my-server',
-    command: 'command-to-run',
-    args: ['arg1', 'arg2'],
-    env: {
-      ENV_VAR: 'value',
-    },
-    enabled: true,
-  },
-];
+```json
+{
+  "mcpServers": [
+    {
+      "name": "my-server",
+      "command": "command-to-run",
+      "args": ["arg1", "arg2"],
+      "env": {
+        "ENV_VAR": "value"
+      },
+      "enabled": true
+    }
+  ]
+}
 ```
+
+#### Configuration Schema
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | ✅ | Unique server identifier |
+| `command` | string | ✅ | Command to execute |
+| `args` | string[] | ❌ | Command arguments |
+| `env` | object | ❌ | Environment variables |
+| `enabled` | boolean | ❌ | Enable/disable server (default: true) |
+
+#### Environment Variable Expansion
+
+Use `${VAR_NAME}` syntax to reference environment variables:
+
+```json
+{
+  "mcpServers": [
+    {
+      "name": "github",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}",
+        "GITHUB_ORG": "${MY_GITHUB_ORG}"
+      }
+    }
+  ]
+}
+```
+
+Variables are expanded at runtime from your shell environment.
+
+#### Configuration Priority
+
+If both config files exist, **project-level** takes priority:
+1. `./servers.json` (project-level) - checked first
+2. `~/.mcp-aggregator/servers.json` (user-level) - fallback
+
+This allows team-specific configs to override personal defaults.
 
 ### Environment Variables
 

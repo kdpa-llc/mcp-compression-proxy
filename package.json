@@ -18,6 +18,7 @@
     "test:e2e": "jest --testPathPattern=e2e",
     "test:e2e:real-llm": "jest tests/e2e-real --testTimeout=120000 --testPathIgnorePatterns='/node_modules/'",
     "docker:e2e": "docker-compose -f docker-compose.e2e.yml up --abort-on-container-exit",
+    "migrate-config": "tsx scripts/migrate-config.ts",
     "prepare": "husky || true",
     "prepublishOnly": "npm run build && npm test"
   },
@@ -60,6 +61,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
+    "ajv": "^8.17.1",
     "pino": "^9.5.0",
     "pino-pretty": "^13.0.0"
   },
