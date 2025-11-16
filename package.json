@@ -1,5 +1,5 @@
 {
-  "name": "mcp-tool-aggregator",
+  "name": "mcp-compression-proxy",
   "version": "0.1.0",
   "description": "MCP server that aggregates tools from multiple MCP servers with LLM-based description compression. Reduces context consumption by 50-80% while maintaining full tool functionality.",
   "main": "dist/index.js",
@@ -22,7 +22,7 @@
     "prepublishOnly": "npm run build && npm test"
   },
   "bin": {
-    "mcp-aggregator": "./dist/index.js"
+    "mcp-compression-proxy": "./dist/index.js"
   },
   "files": [
     "dist/**/*.js",
