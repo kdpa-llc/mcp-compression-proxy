@@ -1,6 +1,6 @@
 # Publishing Guide
 
-This guide explains how to publish the MCP Tool Aggregator package to npm.
+This guide explains how to publish the MCP Compression Proxy package to npm.
 
 ## Prerequisites
 
@@ -130,15 +130,15 @@ Excluded from package:
 After publishing, verify the package:
 
 ```bash
-npm info mcp-tool-aggregator
-npm view mcp-tool-aggregator versions
+npm info mcp-compression-proxy
+npm view mcp-compression-proxy versions
 ```
 
 Test installation:
 
 ```bash
-npm install -g mcp-tool-aggregator
-mcp-aggregator --version
+npm install -g mcp-compression-proxy
+mcp-compression-proxy --version
 ```
 
 ## Troubleshooting
@@ -146,7 +146,7 @@ mcp-aggregator --version
 ### "You do not have permission to publish"
 
 - Ensure you're logged in: `npm whoami`
-- Check package name availability: `npm view mcp-tool-aggregator`
+- Check package name availability: `npm view mcp-compression-proxy`
 - Verify you have access to the package
 
 ### "prepublishOnly script failed"
@@ -167,7 +167,7 @@ For the initial npm publish:
 
 1. Ensure package name is available:
    ```bash
-   npm view mcp-tool-aggregator
+   npm view mcp-compression-proxy
    # Should return 404 if available
    ```
 
