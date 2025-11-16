@@ -5,12 +5,15 @@
 **Aggregate tools from multiple MCP servers with intelligent LLM-based description compression**
 
 [![npm version][npm-version-badge]][npm-package]
+[![npm downloads][npm-downloads-badge]][npm-package]
+[![npm types][npm-types-badge]][npm-package]
 [![License: MIT][license-badge]][license]
 [![Node][node-badge]][nodejs]
 [![MCP][mcp-badge]][mcp-protocol]
 
 [![CI][ci-badge]][ci-workflow]
 [![codecov][codecov-badge]][codecov]
+[![CodeQL][codeql-badge]][codeql-workflow]
 
 [![GitHub Stars][stars-badge]][stargazers]
 [![GitHub Forks][forks-badge]][network]
@@ -296,7 +299,7 @@ matching file paths. Case-sensitive by default."
 <p>Edit <code>src/config/servers.ts</code>, add your server config, rebuild, and restart your client.</p>
 </details>
 
-**More:** See [CONTRIBUTING.md][contributing], [tests/README.md](./tests/README.md)
+**More:** See [CONTRIBUTING.md][contributing], [SECURITY.md][security], [tests/README.md](./tests/README.md)
 
 ## 🤝 Contributing
 
@@ -309,6 +312,27 @@ Quick start:
 3. Make your changes and test
 4. Commit using [Conventional Commits](https://www.conventionalcommits.org/)
 5. Open a Pull Request
+
+Note: This project follows a [Code of Conduct][code-of-conduct].
+
+## 💖 Support This Project
+
+If you find MCP Tool Aggregator useful, please consider supporting its development!
+
+<div align="center">
+
+[![GitHub Sponsors][sponsor-github-badge]][sponsor-github]
+[![Buy Me A Coffee][sponsor-coffee-badge]][sponsor-coffee]
+[![PayPal][sponsor-paypal-badge]][sponsor-paypal]
+
+</div>
+
+**Ways to support:**
+
+- ⭐ [Star this repository][stargazers]
+- 💰 Sponsor via the badges above
+- 🐛 [Report bugs and suggest features][repo-issues]
+- 📝 [Contribute code or documentation][contributing]
 
 ## 🧪 Testing
 
@@ -348,6 +372,8 @@ Made with ❤️ by KDPA
 
 [npm-version-badge]: https://img.shields.io/npm/v/mcp-tool-aggregator.svg
 [npm-package]: https://www.npmjs.com/package/mcp-tool-aggregator
+[npm-downloads-badge]: https://img.shields.io/npm/dm/mcp-tool-aggregator
+[npm-types-badge]: https://img.shields.io/npm/types/mcp-tool-aggregator
 [license-badge]: https://img.shields.io/badge/License-MIT-yellow.svg
 [license]: https://opensource.org/licenses/MIT
 [node-badge]: https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg
@@ -361,6 +387,8 @@ Made with ❤️ by KDPA
 [ci-workflow]: https://github.com/kdpa-llc/mcp-compression-proxy/actions/workflows/test.yml
 [codecov-badge]: https://codecov.io/gh/kdpa-llc/mcp-compression-proxy/branch/main/graph/badge.svg
 [codecov]: https://codecov.io/gh/kdpa-llc/mcp-compression-proxy
+[codeql-badge]: https://github.com/kdpa-llc/mcp-compression-proxy/actions/workflows/codeql.yml/badge.svg
+[codeql-workflow]: https://github.com/kdpa-llc/mcp-compression-proxy/actions/workflows/codeql.yml
 
 <!-- GitHub Badges -->
 
@@ -374,10 +402,26 @@ Made with ❤️ by KDPA
 [commits]: https://github.com/kdpa-llc/mcp-compression-proxy/commits/main
 [prs-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg
 
+<!-- Repository Links -->
+
+[repo]: https://github.com/kdpa-llc/mcp-compression-proxy
+[pulls]: https://github.com/kdpa-llc/mcp-compression-proxy/pulls
+
 <!-- Documentation Links -->
 
 [contributing]: CONTRIBUTING.md
+[security]: SECURITY.md
+[code-of-conduct]: CODE_OF_CONDUCT.md
 [license-file]: LICENSE
+
+<!-- Sponsorship Links -->
+
+[sponsor-github-badge]: https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=github
+[sponsor-github]: https://github.com/sponsors/moscaverd
+[sponsor-coffee-badge]: https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-yellow?logo=buy-me-a-coffee
+[sponsor-coffee]: https://buymeacoffee.com/moscaverd
+[sponsor-paypal-badge]: https://img.shields.io/badge/PayPal-donate-blue?logo=paypal
+[sponsor-paypal]: https://paypal.me/moscaverd
 
 <!-- External Links -->
 
