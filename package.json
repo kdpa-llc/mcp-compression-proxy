@@ -1,11 +1,12 @@
 {
   "name": "mcp-tool-aggregator",
   "version": "0.1.0",
-  "description": "MCP server that aggregates tools from multiple MCP servers with LLM-based description compression",
+  "description": "MCP server that aggregates tools from multiple MCP servers with LLM-based description compression. Reduces context consumption by 50-80% while maintaining full tool functionality.",
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
     "build": "tsc",
+    "watch": "tsc --watch",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
@@ -16,7 +17,8 @@
     "test:integration": "jest --testPathPattern=integration",
     "test:e2e": "jest --testPathPattern=e2e",
     "test:e2e:real-llm": "jest tests/e2e-real --testTimeout=120000 --testPathIgnorePatterns='/node_modules/'",
-    "docker:e2e": "docker-compose -f docker-compose.e2e.yml up --abort-on-container-exit"
+    "docker:e2e": "docker-compose -f docker-compose.e2e.yml up --abort-on-container-exit",
+    "prepare": "husky || true"
   },
   "bin": {
     "mcp-aggregator": "./dist/index.js"
@@ -27,10 +29,23 @@
     "aggregator",
     "compression",
     "llm",
-    "claude"
+    "claude",
+    "claude-desktop",
+    "cline",
+    "ai",
+    "context-optimization",
+    "tool-aggregation"
   ],
-  "author": "kdpa-llc",
+  "author": "KDPA",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kdpa-llc/mcp-compression-proxy.git"
+  },
+  "homepage": "https://github.com/kdpa-llc/mcp-compression-proxy#readme",
+  "bugs": {
+    "url": "https://github.com/kdpa-llc/mcp-compression-proxy/issues"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
     "pino": "^9.5.0",

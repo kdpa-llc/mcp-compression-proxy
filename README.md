@@ -1,59 +1,101 @@
-# MCP Tool Aggregator
+<div align="center">
 
-An MCP server that aggregates tools from multiple MCP servers with **LLM-based description compression** to optimize context usage.
+# 🗜️ MCP Tool Aggregator
 
-Use with Claude Desktop, Cline, or any MCP client to access tools from multiple MCP servers through a single connection, with intelligent compression to reduce token count by 50-80%.
+**Aggregate tools from multiple MCP servers with intelligent LLM-based description compression**
 
-## Features
+[![npm version][npm-version-badge]][npm-package]
+[![License: MIT][license-badge]][license]
+[![Node][node-badge]][nodejs]
+[![MCP][mcp-badge]][mcp-protocol]
 
-- **Multi-Server Aggregation**: Access tools from multiple MCP servers through one MCP connection
-- **LLM-Based Description Compression**: Reduce context usage by 50-80% with intelligent tool description compression
-- **Session-Based Expansion**: Independent expansion state per conversation
-- **Advanced Filtering**: Compress all tools, expand only what you need
-- **Eager Loading**: All underlying servers connect at startup for zero-latency tool access
-- **Standard MCP Protocol**: Works with any MCP client (Claude Desktop, Cline, etc.)
+[![CI][ci-badge]][ci-workflow]
+[![codecov][codecov-badge]][codecov]
 
-## How It Works
+[![GitHub Stars][stars-badge]][stargazers]
+[![GitHub Forks][forks-badge]][network]
+[![GitHub Issues][issues-badge]][repo-issues]
+[![GitHub Last Commit][commit-badge]][commits]
+[![PRs Welcome][prs-badge]][contributing]
 
-```
-┌──────────────────────────────────┐
-│  Claude Desktop (MCP Client)     │
-│  or other MCP client             │
-└────────────┬─────────────────────┘
-             │ stdio
-             ▼
-┌──────────────────────────────────┐
-│  MCP Tool Aggregator             │
-│  (this server)                   │
-│                                  │
-│  - Aggregates tools              │
-│  - Compresses descriptions       │
-│  - Manages sessions              │
-└────┬──────────┬──────────────────┘
-     │          │
-     │ stdio    │ stdio
-     ▼          ▼
-┌─────────┐  ┌──────────┐
-│  MCP    │  │   MCP    │
-│ Server 1│  │ Server 2 │
-│(filesystem)│(github)  │
-└─────────┘  └──────────┘
-```
+[Quick Start](#-quick-start) •
+[Features](#-features) •
+[Usage](#-usage) •
+[FAQ](#-faq) •
+[Contributing](#-contributing)
 
-## Installation
+</div>
+
+---
+
+## 📑 Table of Contents
+
+- [What is MCP Tool Aggregator?](#what-is-mcp-tool-aggregator)
+- [✨ Features](#-features)
+- [🚀 Quick Start](#-quick-start)
+- [🎯 Usage](#-usage)
+- [🔧 Configuration](#-configuration)
+- [💡 Best Practices](#-best-practices)
+- [❓ FAQ](#-faq)
+- [🤝 Contributing](#-contributing)
+
+---
+
+## What is MCP Tool Aggregator?
+
+A **Model Context Protocol (MCP) server** that aggregates tools from multiple MCP servers with **LLM-based description compression** to optimize context usage. Reduce token consumption by 50-80% while maintaining full tool functionality.
+
+Access tools from filesystem, GitHub, databases, and more through a single MCP connection—with intelligent compression that preserves critical information while removing verbose explanations.
+
+## ✨ Features
+
+- **🔗 Multi-Server Aggregation** - Access tools from multiple MCP servers through one connection
+- **🤖 LLM-Based Compression** - Intelligent description compression (50-80% token reduction)
+- **🎭 Session-Based Expansion** - Independent expansion state per conversation
+- **⚡ Eager Loading** - All servers connect at startup for zero-latency access
+- **🎯 Selective Expansion** - Compress all tools, expand only what you need
+- **📦 Zero Config** - Works out-of-the-box with sensible defaults
+- **🔥 Standard MCP** - Compatible with any MCP client (Claude Desktop, Cline, etc.)
+
+## 🚀 Quick Start
+
+### Install
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/kdpa-llc/mcp-compression-proxy.git
 cd mcp-compression-proxy
 npm install
 npm run build
 ```
 
-## Configuration
+**Requirements:** Node.js 18+, any MCP-compatible client
 
-### 1. Configure Underlying MCP Servers
+### Configure MCP Client
 
-Edit `src/config/servers.ts` to add the MCP servers you want to aggregate:
+Add to your MCP client configuration (e.g., Claude Desktop config):
+
+**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+**Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "aggregator": {
+      "command": "node",
+      "args": [
+        "/absolute/path/to/mcp-compression-proxy/dist/index.js"
+      ],
+      "env": {
+        "LOG_LEVEL": "info"
+      }
+    }
+  }
+}
+```
+
+### Configure Servers
+
+Edit `src/config/servers.ts` to add MCP servers:
 
 ```typescript
 export const mcpServers: MCPServerConfig[] = [
@@ -80,51 +122,20 @@ Rebuild after changes:
 npm run build
 ```
 
-### 2. Add to Claude Desktop
+### Restart Client
 
-Add to your Claude Desktop config file:
+Restart your MCP client (e.g., Claude Desktop) to load the configuration.
 
-**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-
-**Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-
-```json
-{
-  "mcpServers": {
-    "aggregator": {
-      "command": "node",
-      "args": [
-        "/absolute/path/to/mcp-compression-proxy/dist/index.js"
-      ],
-      "env": {
-        "LOG_LEVEL": "info"
-      }
-    }
-  }
-}
-```
-
-### 3. Restart Claude Desktop
-
-Restart Claude Desktop to load the configuration.
-
-## Usage
+## 🎯 Usage
 
 ### Tool Naming
 
-Tools from aggregated servers use the format:
-```
-serverName__toolName
-```
-
-Examples:
+Tools use the format `serverName__toolName`:
 - `filesystem__read_file`
 - `filesystem__write_file`
 - `github__create_issue`
 
 ### Management Tools
-
-The aggregator also exposes these management tools:
 
 | Tool | Description |
 |------|-------------|
@@ -138,15 +149,16 @@ The aggregator also exposes these management tools:
 
 ### Workflow Example
 
-#### Initial State (No Compression)
+#### Before Compression
 
 ```
 User: What tools do you have?
 
 Claude: I have access to these tools:
-- filesystem__read_file: Reads the complete contents of a file at the specified path. The file must exist and be readable. Returns the file contents as text. Supports absolute and relative paths. Maximum file size is 10MB.
-- filesystem__write_file: Writes content to a file...
-- github__create_issue: Creates a new GitHub issue...
+- filesystem__read_file: Reads the complete contents of a file at the
+  specified path. The file must exist and be readable. Returns the file
+  contents as text. Supports absolute and relative paths. Maximum file
+  size is 10MB...
 ```
 
 #### Enable Compression (One-Time Setup)
@@ -175,131 +187,40 @@ Claude: I have access to these tools:
 
 **Result**: 70% fewer tokens used for tool listings!
 
-#### Using Tools
+## 🔧 Configuration
 
-```
-User: Read the file /tmp/example.txt
+### Server Configuration
 
-Claude: *calls filesystem__read_file with arguments {"path": "/tmp/example.txt"}*
+Edit `src/config/servers.ts`:
 
-File contents: "Hello, world!"
-```
-
-#### Selective Expansion
-
-```
-User: I need more details about the read_file tool
-
-Claude: Let me expand it:
-1. *calls create_session* - Creates session
-2. *calls expand_tool with filesystem, read_file*
-3. Tool now shows full description in this conversation
-
-Full description: "Reads the complete contents of a file at the specified path..."
-
-When I'm done, I'll collapse it back to save context.
+```typescript
+export const mcpServers: MCPServerConfig[] = [
+  {
+    name: 'my-server',
+    command: 'command-to-run',
+    args: ['arg1', 'arg2'],
+    env: {
+      ENV_VAR: 'value',
+    },
+    enabled: true,
+  },
+];
 ```
 
-## Tool Compression Best Practices
-
-### What Makes Good Compression
-
-**Good compression preserves**:
-- Core functionality
-- Key parameters
-- Critical constraints
-- Return types
-
-**Good compression removes**:
-- Verbose explanations
-- Redundant phrases
-- Non-critical examples
-- Marketing language
-
-### Example Compressions
-
-#### Good ✅
-
-**Original** (42 tokens):
-```
-"Searches for files in the specified directory and its subdirectories using glob patterns. Supports wildcards like *, **, and ?. Returns an array of matching file paths. Case-sensitive by default."
-```
-
-**Compressed** (12 tokens):
-```
-"Search files by glob pattern (*, **, ?), case-sensitive, returns paths"
-```
-
-#### Bad ❌
-
-**Original** (30 tokens):
-```
-"Creates a new GitHub issue with the specified title, body, labels, and assignees. Requires authentication."
-```
-
-**Compressed** (8 tokens - too aggressive):
-```
-"Make GitHub issue"
-```
-
-**Problem**: Lost critical parameter details and auth requirement.
-
-**Better** (15 tokens):
-```
-"Create GitHub issue (title, body, labels, assignees), needs auth"
-```
-
-## Development
-
-```bash
-npm run dev    # Development mode with auto-reload
-npm run build  # Build for production
-npm start      # Run production build
-```
-
-## Testing
-
-The project includes comprehensive test coverage:
-
-```bash
-npm test                 # Run all tests
-npm run test:unit        # Run unit tests only
-npm run test:integration # Run integration tests only
-npm run test:e2e         # Run end-to-end tests only
-npm run test:coverage    # Generate coverage report
-npm run test:watch       # Run tests in watch mode
-```
-
-### Test Coverage
-
-- **Unit Tests**: Individual module testing (CompressionCache, SessionManager, MCPClientManager)
-- **Integration Tests**: Module interaction testing (compression + session integration)
-- **E2E Tests**: Complete workflow testing (full aggregation and compression cycles)
-
-Coverage thresholds: 80% for branches, functions, lines, and statements.
-
-See [tests/README.md](./tests/README.md) for detailed testing documentation.
-
-## Environment Variables
+### Environment Variables
 
 - `LOG_LEVEL` - Logging level (debug, info, warn, error). Default: `info`
-- `GITHUB_TOKEN` - GitHub personal access token (if using github server)
-- Any other environment variables needed by underlying MCP servers
+- `GITHUB_TOKEN` - GitHub personal access token (if using GitHub server)
+- Any environment variables needed by underlying MCP servers
 
-## Debugging
+### Debugging
 
-Enable debug logging:
+Enable debug logging in your MCP client config:
 
 ```json
 {
-  "mcpServers": {
-    "aggregator": {
-      "command": "node",
-      "args": ["/path/to/dist/index.js"],
-      "env": {
-        "LOG_LEVEL": "debug"
-      }
-    }
+  "env": {
+    "LOG_LEVEL": "debug"
   }
 }
 ```
@@ -308,77 +229,156 @@ View logs:
 - **macOS**: `~/Library/Logs/Claude/mcp*.log`
 - **Windows**: `%APPDATA%\Claude\Logs\mcp*.log`
 
-## Architecture
+## 💡 Best Practices
 
+### Good Compression
+
+**Preserves**:
+- Core functionality
+- Key parameters
+- Critical constraints
+- Return types
+
+**Removes**:
+- Verbose explanations
+- Redundant phrases
+- Non-critical examples
+- Marketing language
+
+### Example
+
+**Original** (42 tokens):
 ```
-┌─────────────────────────────────────────────┐
-│      MCP Tool Aggregator                    │
-│                                             │
-│  ┌───────────────────────────────────────┐ │
-│  │  Session Manager                      │ │
-│  │  - Per-client expansion state         │ │
-│  │  - Auto-expiration (30min)            │ │
-│  └───────────────────────────────────────┘ │
-│                                             │
-│  ┌───────────────────────────────────────┐ │
-│  │  Compression Cache                    │ │
-│  │  - Compressed descriptions            │ │
-│  │  - 50-80% token reduction             │ │
-│  └───────────────────────────────────────┘ │
-│                                             │
-│  ┌───────────────────────────────────────┐ │
-│  │  MCP Client Manager                   │ │
-│  │  - Eager connection at startup        │ │
-│  │  - Connection pooling                 │ │
-│  └───────────────────────────────────────┘ │
-└─────────────────────────────────────────────┘
+"Searches for files in the specified directory and its subdirectories using
+glob patterns. Supports wildcards like *, **, and ?. Returns an array of
+matching file paths. Case-sensitive by default."
 ```
 
-## Use Cases
+**Compressed** (12 tokens):
+```
+"Search files by glob pattern (*, **, ?), case-sensitive, returns paths"
+```
 
-1. **Context Optimization**: Reduce token usage when working with many tools
-2. **Multi-Tool Workflows**: Access filesystem, GitHub, database tools through one connection
-3. **Development Tools**: Aggregate development-related MCP servers
-4. **Custom Tool Sets**: Create domain-specific tool collections
+## ❓ FAQ
 
-## Troubleshooting
+<details>
+<summary><strong>Q: What MCP clients are supported?</strong></summary>
+<p>Any MCP-compatible client: Claude Desktop, Cline, Continue.dev, or custom agents.</p>
+</details>
 
-### "Server not found or not connected"
+<details>
+<summary><strong>Q: How much context does compression save?</strong></summary>
+<p>Typically 50-80% reduction in token count for tool listings while preserving critical information.</p>
+</details>
 
-- Check underlying MCP servers in `src/config/servers.ts`
-- Verify server commands and args are correct
-- Check logs for connection errors
-- Ensure `enabled: true` for servers you want to use
+<details>
+<summary><strong>Q: Do I need to restart after adding servers?</strong></summary>
+<p>Yes, rebuild (<code>npm run build</code>) and restart your MCP client.</p>
+</details>
 
-### "No compressed description found"
+<details>
+<summary><strong>Q: Can I use multiple MCP servers?</strong></summary>
+<p>Yes! That's the primary use case. Add as many as you need in <code>src/config/servers.ts</code>.</p>
+</details>
 
-- Run compression workflow first: call `compress_tools`, compress, then `save_compressed_tools`
-- Cache is in-memory and resets on server restart
+<details>
+<summary><strong>Q: Is compression permanent?</strong></summary>
+<p>Compression is cached in-memory and resets on server restart. Session-based expansions are temporary.</p>
+</details>
 
-### Tools not appearing
+<details>
+<summary><strong>Q: Works with local LLMs?</strong></summary>
+<p>Yes! Works with any MCP-compatible setup, including local models.</p>
+</details>
 
-- Rebuild: `npm run build`
-- Restart Claude Desktop
-- Check logs for errors
+<details>
+<summary><strong>Q: How do I add a new MCP server?</strong></summary>
+<p>Edit <code>src/config/servers.ts</code>, add your server config, rebuild, and restart your client.</p>
+</details>
 
-## Performance
+**More:** See [CONTRIBUTING.md][contributing], [tests/README.md](./tests/README.md)
 
-- **Eager Loading**: All servers connect at startup (zero cold-start latency)
-- **Parallel Tool Listing**: Fetches from all servers in parallel
-- **Compression**: 50-80% reduction in tool listing tokens
-- **Session Isolation**: Independent expansion state per conversation
+## 🤝 Contributing
 
-## Contributing
+Contributions welcome! See [CONTRIBUTING.md][contributing] for guidelines.
 
-Contributions welcome! Please submit a Pull Request.
+Quick start:
 
-## License
+1. Fork the repository
+2. Create your feature branch
+3. Make your changes and test
+4. Commit using [Conventional Commits](https://www.conventionalcommits.org/)
+5. Open a Pull Request
 
-MIT License - see LICENSE file for details
+## 🧪 Testing
 
-## Resources
+Comprehensive test suite included:
 
-- [Model Context Protocol Specification](https://modelcontextprotocol.io/)
-- [MCP SDK](https://github.com/modelcontextprotocol/sdk)
-- [MCP Servers Collection](https://github.com/modelcontextprotocol/servers)
-- [Claude Desktop](https://claude.ai/)
+```bash
+npm test                      # Run all tests
+npm run test:unit             # Unit tests only
+npm run test:integration      # Integration tests only
+npm run test:e2e              # End-to-end tests only
+npm run test:e2e:real-llm     # Real LLM integration tests (requires Ollama)
+npm run test:coverage         # Generate coverage report
+```
+
+See [tests/README.md](./tests/README.md) for details.
+
+## 📄 License
+
+MIT License - see [LICENSE][license-file] file. **Copyright © 2025 KDPA**
+
+## 🙏 Acknowledgments
+
+Built with [Model Context Protocol SDK][mcp-sdk]
+
+---
+
+<div align="center">
+
+**[⬆ Back to Top](#-mcp-tool-aggregator)**
+
+Made with ❤️ by KDPA
+
+</div>
+
+<!-- Reference Links -->
+<!-- Badges - Top of README -->
+
+[npm-version-badge]: https://img.shields.io/npm/v/mcp-tool-aggregator.svg
+[npm-package]: https://www.npmjs.com/package/mcp-tool-aggregator
+[license-badge]: https://img.shields.io/badge/License-MIT-yellow.svg
+[license]: https://opensource.org/licenses/MIT
+[node-badge]: https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg
+[nodejs]: https://nodejs.org/
+[mcp-badge]: https://img.shields.io/badge/MCP-Compatible-purple.svg
+[mcp-protocol]: https://modelcontextprotocol.io/
+
+<!-- CI/CD Badges -->
+
+[ci-badge]: https://github.com/kdpa-llc/mcp-compression-proxy/actions/workflows/test.yml/badge.svg
+[ci-workflow]: https://github.com/kdpa-llc/mcp-compression-proxy/actions/workflows/test.yml
+[codecov-badge]: https://codecov.io/gh/kdpa-llc/mcp-compression-proxy/branch/main/graph/badge.svg
+[codecov]: https://codecov.io/gh/kdpa-llc/mcp-compression-proxy
+
+<!-- GitHub Badges -->
+
+[stars-badge]: https://img.shields.io/github/stars/kdpa-llc/mcp-compression-proxy?style=social
+[stargazers]: https://github.com/kdpa-llc/mcp-compression-proxy/stargazers
+[forks-badge]: https://img.shields.io/github/forks/kdpa-llc/mcp-compression-proxy?style=social
+[network]: https://github.com/kdpa-llc/mcp-compression-proxy/network/members
+[issues-badge]: https://img.shields.io/github/issues/kdpa-llc/mcp-compression-proxy
+[repo-issues]: https://github.com/kdpa-llc/mcp-compression-proxy/issues
+[commit-badge]: https://img.shields.io/github/last-commit/kdpa-llc/mcp-compression-proxy
+[commits]: https://github.com/kdpa-llc/mcp-compression-proxy/commits/main
+[prs-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg
+
+<!-- Documentation Links -->
+
+[contributing]: CONTRIBUTING.md
+[license-file]: LICENSE
+
+<!-- External Links -->
+
+[mcp-sdk]: https://github.com/modelcontextprotocol/sdk
