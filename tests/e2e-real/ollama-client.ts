@@ -137,12 +137,40 @@ Return ONLY a JSON array with this exact format:
     const response = await this.chat(systemPrompt, userMessage);
 
     // Extract JSON from response (LLM might add extra text)
-    const jsonMatch = response.match(/\[[\s\S]*\]/);
+    // Try to find the last complete JSON array in the response
+    let jsonMatch = response.match(/\[[\s\S]*\]/);
     if (!jsonMatch) {
       throw new Error(`Failed to extract JSON from LLM response: ${response}`);
     }
 
-    return JSON.parse(jsonMatch[0]);
+    let parsed;
+    try {
+      // Try to parse the matched JSON
+      parsed = JSON.parse(jsonMatch[0]);
+    } catch (error) {
+      // If parsing fails, try to find the largest valid JSON substring
+      const jsonStr = jsonMatch[0];
+
+      // Try progressively smaller substrings from the end
+      for (let i = jsonStr.length - 1; i >= 0; i--) {
+        if (jsonStr[i] === ']') {
+          try {
+            const candidate = jsonStr.substring(0, i + 1);
+            parsed = JSON.parse(candidate);
+            console.log(`Warning: Had to truncate LLM response to parse valid JSON`);
+            break;
+          } catch {
+            continue;
+          }
+        }
+      }
+
+      if (!parsed) {
+        throw new Error(`Failed to parse JSON from LLM response. Original error: ${error}\nResponse: ${response}`);
+      }
+    }
+
+    return parsed;
   }
 }
 
