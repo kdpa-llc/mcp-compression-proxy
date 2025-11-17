@@ -193,7 +193,7 @@ Claude: I have access to these tools:
 
 #### Persistent Storage
 
-Compressed descriptions are automatically saved to disk at `~/.mcp-compression-cache/compressed-tools.json` and loaded on server restart. No need to re-compress after restarting!
+Compressed descriptions are automatically saved to disk at `~/.mcp-compression-cache/mcp-compression-proxy/compressed-tools.json` and loaded on server restart. No need to re-compress after restarting!
 
 **Clear cache if needed:**
 ```bash
@@ -304,12 +304,12 @@ matching file paths. Case-sensitive by default."
 
 <details>
 <summary><strong>Q: Is compression permanent?</strong></summary>
-<p>Compressed descriptions are persisted to disk at <code>~/.mcp-compression-cache/compressed-tools.json</code> and automatically restored on server restart. Session-based expansions are temporary and reset per session.</p>
+<p>Compressed descriptions are persisted to disk at <code>~/.mcp-compression-cache/mcp-compression-proxy/compressed-tools.json</code> and automatically restored on server restart. Session-based expansions are temporary and reset per session.</p>
 </details>
 
 <details>
 <summary><strong>Q: Where is the compression cache stored?</strong></summary>
-<p>Cache is stored at <code>~/.mcp-compression-cache/compressed-tools.json</code>. Use <code>--clear-cache</code> flag to clear it if needed.</p>
+<p>Cache is stored at <code>~/.mcp-compression-cache/mcp-compression-proxy/compressed-tools.json</code>. Use <code>--clear-cache</code> flag to clear it if needed.</p>
 </details>
 
 <details>
