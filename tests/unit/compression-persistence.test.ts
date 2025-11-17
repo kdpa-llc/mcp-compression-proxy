@@ -225,16 +225,15 @@ describe('CompressionPersistence', () => {
   describe('getCacheFilePath', () => {
     it('should return correct cache file path', () => {
       const filePath = persistence.getCacheFilePath();
-      expect(filePath).toBe(path.join(testCacheDir, 'compressed-tools.json'));
+      expect(filePath).toBe(path.join(testCacheDir, 'cache.json'));
     });
 
     it('should use repo-specific directory by default', () => {
       const defaultPersistence = new CompressionPersistence(mockLogger);
       const filePath = defaultPersistence.getCacheFilePath();
 
-      expect(filePath).toContain('.mcp-compression-cache');
-      expect(filePath).toContain('mcp-compression-proxy');
-      expect(filePath).toContain('compressed-tools.json');
+      expect(filePath).toContain('.mcp-compression-proxy');
+      expect(filePath).toContain('cache.json');
     });
   });
 
