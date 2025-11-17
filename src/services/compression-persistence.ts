@@ -29,7 +29,7 @@ export class CompressionPersistence {
 
   constructor(logger: Logger, cacheDir?: string) {
     this.logger = logger;
-    this.cacheDir = cacheDir || path.join(os.homedir(), '.mcp-compression-cache');
+    this.cacheDir = cacheDir || path.join(os.homedir(), '.mcp-compression-cache', 'mcp-compression-proxy');
     this.cacheFile = path.join(this.cacheDir, 'compressed-tools.json');
   }
 

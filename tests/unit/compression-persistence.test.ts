@@ -227,6 +227,15 @@ describe('CompressionPersistence', () => {
       const filePath = persistence.getCacheFilePath();
       expect(filePath).toBe(path.join(testCacheDir, 'compressed-tools.json'));
     });
+
+    it('should use repo-specific directory by default', () => {
+      const defaultPersistence = new CompressionPersistence(mockLogger);
+      const filePath = defaultPersistence.getCacheFilePath();
+
+      expect(filePath).toContain('.mcp-compression-cache');
+      expect(filePath).toContain('mcp-compression-proxy');
+      expect(filePath).toContain('compressed-tools.json');
+    });
   });
 
   describe('error handling', () => {
