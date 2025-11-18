@@ -62,7 +62,7 @@ describe('Config Loader', () => {
       expect(result).toBeNull();
     });
 
-    it('should load ignore patterns from user config', async () => {
+    it('should load exclude patterns from user config', async () => {
       const userConfigDir = join(testDir, '.mcp-compression-proxy');
       mkdirSync(userConfigDir, { recursive: true });
 
@@ -70,7 +70,7 @@ describe('Config Loader', () => {
         mcpServers: [
           { name: 'test-server', command: 'npx' },
         ],
-        ignoreTools: ['test__*', '*__delete*'],
+        excludeTools: ['test__*', '*__delete*'],
       };
 
       writeFileSync(join(userConfigDir, 'servers.json'), JSON.stringify(config));
@@ -79,21 +79,21 @@ describe('Config Loader', () => {
       const result = loadJSONServers();
 
       expect(result).not.toBeNull();
-      expect(result!.ignorePatterns).toEqual(['test__*', '*__delete*']);
+      expect(result!.excludePatterns).toEqual(['test__*', '*__delete*']);
     });
 
-    it('should aggregate ignore patterns from user and project configs', async () => {
+    it('should aggregate exclude patterns from user and project configs', async () => {
       const userConfigDir = join(testDir, '.mcp-compression-proxy');
       mkdirSync(userConfigDir, { recursive: true});
 
       const userConfig = {
         mcpServers: [{ name: 'user-server', command: 'node' }],
-        ignoreTools: ['user__*'],
+        excludeTools: ['user__*'],
       };
 
       const projectConfig = {
         mcpServers: [{ name: 'project-server', command: 'npx' }],
-        ignoreTools: ['*__delete*', 'test__*'],
+        excludeTools: ['*__delete*', 'test__*'],
       };
 
       writeFileSync(join(userConfigDir, 'servers.json'), JSON.stringify(userConfig));
@@ -103,7 +103,7 @@ describe('Config Loader', () => {
       const result = loadJSONServers();
 
       expect(result).not.toBeNull();
-      expect(result!.ignorePatterns).toEqual(['user__*', '*__delete*', 'test__*']);
+      expect(result!.excludePatterns).toEqual(['user__*', '*__delete*', 'test__*']);
     });
 
     it('should load valid JSON config from project directory', async () => {
@@ -355,6 +355,53 @@ describe('Config Loader', () => {
 
       expect(result).not.toBeNull();
       expect(result!.servers[0].env?.MISSING_VAR).toBe('');
+    });
+
+    it('should load noCompress patterns from user config', async () => {
+      const userConfigDir = join(testDir, '.mcp-compression-proxy');
+      mkdirSync(userConfigDir, { recursive: true });
+
+      const config = {
+        mcpServers: [
+          { name: 'test-server', command: 'npx' },
+        ],
+        noCompressTools: ['filesystem__*', '*__verbose*'],
+      };
+
+      writeFileSync(join(userConfigDir, 'servers.json'), JSON.stringify(config));
+
+      const { loadJSONServers } = await importLoader();
+      const result = loadJSONServers();
+
+      expect(result).not.toBeNull();
+      expect(result!.noCompressPatterns).toEqual(['filesystem__*', '*__verbose*']);
+    });
+
+    it('should aggregate both exclude and noCompress patterns', async () => {
+      const userConfigDir = join(testDir, '.mcp-compression-proxy');
+      mkdirSync(userConfigDir, { recursive: true });
+
+      const userConfig = {
+        mcpServers: [{ name: 'user-server', command: 'node' }],
+        excludeTools: ['user__*'],
+        noCompressTools: ['filesystem__*'],
+      };
+
+      const projectConfig = {
+        mcpServers: [{ name: 'project-server', command: 'npx' }],
+        excludeTools: ['*__delete*'],
+        noCompressTools: ['*__verbose*'],
+      };
+
+      writeFileSync(join(userConfigDir, 'servers.json'), JSON.stringify(userConfig));
+      writeFileSync(join(testDir, 'servers.json'), JSON.stringify(projectConfig));
+
+      const { loadJSONServers } = await importLoader();
+      const result = loadJSONServers();
+
+      expect(result).not.toBeNull();
+      expect(result!.excludePatterns).toEqual(['user__*', '*__delete*']);
+      expect(result!.noCompressPatterns).toEqual(['filesystem__*', '*__verbose*']);
     });
   });
 

@@ -43,9 +43,16 @@ export const serverConfigSchema = {
         additionalProperties: false,
       },
     },
-    ignoreTools: {
+    excludeTools: {
       type: 'array',
-      description: 'Tool name patterns to ignore/exclude (supports wildcards, case-insensitive). Examples: "server__*" (all tools from server), "*__set*" (tools with "set" in name)',
+      description: 'Tool name patterns to exclude from tool list entirely (supports wildcards, case-insensitive). Examples: "server__*" (all tools from server), "*__set*" (tools with "set" in name)',
+      items: {
+        type: 'string',
+      },
+    },
+    noCompressTools: {
+      type: 'array',
+      description: 'Tool name patterns to never compress - descriptions pass through unchanged (supports wildcards, case-insensitive). Tools still appear in list but are never cached/compressed.',
       items: {
         type: 'string',
       },
@@ -63,5 +70,6 @@ export type ServerConfigJSON = {
     env?: Record<string, string>;
     enabled?: boolean;
   }>;
-  ignoreTools?: string[];
+  excludeTools?: string[];
+  noCompressTools?: string[];
 };

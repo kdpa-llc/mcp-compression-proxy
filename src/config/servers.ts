@@ -48,9 +48,17 @@ export function getEnabledServers(): MCPServerConfig[] {
 }
 
 /**
- * Get tool ignore patterns from configuration
+ * Get tool exclude patterns from configuration
  */
-export function getIgnorePatterns(): string[] {
+export function getExcludePatterns(): string[] {
   const configResult = loadJSONServers();
-  return configResult?.ignorePatterns || [];
+  return configResult?.excludePatterns || [];
+}
+
+/**
+ * Get tool noCompress patterns from configuration
+ */
+export function getNoCompressPatterns(): string[] {
+  const configResult = loadJSONServers();
+  return configResult?.noCompressPatterns || [];
 }
