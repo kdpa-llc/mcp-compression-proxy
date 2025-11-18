@@ -1,6 +1,7 @@
 import type { CompressedToolCache, CompressionStats } from '../types/compression.js';
 import type { Logger } from 'pino';
 import { CompressionPersistence } from './compression-persistence.js';
+import { matchesIgnorePattern } from '../config/loader.js';
 
 /**
  * In-memory cache for compressed tool descriptions
@@ -10,10 +11,29 @@ export class CompressionCache {
   private cache: CompressedToolCache = {};
   private logger: Logger;
   private persistence: CompressionPersistence;
+  private noCompressPatterns: string[] = [];
 
   constructor(logger: Logger, persistence?: CompressionPersistence) {
     this.logger = logger;
     this.persistence = persistence || new CompressionPersistence(logger);
+  }
+
+  /**
+   * Set patterns for tools that should never be compressed
+   */
+  setNoCompressPatterns(patterns: string[]): void {
+    this.noCompressPatterns = patterns;
+    this.logger.debug(
+      { patterns },
+      'Set noCompress patterns'
+    );
+  }
+
+  /**
+   * Check if a tool should bypass compression
+   */
+  private shouldBypassCompression(toolName: string): boolean {
+    return matchesIgnorePattern(toolName, this.noCompressPatterns);
   }
 
   /**
@@ -25,6 +45,7 @@ export class CompressionCache {
 
   /**
    * Save compressed description for a tool
+   * Skips compression if tool matches noCompress patterns
    */
   saveCompressed(
     serverName: string,
@@ -32,6 +53,17 @@ export class CompressionCache {
     compressedDescription: string,
     originalDescription?: string
   ): void {
+    const fullToolName = `${serverName}__${toolName}`;
+
+    // Skip compression for tools matching noCompress patterns
+    if (this.shouldBypassCompression(fullToolName)) {
+      this.logger.debug(
+        { serverName, toolName },
+        'Skipping compression (matches noCompress pattern)'
+      );
+      return;
+    }
+
     const key = this.getKey(serverName, toolName);
 
     this.cache[key] = {
@@ -48,6 +80,7 @@ export class CompressionCache {
 
   /**
    * Get description for a tool (session-aware)
+   * - If tool matches noCompress pattern: always use original
    * - If tool is expanded in session: use original
    * - If compressed exists: use compressed
    * - Otherwise: use original
@@ -58,7 +91,13 @@ export class CompressionCache {
     originalDescription?: string,
     isExpandedInSession?: boolean
   ): string | undefined {
+    const fullToolName = `${serverName}__${toolName}`;
     const key = this.getKey(serverName, toolName);
+
+    // Always bypass compression for noCompress patterns
+    if (this.shouldBypassCompression(fullToolName)) {
+      return originalDescription;
+    }
 
     // If tool is expanded in session, use original description
     if (isExpandedInSession) {

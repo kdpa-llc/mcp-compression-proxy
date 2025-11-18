@@ -127,19 +127,21 @@ export function matchesIgnorePattern(toolName: string, patterns: string[]): bool
 
 export type ConfigResult = {
   servers: MCPServerConfig[];
-  ignorePatterns: string[];
+  excludePatterns: string[];
+  noCompressPatterns: string[];
 } | null;
 
 /**
  * Load and aggregate server configuration from JSON files
- * 1. Load user-level config and collect ignore patterns
+ * 1. Load user-level config and collect patterns
  * 2. Load project-level config and append servers
- * 3. Aggregate ignore patterns from both configs
+ * 3. Aggregate exclude and noCompress patterns from both configs
  */
 export function loadJSONServers(): ConfigResult {
   const paths = getConfigPaths();
   let aggregatedServers: MCPServerConfig[] = [];
-  let aggregatedIgnorePatterns: string[] = [];
+  let aggregatedExcludePatterns: string[] = [];
+  let aggregatedNoCompressPatterns: string[] = [];
   let hasAnyConfig = false;
 
   // Step 1: Load user-level config
@@ -149,8 +151,11 @@ export function loadJSONServers(): ConfigResult {
     console.log(`[Config] Loaded user-level configuration from: ${paths.user}`);
 
     aggregatedServers = [...userConfig.mcpServers];
-    if (userConfig.ignoreTools) {
-      aggregatedIgnorePatterns = [...userConfig.ignoreTools];
+    if (userConfig.excludeTools) {
+      aggregatedExcludePatterns = [...userConfig.excludeTools];
+    }
+    if (userConfig.noCompressTools) {
+      aggregatedNoCompressPatterns = [...userConfig.noCompressTools];
     }
   }
 
@@ -163,9 +168,14 @@ export function loadJSONServers(): ConfigResult {
     // Append project servers
     aggregatedServers = [...aggregatedServers, ...projectConfig.mcpServers];
 
-    // Append project ignore patterns
-    if (projectConfig.ignoreTools) {
-      aggregatedIgnorePatterns = [...aggregatedIgnorePatterns, ...projectConfig.ignoreTools];
+    // Append project exclude patterns
+    if (projectConfig.excludeTools) {
+      aggregatedExcludePatterns = [...aggregatedExcludePatterns, ...projectConfig.excludeTools];
+    }
+
+    // Append project noCompress patterns
+    if (projectConfig.noCompressTools) {
+      aggregatedNoCompressPatterns = [...aggregatedNoCompressPatterns, ...projectConfig.noCompressTools];
     }
   }
 
@@ -179,16 +189,22 @@ export function loadJSONServers(): ConfigResult {
     console.warn(`[Config] Found ${disabled.length} disabled server(s): ${disabled.map(s => s.name).join(', ')}`);
   }
 
-  // Log ignore patterns
-  if (aggregatedIgnorePatterns.length > 0) {
-    console.log(`[Config] Tool ignore patterns: ${aggregatedIgnorePatterns.join(', ')}`);
+  // Log exclude patterns
+  if (aggregatedExcludePatterns.length > 0) {
+    console.log(`[Config] Tool exclude patterns: ${aggregatedExcludePatterns.join(', ')}`);
+  }
+
+  // Log noCompress patterns
+  if (aggregatedNoCompressPatterns.length > 0) {
+    console.log(`[Config] Tool noCompress patterns: ${aggregatedNoCompressPatterns.join(', ')}`);
   }
 
   console.log(`[Config] Total servers after aggregation: ${aggregatedServers.length}`);
 
   return {
     servers: aggregatedServers,
-    ignorePatterns: aggregatedIgnorePatterns,
+    excludePatterns: aggregatedExcludePatterns,
+    noCompressPatterns: aggregatedNoCompressPatterns,
   };
 }
 
