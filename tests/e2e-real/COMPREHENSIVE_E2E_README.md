@@ -10,11 +10,11 @@ Tests that the proxy correctly aggregates tools from multiple MCP servers:
 - **Text Server**: Provides text manipulation (uppercase, lowercase, reverse, count_words)
 - **Data Server**: Provides key-value storage (store_data, get_data, list_keys)
 
-### 2. **Tool Filtering**
-Tests that ignore patterns correctly filter out specified tools:
-- Configured ignore patterns remove specific tools from the aggregated list
-- Non-ignored tools remain accessible
-- Pattern matching works correctly
+### 2. **Tool Exclusion (excludeTools)**
+Tests that exclude patterns correctly remove tools from the tool list:
+- Configured exclude patterns completely remove specific tools from the aggregated list
+- Non-excluded tools remain accessible
+- Pattern matching works correctly with wildcards
 
 ### 3. **Tool Proxying**
 Tests that tool calls are correctly proxied to the underlying MCP servers:
@@ -30,18 +30,25 @@ Tests that a real LLM can:
 - Execute multi-step workflows
 - Understand tool descriptions
 
-### 5. **Compression & Expansion**
+### 5. **No-Compress Pass-Through (noCompressTools)**
+Tests that tools can bypass compression:
+- Tools matching noCompress patterns preserve their full descriptions
+- Descriptions remain unchanged even after compression is triggered
+- Cache respects noCompress patterns
+- Full descriptions are always returned for these tools
+
+### 6. **Compression & Expansion**
 Tests the full compression lifecycle:
 - Tools can be compressed using a real LLM
 - Compressed descriptions are stored and retrieved
 - Session-based expansion works correctly
 - Original descriptions can be restored
 
-### 6. **Complete Integration**
+### 7. **Complete Integration**
 Tests that all features work together in real-world scenarios:
 - Multi-step workflows using tools from different servers
 - Data persistence across tool calls
-- Filtering remains active throughout
+- Exclusion and noCompress remain active throughout
 - Tool descriptions guide LLM behavior
 
 ## Test Servers
@@ -109,6 +116,18 @@ Tools:
    npm run build:test-servers
    ```
 
+## Test Validation
+
+Each test validates specific functionality:
+
+1. **Test 1**: Aggregation - Verifies tools from all 3 servers are available
+2. **Test 2**: Exclusion - Confirms excluded tools are removed from tool list
+3. **Test 3**: Proxying - Executes actual tool calls and validates responses
+4. **Test 4**: LLM Selection - Real LLM analyzes tasks and selects tools
+5. **Test 5**: No-Compress - Validates tools bypass compression and preserve full descriptions
+6. **Test 6**: Integration - Multi-step workflow using all features
+7. **Test 7**: Compression - Full compression/expansion lifecycle
+
 ## Running Tests
 
 ### Run all e2e tests with real LLM:
@@ -153,10 +172,13 @@ The comprehensive e2e test creates a temporary configuration at runtime:
       "enabled": true
     }
   ],
-  "ignoreTools": [
+  "excludeTools": [
     "math__square",
     "text__reverse",
     "data__list_keys"
+  ],
+  "noCompressTools": [
+    "text__count_words"
   ]
 }
 ```
@@ -179,11 +201,11 @@ Successful test run will show:
    Data tools: 2
    ✓ Tools successfully aggregated from all servers
 
-🚫 TEST 2: Tool Filtering
-   Checking math__square: FILTERED (✓)
-   Checking text__reverse: FILTERED (✓)
-   Checking data__list_keys: FILTERED (✓)
-   ✓ Tool filtering working correctly
+🚫 TEST 2: Tool Exclusion (excludeTools)
+   Checking math__square: EXCLUDED (✓)
+   Checking text__reverse: EXCLUDED (✓)
+   Checking data__list_keys: EXCLUDED (✓)
+   ✓ Tool exclusion working correctly
 
 🔄 TEST 3: Tool Proxying
    Testing math__add...
@@ -206,7 +228,19 @@ Successful test run will show:
       Result: RESULT IS 56
    ✓ LLM successfully guided tool selection and execution
 
-🎯 TEST 5: Complete Integration Workflow
+🔒 TEST 5: No-Compress Pass-Through (noCompressTools)
+   Original text__count_words description: 120 chars
+   "Count words in text. This tool analyzes a text string and returns the number of words it contains."
+
+   Triggering compression...
+   Compressed 9 tools
+   ✓ Compression saved
+
+   After compression: 120 chars
+   "Count words in text. This tool analyzes a text string and returns the number of words it contains."
+   ✓ No-compress pass-through working - description unchanged
+
+🎯 TEST 6: Complete Integration Workflow
    Scenario: Store and retrieve calculation results
    1. Calculate 15 + 27...
       Result: 42
@@ -216,10 +250,11 @@ Successful test run will show:
       ✓ Stored
    4. Retrieve stored data...
       Retrieved: Result: 42
-   5. Verify filtering still active...
+   5. Verify exclusion still active...
+   6. Verify noCompress tool present...
    ✓ Complete workflow successful
 
-🗜️  TEST 6: Compression & Expansion
+🗜️  TEST 7: Compression & Expansion
    Original description length: 120 chars
    Triggering compression...
    Compressed 10 descriptions

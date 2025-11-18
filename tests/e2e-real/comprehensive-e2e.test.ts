@@ -81,10 +81,13 @@ describe('Comprehensive E2E with Real LLM', () => {
           enabled: true,
         },
       ],
-      ignoreTools: [
-        'math__square',        // Ignore specific tool
-        'text__reverse',       // Ignore specific tool
-        'data__list_keys',     // Ignore specific tool
+      excludeTools: [
+        'math__square',        // Exclude specific tool from tool list
+        'text__reverse',       // Exclude specific tool from tool list
+        'data__list_keys',     // Exclude specific tool from tool list
+      ],
+      noCompressTools: [
+        'text__count_words',   // Never compress - preserve full description
       ],
     };
 
@@ -175,36 +178,37 @@ describe('Comprehensive E2E with Real LLM', () => {
     console.log('   ✓ Tools successfully aggregated from all servers\n');
   }, 60000);
 
-  it('should filter tools based on ignore patterns', async () => {
+  it('should exclude tools based on exclude patterns', async () => {
     // Skip if Ollama not available
     if (!(await ollamaClient.isRunning())) {
       console.log('⏭️  Skipping test - Ollama not available');
       return;
     }
 
-    console.log('\n🚫 TEST 2: Tool Filtering');
+    console.log('\n🚫 TEST 2: Tool Exclusion (excludeTools)');
 
     const tools = await mcpClient.listTools();
 
-    // Verify ignored tools are NOT present
-    const ignoredTools = [
+    // Verify excluded tools are NOT present
+    const excludedTools = [
       'math__square',
       'text__reverse',
       'data__list_keys',
     ];
 
-    for (const toolName of ignoredTools) {
+    for (const toolName of excludedTools) {
       const tool = tools.tools.find(t => t.name === toolName);
-      console.log(`   Checking ${toolName}: ${tool ? 'PRESENT (❌)' : 'FILTERED (✓)'}`);
+      console.log(`   Checking ${toolName}: ${tool ? 'PRESENT (❌)' : 'EXCLUDED (✓)'}`);
       expect(tool).toBeUndefined();
     }
 
-    // Verify non-ignored tools ARE present
+    // Verify non-excluded tools ARE present
     const allowedTools = [
       'math__add',
       'math__multiply',
       'text__uppercase',
       'text__lowercase',
+      'text__count_words',
       'data__store_data',
       'data__get_data',
     ];
@@ -214,7 +218,7 @@ describe('Comprehensive E2E with Real LLM', () => {
       expect(tool).toBeDefined();
     }
 
-    console.log('   ✓ Tool filtering working correctly\n');
+    console.log('   ✓ Tool exclusion working correctly\n');
   }, 60000);
 
   it('should proxy tool calls to underlying MCP servers', async () => {
@@ -358,6 +362,89 @@ Which tools should be used? Return ONLY a JSON array like ["tool1", "tool2"].`;
     console.log('   ✓ LLM successfully guided tool selection and execution\n');
   }, 120000);
 
+  it('should preserve full descriptions for noCompressTools', async () => {
+    // Skip if Ollama not available
+    if (!(await ollamaClient.isRunning())) {
+      console.log('⏭️  Skipping test - Ollama not available');
+      return;
+    }
+
+    console.log('\n🔒 TEST 5: No-Compress Pass-Through (noCompressTools)');
+
+    // Get text__count_words which is in noCompressTools
+    const tools = await mcpClient.listTools();
+    const countWordsTool = tools.tools.find(t => t.name === 'text__count_words');
+    expect(countWordsTool).toBeDefined();
+
+    const originalDescription = countWordsTool!.description;
+    const originalLength = originalDescription!.length;
+    console.log(`   Original text__count_words description: ${originalLength} chars`);
+    console.log(`   "${originalDescription}"`);
+
+    // Trigger compression
+    console.log('\n   Triggering compression...');
+    const compressResult = await mcpClient.callTool({
+      name: 'compress_tools',
+      arguments: {},
+    });
+
+    const compressContent = compressResult.content as Array<{ type: string; text: string }>;
+    const responseText = compressContent[0].text;
+
+    // Extract tools to compress
+    const jsonMatch = responseText.match(/\[([\s\S]*)\]/);
+    if (!jsonMatch) {
+      console.log('   ⚠️  No tools to compress');
+      return;
+    }
+
+    let toolsToCompress;
+    try {
+      toolsToCompress = JSON.parse(jsonMatch[0]);
+    } catch (error) {
+      const jsonStr = jsonMatch[0];
+      for (let i = jsonStr.length - 1; i >= 0; i--) {
+        if (jsonStr[i] === ']') {
+          try {
+            toolsToCompress = JSON.parse(jsonStr.substring(0, i + 1));
+            break;
+          } catch {
+            continue;
+          }
+        }
+      }
+    }
+
+    // Compress with LLM
+    const compressed = await ollamaClient.compressToolDescriptions(toolsToCompress);
+    console.log(`   Compressed ${compressed.length} tools`);
+
+    // Save compressed descriptions
+    await mcpClient.callTool({
+      name: 'save_compressed_tools',
+      arguments: {
+        descriptions: compressed,
+      },
+    });
+    console.log('   ✓ Compression saved');
+
+    // Verify text__count_words STILL has full description (not compressed)
+    const toolsAfterCompression = await mcpClient.listTools();
+    const countWordsToolAfter = toolsAfterCompression.tools.find(t => t.name === 'text__count_words');
+    expect(countWordsToolAfter).toBeDefined();
+
+    const afterDescription = countWordsToolAfter!.description;
+    const afterLength = afterDescription!.length;
+    console.log(`\n   After compression: ${afterLength} chars`);
+    console.log(`   "${afterDescription}"`);
+
+    // Should be exactly the same (no compression)
+    expect(afterDescription).toBe(originalDescription);
+    expect(afterLength).toBe(originalLength);
+
+    console.log('   ✓ No-compress pass-through working - description unchanged\n');
+  }, 120000);
+
   it('should validate all features work together in complete workflow', async () => {
     // Skip if Ollama not available
     if (!(await ollamaClient.isRunning())) {
@@ -365,7 +452,7 @@ Which tools should be used? Return ONLY a JSON array like ["tool1", "tool2"].`;
       return;
     }
 
-    console.log('\n🎯 TEST 5: Complete Integration Workflow');
+    console.log('\n🎯 TEST 6: Complete Integration Workflow');
 
     // Scenario: Store calculation results with text labels
     console.log('   Scenario: Store and retrieve calculation results');
@@ -406,12 +493,16 @@ Which tools should be used? Return ONLY a JSON array like ["tool1", "tool2"].`;
     console.log(`      Retrieved: ${retrieved}`);
     expect(retrieved).toContain('42');
 
-    // Step 5: Verify filtered tools are still not accessible
-    console.log('   5. Verify filtering still active...');
+    // Step 5: Verify excluded tools are still not accessible
+    console.log('   5. Verify exclusion still active...');
     const tools = await mcpClient.listTools();
     expect(tools.tools.find(t => t.name === 'math__square')).toBeUndefined();
 
-    console.log('   ✓ Complete workflow successful - aggregation, filtering, and proxying all working\n');
+    // Step 6: Verify noCompress tool is still present
+    console.log('   6. Verify noCompress tool present...');
+    expect(tools.tools.find(t => t.name === 'text__count_words')).toBeDefined();
+
+    console.log('   ✓ Complete workflow successful - aggregation, exclusion, noCompress, and proxying all working\n');
   }, 120000);
 
   it('should compress and expand tool descriptions with real LLM', async () => {
@@ -421,7 +512,7 @@ Which tools should be used? Return ONLY a JSON array like ["tool1", "tool2"].`;
       return;
     }
 
-    console.log('\n🗜️  TEST 6: Compression & Expansion');
+    console.log('\n🗜️  TEST 7: Compression & Expansion');
 
     // Get initial tool descriptions (should be uncompressed)
     const initialTools = await mcpClient.listTools();
