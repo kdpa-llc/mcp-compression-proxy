@@ -5,7 +5,7 @@ import { loadJSONServers } from './loader.js';
  * Configuration for MCP servers to aggregate
  * @deprecated Use JSON configuration files instead:
  *   - Project-level: ./servers.json
- *   - User-level: ~/.mcp-aggregator/servers.json
+ *   - User-level: ~/.mcp-compression-proxy/servers.json
  * This TypeScript configuration is maintained for backward compatibility only.
  */
 export const mcpServers: MCPServerConfig[] = [

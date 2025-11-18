@@ -37,7 +37,7 @@ describe('Server Configuration', () => {
 
     // Clean up test directory
     if (existsSync(testDir)) {
-      const files = ['servers.json', '.mcp-aggregator/servers.json'];
+      const files = ['servers.json', '.mcp-compression-proxy/servers.json'];
       files.forEach(file => {
         const path = join(testDir, file);
         if (existsSync(path)) {
@@ -45,7 +45,7 @@ describe('Server Configuration', () => {
         }
       });
 
-      const aggregatorDir = join(testDir, '.mcp-aggregator');
+      const aggregatorDir = join(testDir, '.mcp-compression-proxy');
       if (existsSync(aggregatorDir)) {
         rmdirSync(aggregatorDir);
       }
@@ -125,7 +125,7 @@ describe('Server Configuration', () => {
     });
 
     it('should handle JSON config from user directory', () => {
-      const userConfigDir = join(testDir, '.mcp-aggregator');
+      const userConfigDir = join(testDir, '.mcp-compression-proxy');
       mkdirSync(userConfigDir, { recursive: true });
 
       const jsonConfig = {
