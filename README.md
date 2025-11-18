@@ -241,6 +241,13 @@ Create or edit your JSON configuration file at:
 
 #### Configuration Schema
 
+**Root Level:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `mcpServers` | array | ✅ | Array of server configurations |
+| `ignoreTools` | string[] | ❌ | Tool name patterns to ignore (supports wildcards) |
+
+**Server Configuration:**
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | ✅ | Unique server identifier |
@@ -271,13 +278,41 @@ Use `${VAR_NAME}` syntax to reference environment variables:
 
 Variables are expanded at runtime from your shell environment.
 
-#### Configuration Priority
+#### Tool Ignore Patterns
 
-If both config files exist, **project-level** takes priority:
-1. `./servers.json` (project-level) - checked first
-2. `~/.mcp-aggregator/servers.json` (user-level) - fallback
+Use the `ignoreTools` field to filter out unwanted tools using wildcard patterns (case-insensitive):
 
-This allows team-specific configs to override personal defaults.
+```json
+{
+  "mcpServers": [...],
+  "ignoreTools": [
+    "github__*",        // Ignore all GitHub tools
+    "*__delete*",       // Ignore all delete operations
+    "filesystem__write_*",  // Ignore filesystem write tools
+    "set_*"             // Ignore management tools starting with set_
+  ]
+}
+```
+
+**Pattern Examples:**
+- `"serverName__*"` - All tools from specific server
+- `"*__toolPattern*"` - Tools matching pattern from any server
+- `"exact_tool_name"` - Exact tool name match
+
+#### Configuration Aggregation
+
+Both config files are loaded and combined:
+
+1. Load user config (`~/.mcp-aggregator/servers.json`)
+2. Load project config (`./servers.json`)
+3. Aggregate servers from both configs
+4. Aggregate ignore patterns from both configs
+5. Apply ignore patterns to filter tools
+
+This allows:
+- Personal defaults in user config
+- Team/project-specific servers in project config
+- Fine-grained tool filtering with ignore patterns
 
 ### Environment Variables
 

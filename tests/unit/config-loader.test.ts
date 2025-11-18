@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import { writeFileSync, unlinkSync, existsSync, mkdirSync, rmdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import type { MCPServerConfig } from '../../src/types/index.js';
 
 // We need to dynamically import to reset the module cache
 async function importLoader() {
@@ -61,6 +62,50 @@ describe('Config Loader', () => {
       expect(result).toBeNull();
     });
 
+    it('should load ignore patterns from user config', async () => {
+      const userConfigDir = join(testDir, '.mcp-aggregator');
+      mkdirSync(userConfigDir, { recursive: true });
+
+      const config = {
+        mcpServers: [
+          { name: 'test-server', command: 'npx' },
+        ],
+        ignoreTools: ['test__*', '*__delete*'],
+      };
+
+      writeFileSync(join(userConfigDir, 'servers.json'), JSON.stringify(config));
+
+      const { loadJSONServers } = await importLoader();
+      const result = loadJSONServers();
+
+      expect(result).not.toBeNull();
+      expect(result!.ignorePatterns).toEqual(['test__*', '*__delete*']);
+    });
+
+    it('should aggregate ignore patterns from user and project configs', async () => {
+      const userConfigDir = join(testDir, '.mcp-aggregator');
+      mkdirSync(userConfigDir, { recursive: true});
+
+      const userConfig = {
+        mcpServers: [{ name: 'user-server', command: 'node' }],
+        ignoreTools: ['user__*'],
+      };
+
+      const projectConfig = {
+        mcpServers: [{ name: 'project-server', command: 'npx' }],
+        ignoreTools: ['*__delete*', 'test__*'],
+      };
+
+      writeFileSync(join(userConfigDir, 'servers.json'), JSON.stringify(userConfig));
+      writeFileSync(join(testDir, 'servers.json'), JSON.stringify(projectConfig));
+
+      const { loadJSONServers } = await importLoader();
+      const result = loadJSONServers();
+
+      expect(result).not.toBeNull();
+      expect(result!.ignorePatterns).toEqual(['user__*', '*__delete*', 'test__*']);
+    });
+
     it('should load valid JSON config from project directory', async () => {
       const config = {
         mcpServers: [
@@ -79,8 +124,8 @@ describe('Config Loader', () => {
       const result = loadJSONServers();
 
       expect(result).not.toBeNull();
-      expect(result).toHaveLength(1);
-      expect(result![0].name).toBe('test-server');
+      expect(result!.servers).toHaveLength(1);
+      expect(result!.servers[0].name).toBe('test-server');
     });
 
     it('should load valid JSON config from user directory', async () => {
@@ -102,11 +147,11 @@ describe('Config Loader', () => {
       const result = loadJSONServers();
 
       expect(result).not.toBeNull();
-      expect(result).toHaveLength(1);
-      expect(result![0].name).toBe('user-server');
+      expect(result!.servers).toHaveLength(1);
+      expect(result!.servers[0].name).toBe('user-server');
     });
 
-    it('should prioritize project config over user config', async () => {
+    it('should aggregate user and project configs', async () => {
       const userConfigDir = join(testDir, '.mcp-aggregator');
       mkdirSync(userConfigDir, { recursive: true });
 
@@ -124,8 +169,8 @@ describe('Config Loader', () => {
       const result = loadJSONServers();
 
       expect(result).not.toBeNull();
-      expect(result).toHaveLength(1);
-      expect(result![0].name).toBe('project-server');
+      expect(result!.servers).toHaveLength(2);
+      expect(result!.servers.map((s: MCPServerConfig) => s.name)).toEqual(['user-server', 'project-server']);
     });
 
     it('should expand environment variables', async () => {
@@ -150,8 +195,8 @@ describe('Config Loader', () => {
       const result = loadJSONServers();
 
       expect(result).not.toBeNull();
-      expect(result![0].env?.TOKEN).toBe('secret123');
-      expect(result![0].env?.STATIC).toBe('value');
+      expect(result!.servers[0].env?.TOKEN).toBe('secret123');
+      expect(result!.servers[0].env?.STATIC).toBe('value');
 
       delete process.env.TEST_TOKEN;
     });
@@ -175,7 +220,7 @@ describe('Config Loader', () => {
       const result = loadJSONServers();
 
       expect(result).not.toBeNull();
-      expect(result![0].args).toEqual(['--path', '/test/path']);
+      expect(result!.servers[0].args).toEqual(['--path', '/test/path']);
 
       delete process.env.TEST_PATH;
     });
@@ -238,11 +283,11 @@ describe('Config Loader', () => {
       const result = loadJSONServers();
 
       expect(result).not.toBeNull();
-      expect(result![0].name).toBe('minimal-server');
-      expect(result![0].command).toBe('node');
-      expect(result![0].args).toBeUndefined();
-      expect(result![0].env).toBeUndefined();
-      expect(result![0].enabled).toBeUndefined();
+      expect(result!.servers[0].name).toBe('minimal-server');
+      expect(result!.servers[0].command).toBe('node');
+      expect(result!.servers[0].args).toBeUndefined();
+      expect(result!.servers[0].env).toBeUndefined();
+      expect(result!.servers[0].enabled).toBeUndefined();
     });
 
     it('should handle disabled servers', async () => {
@@ -267,9 +312,9 @@ describe('Config Loader', () => {
       const result = loadJSONServers();
 
       expect(result).not.toBeNull();
-      expect(result).toHaveLength(2);
-      expect(result![0].enabled).toBe(true);
-      expect(result![1].enabled).toBe(false);
+      expect(result!.servers).toHaveLength(2);
+      expect(result!.servers[0].enabled).toBe(true);
+      expect(result!.servers[1].enabled).toBe(false);
     });
 
     it('should reject additional properties', async () => {
@@ -309,7 +354,7 @@ describe('Config Loader', () => {
       const result = loadJSONServers();
 
       expect(result).not.toBeNull();
-      expect(result![0].env?.MISSING_VAR).toBe('');
+      expect(result!.servers[0].env?.MISSING_VAR).toBe('');
     });
   });
 

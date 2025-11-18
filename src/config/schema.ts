@@ -43,6 +43,13 @@ export const serverConfigSchema = {
         additionalProperties: false,
       },
     },
+    ignoreTools: {
+      type: 'array',
+      description: 'Tool name patterns to ignore/exclude (supports wildcards, case-insensitive). Examples: "server__*" (all tools from server), "*__set*" (tools with "set" in name)',
+      items: {
+        type: 'string',
+      },
+    },
   },
   required: ['mcpServers'],
   additionalProperties: false,
@@ -56,4 +63,5 @@ export type ServerConfigJSON = {
     env?: Record<string, string>;
     enabled?: boolean;
   }>;
+  ignoreTools?: string[];
 };

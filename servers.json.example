@@ -13,7 +13,11 @@
       "env": {
         "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
       },
-      "enabled": false
+      "enabled": true
     }
+  ],
+  "ignoreTools": [
+    "github__delete_*",
+    "*__experimental*"
   ]
 }
