@@ -19,14 +19,15 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { OllamaClient } from './ollama-client.js';
 import path from 'path';
 import { writeFileSync, mkdirSync, rmSync } from 'fs';
-import { homedir } from 'os';
 
 describe('Comprehensive E2E with Real LLM', () => {
   let mcpClient: Client;
   let transport: StdioClientTransport;
   let ollamaClient: OllamaClient;
+  let testHome: string;
   let configDir: string;
   let configPath: string;
+  let originalHome: string | undefined;
 
   beforeAll(async () => {
     console.log('\n🚀 Setting up Comprehensive E2E Test Environment...\n');
@@ -55,7 +56,9 @@ describe('Comprehensive E2E with Real LLM', () => {
 
     // Create test configuration
     console.log('🔧 Creating test configuration...');
-    configDir = path.join(homedir(), '.mcp-compression-proxy-test');
+    // Create a temporary HOME directory so the config loader finds our test config
+    testHome = path.join('/tmp', `mcp-test-home-${Date.now()}`);
+    configDir = path.join(testHome, '.mcp-compression-proxy');
     configPath = path.join(configDir, 'servers.json');
 
     mkdirSync(configDir, { recursive: true });
@@ -98,15 +101,16 @@ describe('Comprehensive E2E with Real LLM', () => {
     console.log('🔧 Starting MCP Compression Proxy server...');
     const serverPath = path.join(process.cwd(), 'dist/index.js');
 
-    // Point to test config directory
-    const originalHome = process.env.HOME;
-    process.env.HOME = configDir.replace('/.mcp-compression-proxy-test', '');
+    // Set HOME to test directory so config loader finds our test config
+    originalHome = process.env.HOME;
+    process.env.HOME = testHome;
 
     transport = new StdioClientTransport({
       command: 'node',
       args: [serverPath],
       env: {
         ...process.env,
+        HOME: testHome, // Ensure child process also uses test HOME
         LOG_LEVEL: 'warn', // Reduce noise in test output
       },
     });
@@ -123,23 +127,24 @@ describe('Comprehensive E2E with Real LLM', () => {
 
     await mcpClient.connect(transport);
     console.log('✓ MCP Compression Proxy connected\n');
-
-    // Restore HOME
-    if (originalHome) {
-      process.env.HOME = originalHome;
-    }
   }, 60000);
 
   afterAll(async () => {
+    // Restore HOME
+    if (originalHome !== undefined) {
+      process.env.HOME = originalHome;
+    }
+
     if (mcpClient) {
       await mcpClient.close();
     }
-    // Clean up test config
-    if (configDir) {
+
+    // Clean up test home directory
+    if (testHome) {
       try {
-        rmSync(configDir, { recursive: true, force: true });
+        rmSync(testHome, { recursive: true, force: true });
       } catch (error) {
-        console.warn('Failed to clean up test config:', error);
+        console.warn('Failed to clean up test home:', error);
       }
     }
   });
