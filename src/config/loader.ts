@@ -87,39 +87,109 @@ function loadJSONConfig(filePath: string): ServerConfigJSON | null {
 }
 
 /**
- * Get config file paths in priority order
- * 1. ./servers.json (project-level)
- * 2. ~/.mcp-aggregator/servers.json (user-level)
+ * Get config file paths
+ * User-level: ~/.mcp-aggregator/servers.json
+ * Project-level: ./servers.json
  */
-function getConfigPaths(): string[] {
-  return [
-    join(process.cwd(), 'servers.json'),
-    join(homedir(), '.mcp-aggregator', 'servers.json'),
-  ];
+function getConfigPaths(): { user: string; project: string } {
+  return {
+    user: join(homedir(), '.mcp-aggregator', 'servers.json'),
+    project: join(process.cwd(), 'servers.json'),
+  };
 }
 
 /**
- * Load server configuration from JSON files
- * Checks project-level first, then falls back to user-level
+ * Convert wildcard pattern to regex
+ * Supports * wildcard, case-insensitive
  */
-export function loadJSONServers(): MCPServerConfig[] | null {
+function patternToRegex(pattern: string): RegExp {
+  // Escape regex special chars except *
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+  // Convert * to .*
+  const regexPattern = escaped.replace(/\*/g, '.*');
+  // Case insensitive
+  return new RegExp(`^${regexPattern}$`, 'i');
+}
+
+/**
+ * Check if tool name matches any ignore pattern
+ */
+export function matchesIgnorePattern(toolName: string, patterns: string[]): boolean {
+  if (!patterns || patterns.length === 0) {
+    return false;
+  }
+
+  return patterns.some(pattern => {
+    const regex = patternToRegex(pattern);
+    return regex.test(toolName);
+  });
+}
+
+export type ConfigResult = {
+  servers: MCPServerConfig[];
+  ignorePatterns: string[];
+} | null;
+
+/**
+ * Load and aggregate server configuration from JSON files
+ * 1. Load user-level config and collect ignore patterns
+ * 2. Load project-level config and append servers
+ * 3. Aggregate ignore patterns from both configs
+ */
+export function loadJSONServers(): ConfigResult {
   const paths = getConfigPaths();
+  let aggregatedServers: MCPServerConfig[] = [];
+  let aggregatedIgnorePatterns: string[] = [];
+  let hasAnyConfig = false;
 
-  for (const path of paths) {
-    const config = loadJSONConfig(path);
-    if (config) {
-      // Log disabled servers
-      const disabled = config.mcpServers.filter(s => s.enabled === false);
-      if (disabled.length > 0) {
-        console.warn(`[Config] Found ${disabled.length} disabled server(s): ${disabled.map(s => s.name).join(', ')}`);
-      }
+  // Step 1: Load user-level config
+  const userConfig = loadJSONConfig(paths.user);
+  if (userConfig) {
+    hasAnyConfig = true;
+    console.log(`[Config] Loaded user-level configuration from: ${paths.user}`);
 
-      console.log(`[Config] Loaded configuration from: ${path}`);
-      return config.mcpServers;
+    aggregatedServers = [...userConfig.mcpServers];
+    if (userConfig.ignoreTools) {
+      aggregatedIgnorePatterns = [...userConfig.ignoreTools];
     }
   }
 
-  return null;
+  // Step 2: Load project-level config and append
+  const projectConfig = loadJSONConfig(paths.project);
+  if (projectConfig) {
+    hasAnyConfig = true;
+    console.log(`[Config] Loaded project-level configuration from: ${paths.project}`);
+
+    // Append project servers
+    aggregatedServers = [...aggregatedServers, ...projectConfig.mcpServers];
+
+    // Append project ignore patterns
+    if (projectConfig.ignoreTools) {
+      aggregatedIgnorePatterns = [...aggregatedIgnorePatterns, ...projectConfig.ignoreTools];
+    }
+  }
+
+  if (!hasAnyConfig) {
+    return null;
+  }
+
+  // Log disabled servers
+  const disabled = aggregatedServers.filter(s => s.enabled === false);
+  if (disabled.length > 0) {
+    console.warn(`[Config] Found ${disabled.length} disabled server(s): ${disabled.map(s => s.name).join(', ')}`);
+  }
+
+  // Log ignore patterns
+  if (aggregatedIgnorePatterns.length > 0) {
+    console.log(`[Config] Tool ignore patterns: ${aggregatedIgnorePatterns.join(', ')}`);
+  }
+
+  console.log(`[Config] Total servers after aggregation: ${aggregatedServers.length}`);
+
+  return {
+    servers: aggregatedServers,
+    ignorePatterns: aggregatedIgnorePatterns,
+  };
 }
 
 /**

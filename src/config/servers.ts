@@ -33,11 +33,11 @@ export const mcpServers: MCPServerConfig[] = [
  */
 export function getEnabledServers(): MCPServerConfig[] {
   // Try to load from JSON config first
-  const jsonServers = loadJSONServers();
+  const configResult = loadJSONServers();
 
-  if (jsonServers !== null) {
+  if (configResult !== null) {
     // JSON config found, use it
-    return jsonServers.filter(server => server.enabled !== false);
+    return configResult.servers.filter(server => server.enabled !== false);
   }
 
   // Fall back to TypeScript config with deprecation warning
@@ -45,4 +45,12 @@ export function getEnabledServers(): MCPServerConfig[] {
   console.warn('[Config] Run: npm run migrate-config');
 
   return mcpServers.filter(server => server.enabled !== false);
+}
+
+/**
+ * Get tool ignore patterns from configuration
+ */
+export function getIgnorePatterns(): string[] {
+  const configResult = loadJSONServers();
+  return configResult?.ignorePatterns || [];
 }
