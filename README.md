@@ -23,7 +23,7 @@
 
 [Quick Start](#-quick-start) •
 [Features](#-features) •
-[Usage](#-usage) •
+[Configuration](#-configuration) •
 [FAQ](#-faq) •
 [Contributing](#-contributing)
 
@@ -40,15 +40,25 @@
 - [🔧 Configuration](#-configuration)
 - [💡 Best Practices](#-best-practices)
 - [❓ FAQ](#-faq)
+- [🧪 Testing](#-testing)
 - [🤝 Contributing](#-contributing)
+- [💖 Support This Project](#-support-this-project)
 
 ---
 
 ## What is MCP Compression Proxy?
 
-A **Model Context Protocol (MCP) server** that aggregates tools from multiple MCP servers with **LLM-based description compression** to optimize context usage. Reduce token consumption by 50-80% while maintaining full tool functionality.
+A **Model Context Protocol (MCP) server** that solves two common problems:
 
-Access tools from filesystem, GitHub, databases, and more through a single MCP connection—with intelligent compression that preserves critical information while removing verbose explanations.
+1. **Multi-server aggregation**: Access tools from multiple MCP servers through a single connection
+2. **Context optimization**: Reduce token consumption by 50-80% using intelligent LLM-based description compression
+
+Instead of connecting to multiple MCP servers separately and consuming thousands of tokens on verbose tool descriptions, MCP Compression Proxy aggregates all your tools and compresses their descriptions intelligently—preserving critical information while removing redundancy.
+
+**Perfect for:**
+- Users with many MCP servers (filesystem, GitHub, databases, etc.)
+- AI agents working with limited context windows
+- Anyone wanting to minimize token costs while maximizing tool availability
 
 ## ✨ Features
 
@@ -63,8 +73,19 @@ Access tools from filesystem, GitHub, databases, and more through a single MCP c
 
 ## 🚀 Quick Start
 
-### Install
+### Prerequisites
 
+- **Node.js 18+** installed on your system
+- An **MCP-compatible client** (Claude Desktop, Cline, Continue.dev, etc.)
+
+### 1. Install
+
+**Option A: Install from npm** (recommended for most users):
+```bash
+npm install -g mcp-compression-proxy
+```
+
+**Option B: Install from source** (for development or latest features):
 ```bash
 git clone https://github.com/kdpa-llc/mcp-compression-proxy.git
 cd mcp-compression-proxy
@@ -72,19 +93,32 @@ npm install
 npm run build
 ```
 
-**Requirements:** Node.js 18+, any MCP-compatible client
+### 2. Configure MCP Client
 
-### Configure MCP Client
+Add to your MCP client configuration file:
 
-Add to your MCP client configuration (e.g., Claude Desktop config):
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 
-**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-**Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-
+**If installed via npm:**
 ```json
 {
   "mcpServers": {
-    "aggregator": {
+    "compression-proxy": {
+      "command": "mcp-compression-proxy",
+      "env": {
+        "LOG_LEVEL": "info"
+      }
+    }
+  }
+}
+```
+
+**If installed from source:**
+```json
+{
+  "mcpServers": {
+    "compression-proxy": {
       "command": "node",
       "args": [
         "/absolute/path/to/mcp-compression-proxy/dist/index.js"
@@ -97,17 +131,17 @@ Add to your MCP client configuration (e.g., Claude Desktop config):
 }
 ```
 
-### Configure Servers
+### 3. Configure Servers
 
-Create a JSON configuration file to add MCP servers. You can choose one of two locations:
+Create a JSON configuration file to define which MCP servers to aggregate:
 
 **Option 1: User-level config** (recommended for personal use)
-- `~/.mcp-compression-proxy/servers.json`
+- Location: `~/.mcp-compression-proxy/servers.json`
 
 **Option 2: Project-level config** (recommended for team projects)
-- `./servers.json` (in the mcp-compression-proxy directory)
+- Location: `./servers.json` (in the mcp-compression-proxy directory)
 
-Example configuration:
+**Example configuration:**
 
 ```json
 {
@@ -131,9 +165,9 @@ Example configuration:
 }
 ```
 
-**No rebuild needed!** Just edit the JSON file and restart your MCP client.
+> **Note:** No rebuild needed! Just edit the JSON file and restart your MCP client.
 
-#### Migration from TypeScript Config
+#### Migration from TypeScript Config (if upgrading)
 
 If you're upgrading from a previous version that used TypeScript configuration:
 
@@ -151,18 +185,20 @@ The migration script will:
 3. Save it to the specified location
 4. Warn if config already exists (prevents accidental overwrites)
 
-### Restart Client
+### 4. Restart Your MCP Client
 
-Restart your MCP client (e.g., Claude Desktop) to load the configuration.
+Restart your MCP client (e.g., Claude Desktop) to load the new configuration. The proxy will automatically connect to all configured MCP servers and make their tools available.
 
 ## 🎯 Usage
 
 ### Tool Naming
 
-Tools use the format `serverName__toolName`:
+**Proxied tools** from your configured MCP servers use the format `serverName__toolName`:
 - `filesystem__read_file`
 - `filesystem__write_file`
 - `github__create_issue`
+
+**Management tools** (built-in) don't have a prefix and are listed below.
 
 ### Management Tools
 
@@ -178,52 +214,66 @@ Tools use the format `serverName__toolName`:
 
 ### Workflow Example
 
-#### Before Compression
+#### 1. Before Compression
+
+When you first ask your AI assistant about available tools:
 
 ```
 User: What tools do you have?
 
-Claude: I have access to these tools:
+AI: I have access to these tools:
 - filesystem__read_file: Reads the complete contents of a file at the
   specified path. The file must exist and be readable. Returns the file
   contents as text. Supports absolute and relative paths. Maximum file
-  size is 10MB...
+  size is 10MB. Will throw an error if the file doesn't exist...
+  [~200 tokens for one tool]
 ```
 
-#### Enable Compression (One-Time Setup)
+#### 2. Enable Compression (One-Time Setup)
+
+Ask your AI assistant to compress the descriptions:
 
 ```
 User: Compress the tool descriptions to save context
 
-Claude: I'll compress the tool descriptions:
-1. *calls compress_tools* - Gets all tools
-2. *compresses descriptions intelligently*
-3. *calls save_compressed_tools* - Saves compressed versions
+AI: I'll compress the tool descriptions:
+1. Getting all tools via compress_tools...
+2. Compressing descriptions intelligently...
+3. Saving compressed versions via save_compressed_tools...
 
-Done! Tool descriptions are now compressed.
+Done! Tool descriptions are now compressed and saved to cache.
 ```
 
-#### After Compression
+#### 3. After Compression
+
+The same request now uses far fewer tokens:
 
 ```
 User: What tools do you have?
 
-Claude: I have access to these tools:
-- filesystem__read_file: Read file (text, max 10MB)
-- filesystem__write_file: Write to file (create/overwrite)
-- github__create_issue: Create GH issue (title, body, labels)
+AI: I have access to these tools:
+- filesystem__read_file: Read file contents (text, max 10MB)
+- filesystem__write_file: Write/overwrite file
+- github__create_issue: Create GitHub issue
+  [~30 tokens for one tool]
 ```
 
-**Result**: 70% fewer tokens used for tool listings!
+**Result**: ~70% reduction in tokens for tool listings!
 
-#### Persistent Storage
+#### 4. Persistent Storage
 
 Compressed descriptions are automatically saved to disk at `~/.mcp-compression-proxy/cache.json` and loaded on server restart. No need to re-compress after restarting!
 
-**Clear cache if needed:**
+**To clear the cache if needed:**
 ```bash
+# If installed via npm
+mcp-compression-proxy --clear-cache
+
+# If installed from source
 node dist/index.js --clear-cache
 ```
+
+> **💡 Tip**: After setting up, simply tell your AI: *"Compress the tool descriptions to save context"* and it will handle the rest!
 
 ## 🔧 Configuration
 
@@ -350,33 +400,52 @@ This allows:
 
 ### Environment Variables
 
+**For the compression proxy** (set in your MCP client config):
 - `LOG_LEVEL` - Logging level (debug, info, warn, error). Default: `info`
-- `GITHUB_TOKEN` - GitHub personal access token (if using GitHub server)
-- Any environment variables needed by underlying MCP servers
+
+**For MCP servers** (set in `servers.json` using `${VAR_NAME}` syntax):
+- `GITHUB_TOKEN` - GitHub personal access token (if using GitHub MCP server)
+- Any other environment variables required by your configured MCP servers
+
+See [Environment Variable Expansion](#environment-variable-expansion) for details on using variables in your server configuration.
 
 ### Command-Line Options
 
-- `--clear-cache` - Clear the persistent compression cache and exit
+**`--clear-cache`** - Clear the persistent compression cache and exit
 
 ```bash
+# If installed via npm
+mcp-compression-proxy --clear-cache
+
+# If installed from source
 node dist/index.js --clear-cache
 ```
 
 ### Debugging
 
-Enable debug logging in your MCP client config:
+**1. Enable debug logging** in your MCP client config:
 
 ```json
 {
-  "env": {
-    "LOG_LEVEL": "debug"
+  "mcpServers": {
+    "compression-proxy": {
+      "command": "mcp-compression-proxy",
+      "env": {
+        "LOG_LEVEL": "debug"
+      }
+    }
   }
 }
 ```
 
-View logs:
+**2. View logs** (for Claude Desktop):
 - **macOS**: `~/Library/Logs/Claude/mcp*.log`
 - **Windows**: `%APPDATA%\Claude\Logs\mcp*.log`
+
+**3. Check for common issues:**
+- Ensure all configured MCP servers are accessible and properly configured
+- Verify environment variables are correctly expanded
+- Check that Node.js version is 18 or higher
 
 ## 💡 Best Practices
 
@@ -422,12 +491,12 @@ matching file paths. Case-sensitive by default."
 
 <details>
 <summary><strong>Q: Do I need to restart after adding servers?</strong></summary>
-<p>Yes, rebuild (<code>npm run build</code>) and restart your MCP client.</p>
+<p>Yes, restart your MCP client to load the new configuration. No rebuild needed when using JSON configuration.</p>
 </details>
 
 <details>
 <summary><strong>Q: Can I use multiple MCP servers?</strong></summary>
-<p>Yes! That's the primary use case. Add as many as you need in <code>src/config/servers.ts</code>.</p>
+<p>Yes! That's the primary use case. Add as many as you need in your <code>servers.json</code> configuration file.</p>
 </details>
 
 <details>
@@ -447,10 +516,25 @@ matching file paths. Case-sensitive by default."
 
 <details>
 <summary><strong>Q: How do I add a new MCP server?</strong></summary>
-<p>Edit <code>src/config/servers.ts</code>, add your server config, rebuild, and restart your client.</p>
+<p>Edit your <code>servers.json</code> configuration file (in <code>~/.mcp-compression-proxy/</code> or project root), add your server config, and restart your MCP client. No rebuild needed.</p>
 </details>
 
 **More:** See [CONTRIBUTING.md][contributing], [SECURITY.md][security], [tests/README.md](./tests/README.md)
+
+## 🧪 Testing
+
+Comprehensive test suite included:
+
+```bash
+npm test                      # Run all tests
+npm run test:unit             # Unit tests only
+npm run test:integration      # Integration tests only
+npm run test:e2e              # End-to-end tests only
+npm run test:e2e:real-llm     # Real LLM integration tests (requires Ollama)
+npm run test:coverage         # Generate coverage report
+```
+
+See [tests/README.md](./tests/README.md) for details.
 
 ## 🤝 Contributing
 
@@ -506,21 +590,6 @@ If you find MCP Compression Proxy useful, please consider supporting its develop
 - 💰 Sponsor via the badges above
 - 🐛 [Report bugs and suggest features][repo-issues]
 - 📝 [Contribute code or documentation][contributing]
-
-## 🧪 Testing
-
-Comprehensive test suite included:
-
-```bash
-npm test                      # Run all tests
-npm run test:unit             # Unit tests only
-npm run test:integration      # Integration tests only
-npm run test:e2e              # End-to-end tests only
-npm run test:e2e:real-llm     # Real LLM integration tests (requires Ollama)
-npm run test:coverage         # Generate coverage report
-```
-
-See [tests/README.md](./tests/README.md) for details.
 
 ## 📄 License
 
