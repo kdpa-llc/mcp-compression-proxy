@@ -10,7 +10,7 @@ import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { mcpServers } from '../src/config/servers.js';
 
-const DEFAULT_USER_CONFIG_PATH = join(homedir(), '.mcp-aggregator', 'servers.json');
+const DEFAULT_USER_CONFIG_PATH = join(homedir(), '.mcp-compression-proxy', 'servers.json');
 const DEFAULT_PROJECT_CONFIG_PATH = join(process.cwd(), 'servers.json');
 
 function migrateConfig(outputPath: string = DEFAULT_USER_CONFIG_PATH) {
@@ -75,7 +75,7 @@ if (args.includes('--help') || args.includes('-h')) {
   console.log('Migrates TypeScript configuration to JSON format.');
   console.log('');
   console.log('Arguments:');
-  console.log('  output-path    Optional. Path to write JSON config (default: ~/.mcp-aggregator/servers.json)');
+  console.log('  output-path    Optional. Path to write JSON config (default: ~/.mcp-compression-proxy/servers.json)');
   console.log('');
   console.log('Examples:');
   console.log('  npm run migrate-config                    # Migrate to user-level config');

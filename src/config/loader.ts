@@ -88,12 +88,12 @@ function loadJSONConfig(filePath: string): ServerConfigJSON | null {
 
 /**
  * Get config file paths
- * User-level: ~/.mcp-aggregator/servers.json
+ * User-level: ~/.mcp-compression-proxy/servers.json
  * Project-level: ./servers.json
  */
 function getConfigPaths(): { user: string; project: string } {
   return {
-    user: join(homedir(), '.mcp-aggregator', 'servers.json'),
+    user: join(homedir(), '.mcp-compression-proxy', 'servers.json'),
     project: join(process.cwd(), 'servers.json'),
   };
 }
@@ -197,5 +197,5 @@ export function loadJSONServers(): ConfigResult {
  * (for migration script purposes)
  */
 export function getConfigPath(): string {
-  return join(homedir(), '.mcp-aggregator', 'servers.json');
+  return join(homedir(), '.mcp-compression-proxy', 'servers.json');
 }

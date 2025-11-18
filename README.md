@@ -102,7 +102,7 @@ Add to your MCP client configuration (e.g., Claude Desktop config):
 Create a JSON configuration file to add MCP servers. You can choose one of two locations:
 
 **Option 1: User-level config** (recommended for personal use)
-- `~/.mcp-aggregator/servers.json`
+- `~/.mcp-compression-proxy/servers.json`
 
 **Option 2: Project-level config** (recommended for team projects)
 - `./servers.json` (in the mcp-compression-proxy directory)
@@ -230,7 +230,7 @@ node dist/index.js --clear-cache
 ### Server Configuration
 
 Create or edit your JSON configuration file at:
-- `~/.mcp-aggregator/servers.json` (user-level), or
+- `~/.mcp-compression-proxy/servers.json` (user-level), or
 - `./servers.json` (project-level)
 
 ```json
@@ -313,7 +313,7 @@ Use the `ignoreTools` field to filter out unwanted tools using wildcard patterns
 
 Both config files are loaded and combined:
 
-1. Load user config (`~/.mcp-aggregator/servers.json`)
+1. Load user config (`~/.mcp-compression-proxy/servers.json`)
 2. Load project config (`./servers.json`)
 3. Aggregate servers from both configs
 4. Aggregate ignore patterns from both configs

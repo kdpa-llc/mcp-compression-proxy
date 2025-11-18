@@ -38,7 +38,7 @@ describe('Config Loader', () => {
 
     // Clean up test directory
     if (existsSync(testDir)) {
-      const files = ['servers.json', '.mcp-aggregator/servers.json'];
+      const files = ['servers.json', '.mcp-compression-proxy/servers.json'];
       files.forEach(file => {
         const path = join(testDir, file);
         if (existsSync(path)) {
@@ -46,7 +46,7 @@ describe('Config Loader', () => {
         }
       });
 
-      const aggregatorDir = join(testDir, '.mcp-aggregator');
+      const aggregatorDir = join(testDir, '.mcp-compression-proxy');
       if (existsSync(aggregatorDir)) {
         rmdirSync(aggregatorDir);
       }
@@ -63,7 +63,7 @@ describe('Config Loader', () => {
     });
 
     it('should load ignore patterns from user config', async () => {
-      const userConfigDir = join(testDir, '.mcp-aggregator');
+      const userConfigDir = join(testDir, '.mcp-compression-proxy');
       mkdirSync(userConfigDir, { recursive: true });
 
       const config = {
@@ -83,7 +83,7 @@ describe('Config Loader', () => {
     });
 
     it('should aggregate ignore patterns from user and project configs', async () => {
-      const userConfigDir = join(testDir, '.mcp-aggregator');
+      const userConfigDir = join(testDir, '.mcp-compression-proxy');
       mkdirSync(userConfigDir, { recursive: true});
 
       const userConfig = {
@@ -129,7 +129,7 @@ describe('Config Loader', () => {
     });
 
     it('should load valid JSON config from user directory', async () => {
-      const userConfigDir = join(testDir, '.mcp-aggregator');
+      const userConfigDir = join(testDir, '.mcp-compression-proxy');
       mkdirSync(userConfigDir, { recursive: true });
 
       const config = {
@@ -152,7 +152,7 @@ describe('Config Loader', () => {
     });
 
     it('should aggregate user and project configs', async () => {
-      const userConfigDir = join(testDir, '.mcp-aggregator');
+      const userConfigDir = join(testDir, '.mcp-compression-proxy');
       mkdirSync(userConfigDir, { recursive: true });
 
       const projectConfig = {
@@ -363,7 +363,7 @@ describe('Config Loader', () => {
       const { getConfigPath } = await importLoader();
       const path = getConfigPath();
 
-      expect(path).toContain('.mcp-aggregator');
+      expect(path).toContain('.mcp-compression-proxy');
       expect(path).toContain('servers.json');
     });
   });
