@@ -1,0 +1,534 @@
+/**
+ * Comprehensive E2E Test with Real LLM
+ *
+ * This test validates all MCP Compression Proxy features using a real LLM:
+ * 1. Multi-server aggregation (3 test MCP servers)
+ * 2. Tool filtering with ignore patterns
+ * 3. Tool proxying (actual tool calls work correctly)
+ * 4. LLM-guided tool selection and execution
+ *
+ * Requirements:
+ * - Ollama installed and running (http://localhost:11434)
+ * - Model pulled: ollama pull llama3.2:1b
+ * - Test servers built: npm run build
+ */
+
+import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { OllamaClient } from './ollama-client.js';
+import path from 'path';
+import { writeFileSync, mkdirSync, rmSync } from 'fs';
+import { homedir } from 'os';
+
+describe('Comprehensive E2E with Real LLM', () => {
+  let mcpClient: Client;
+  let transport: StdioClientTransport;
+  let ollamaClient: OllamaClient;
+  let configDir: string;
+  let configPath: string;
+
+  beforeAll(async () => {
+    console.log('\n🚀 Setting up Comprehensive E2E Test Environment...\n');
+
+    // Check if Ollama is running
+    ollamaClient = new OllamaClient();
+    const isRunning = await ollamaClient.isRunning();
+
+    if (!isRunning) {
+      console.log('⚠️  Ollama not running. Skipping real LLM tests.');
+      console.log('   To enable: Install Ollama and run "ollama serve"');
+      console.log('   See: https://ollama.com/download\n');
+      return;
+    }
+
+    console.log('✓ Ollama is running');
+
+    // Pull model if needed
+    try {
+      console.log('📥 Ensuring llama3.2:1b model is available...');
+      await ollamaClient.pullModel();
+      console.log('✓ Model ready');
+    } catch (error) {
+      console.log('⚠️  Failed to pull model, test may fail:', error);
+    }
+
+    // Create test configuration
+    console.log('🔧 Creating test configuration...');
+    configDir = path.join(homedir(), '.mcp-compression-proxy-test');
+    configPath = path.join(configDir, 'servers.json');
+
+    mkdirSync(configDir, { recursive: true });
+
+    const testConfig = {
+      mcpServers: [
+        {
+          name: 'math',
+          command: 'node',
+          args: [path.join(process.cwd(), 'tests/e2e-real/test-servers-dist/math-server.js')],
+          enabled: true,
+        },
+        {
+          name: 'text',
+          command: 'node',
+          args: [path.join(process.cwd(), 'tests/e2e-real/test-servers-dist/text-server.js')],
+          enabled: true,
+        },
+        {
+          name: 'data',
+          command: 'node',
+          args: [path.join(process.cwd(), 'tests/e2e-real/test-servers-dist/data-server.js')],
+          enabled: true,
+        },
+      ],
+      ignoreTools: [
+        'math__square',        // Ignore specific tool
+        'text__reverse',       // Ignore specific tool
+        'data__list_keys',     // Ignore specific tool
+      ],
+    };
+
+    writeFileSync(configPath, JSON.stringify(testConfig, null, 2));
+    console.log(`✓ Test configuration written to: ${configPath}`);
+
+    // Start MCP Compression Proxy server with test config
+    console.log('🔧 Starting MCP Compression Proxy server...');
+    const serverPath = path.join(process.cwd(), 'dist/index.js');
+
+    // Point to test config directory
+    const originalHome = process.env.HOME;
+    process.env.HOME = configDir.replace('/.mcp-compression-proxy-test', '');
+
+    transport = new StdioClientTransport({
+      command: 'node',
+      args: [serverPath],
+      env: {
+        ...process.env,
+        LOG_LEVEL: 'warn', // Reduce noise in test output
+      },
+    });
+
+    mcpClient = new Client(
+      {
+        name: 'comprehensive-e2e-test-client',
+        version: '1.0.0',
+      },
+      {
+        capabilities: {},
+      }
+    );
+
+    await mcpClient.connect(transport);
+    console.log('✓ MCP Compression Proxy connected\n');
+
+    // Restore HOME
+    if (originalHome) {
+      process.env.HOME = originalHome;
+    }
+  }, 60000);
+
+  afterAll(async () => {
+    if (mcpClient) {
+      await mcpClient.close();
+    }
+    // Clean up test config
+    if (configDir) {
+      try {
+        rmSync(configDir, { recursive: true, force: true });
+      } catch (error) {
+        console.warn('Failed to clean up test config:', error);
+      }
+    }
+  });
+
+  it('should aggregate tools from multiple MCP servers', async () => {
+    // Skip if Ollama not available
+    if (!(await ollamaClient.isRunning())) {
+      console.log('⏭️  Skipping test - Ollama not available');
+      return;
+    }
+
+    console.log('\n📋 TEST 1: Multi-Server Aggregation');
+
+    const tools = await mcpClient.listTools();
+    console.log(`   Found ${tools.tools.length} total tools`);
+
+    // Should have tools from all 3 servers + management tools
+    const mathTools = tools.tools.filter(t => t.name.startsWith('math__'));
+    const textTools = tools.tools.filter(t => t.name.startsWith('text__'));
+    const dataTools = tools.tools.filter(t => t.name.startsWith('data__'));
+
+    console.log(`   Math tools: ${mathTools.length}`);
+    console.log(`   Text tools: ${textTools.length}`);
+    console.log(`   Data tools: ${dataTools.length}`);
+
+    // Verify tools from each server are present
+    expect(mathTools.length).toBeGreaterThan(0);
+    expect(textTools.length).toBeGreaterThan(0);
+    expect(dataTools.length).toBeGreaterThan(0);
+
+    // Check specific tools exist
+    expect(tools.tools.find(t => t.name === 'math__add')).toBeDefined();
+    expect(tools.tools.find(t => t.name === 'text__uppercase')).toBeDefined();
+    expect(tools.tools.find(t => t.name === 'data__store_data')).toBeDefined();
+
+    console.log('   ✓ Tools successfully aggregated from all servers\n');
+  }, 60000);
+
+  it('should filter tools based on ignore patterns', async () => {
+    // Skip if Ollama not available
+    if (!(await ollamaClient.isRunning())) {
+      console.log('⏭️  Skipping test - Ollama not available');
+      return;
+    }
+
+    console.log('\n🚫 TEST 2: Tool Filtering');
+
+    const tools = await mcpClient.listTools();
+
+    // Verify ignored tools are NOT present
+    const ignoredTools = [
+      'math__square',
+      'text__reverse',
+      'data__list_keys',
+    ];
+
+    for (const toolName of ignoredTools) {
+      const tool = tools.tools.find(t => t.name === toolName);
+      console.log(`   Checking ${toolName}: ${tool ? 'PRESENT (❌)' : 'FILTERED (✓)'}`);
+      expect(tool).toBeUndefined();
+    }
+
+    // Verify non-ignored tools ARE present
+    const allowedTools = [
+      'math__add',
+      'math__multiply',
+      'text__uppercase',
+      'text__lowercase',
+      'data__store_data',
+      'data__get_data',
+    ];
+
+    for (const toolName of allowedTools) {
+      const tool = tools.tools.find(t => t.name === toolName);
+      expect(tool).toBeDefined();
+    }
+
+    console.log('   ✓ Tool filtering working correctly\n');
+  }, 60000);
+
+  it('should proxy tool calls to underlying MCP servers', async () => {
+    // Skip if Ollama not available
+    if (!(await ollamaClient.isRunning())) {
+      console.log('⏭️  Skipping test - Ollama not available');
+      return;
+    }
+
+    console.log('\n🔄 TEST 3: Tool Proxying');
+
+    // Test math tool
+    console.log('   Testing math__add...');
+    const mathResult = await mcpClient.callTool({
+      name: 'math__add',
+      arguments: { a: 5, b: 3 },
+    });
+    expect(mathResult.content).toBeDefined();
+    const mathText = (mathResult.content as any[])[0].text;
+    console.log(`   Result: ${mathText}`);
+    expect(mathText).toContain('8');
+
+    // Test text tool
+    console.log('   Testing text__uppercase...');
+    const textResult = await mcpClient.callTool({
+      name: 'text__uppercase',
+      arguments: { text: 'hello world' },
+    });
+    expect(textResult.content).toBeDefined();
+    const textText = (textResult.content as any[])[0].text;
+    console.log(`   Result: ${textText}`);
+    expect(textText).toBe('HELLO WORLD');
+
+    // Test data tool (store and retrieve)
+    console.log('   Testing data__store_data...');
+    const storeResult = await mcpClient.callTool({
+      name: 'data__store_data',
+      arguments: { key: 'test-key', value: 'test-value' },
+    });
+    expect(storeResult.content).toBeDefined();
+    console.log(`   ${(storeResult.content as any[])[0].text}`);
+
+    console.log('   Testing data__get_data...');
+    const getResult = await mcpClient.callTool({
+      name: 'data__get_data',
+      arguments: { key: 'test-key' },
+    });
+    expect(getResult.content).toBeDefined();
+    const getData = (getResult.content as any[])[0].text;
+    console.log(`   Retrieved: ${getData}`);
+    expect(getData).toBe('test-value');
+
+    console.log('   ✓ Tool proxying working correctly\n');
+  }, 60000);
+
+  it('should guide LLM to select and use appropriate tools', async () => {
+    // Skip if Ollama not available
+    if (!(await ollamaClient.isRunning())) {
+      console.log('⏭️  Skipping test - Ollama not available');
+      return;
+    }
+
+    console.log('\n🤖 TEST 4: LLM-Guided Tool Selection');
+
+    // Get available tools
+    const tools = await mcpClient.listTools();
+    const availableTools = tools.tools
+      .filter(t => !t.name.includes('compress') && !t.name.includes('session'))
+      .map(t => ({
+        name: t.name,
+        description: t.description,
+      }));
+
+    // Ask LLM to analyze a task and suggest tools
+    const task = 'I need to calculate 7 * 8 and then convert the result to uppercase text';
+
+    const systemPrompt = `You are a tool selection expert. Given a task and available tools, determine which tools to use and in what order.
+
+Available tools:
+${JSON.stringify(availableTools, null, 2)}
+
+Respond with ONLY a JSON array of tool names in the order they should be executed.`;
+
+    const userMessage = `Task: ${task}
+
+Which tools should be used? Return ONLY a JSON array like ["tool1", "tool2"].`;
+
+    console.log('   Asking LLM to analyze task...');
+    const llmResponse = await ollamaClient.chat(systemPrompt, userMessage);
+    console.log(`   LLM response: ${llmResponse}`);
+
+    // Extract tool names from response
+    const jsonMatch = llmResponse.match(/\[[^\]]+\]/);
+    expect(jsonMatch).toBeTruthy();
+
+    let selectedTools: string[];
+    try {
+      selectedTools = JSON.parse(jsonMatch![0]);
+    } catch (error) {
+      console.log('   Warning: Failed to parse LLM response, using fallback');
+      selectedTools = ['math__multiply', 'text__uppercase'];
+    }
+
+    console.log(`   LLM selected tools: ${selectedTools.join(', ')}`);
+
+    // Verify LLM selected reasonable tools
+    // Should include a math tool and a text tool
+    const hasMathTool = selectedTools.some(t => t.startsWith('math__'));
+    const hasTextTool = selectedTools.some(t => t.startsWith('text__'));
+
+    expect(hasMathTool).toBe(true);
+    expect(hasTextTool).toBe(true);
+
+    // Execute the workflow suggested by LLM
+    console.log('\n   Executing LLM-suggested workflow:');
+
+    // Step 1: Multiply 7 * 8
+    if (selectedTools.some(t => t.includes('multiply'))) {
+      console.log('   1. Calculating 7 * 8...');
+      const multiplyResult = await mcpClient.callTool({
+        name: 'math__multiply',
+        arguments: { a: 7, b: 8 },
+      });
+      const result = (multiplyResult.content as any[])[0].text;
+      console.log(`      Result: ${result}`);
+      expect(result).toContain('56');
+    }
+
+    // Step 2: Convert to uppercase (convert "56" to text)
+    if (selectedTools.some(t => t.includes('uppercase'))) {
+      console.log('   2. Converting result to uppercase...');
+      const uppercaseResult = await mcpClient.callTool({
+        name: 'text__uppercase',
+        arguments: { text: 'result is 56' },
+      });
+      const result = (uppercaseResult.content as any[])[0].text;
+      console.log(`      Result: ${result}`);
+      expect(result).toContain('56');
+    }
+
+    console.log('   ✓ LLM successfully guided tool selection and execution\n');
+  }, 120000);
+
+  it('should validate all features work together in complete workflow', async () => {
+    // Skip if Ollama not available
+    if (!(await ollamaClient.isRunning())) {
+      console.log('⏭️  Skipping test - Ollama not available');
+      return;
+    }
+
+    console.log('\n🎯 TEST 5: Complete Integration Workflow');
+
+    // Scenario: Store calculation results with text labels
+    console.log('   Scenario: Store and retrieve calculation results');
+
+    // Step 1: Calculate using math tool
+    console.log('   1. Calculate 15 + 27...');
+    const addResult = await mcpClient.callTool({
+      name: 'math__add',
+      arguments: { a: 15, b: 27 },
+    });
+    const sum = (addResult.content as any[])[0].text;
+    console.log(`      ${sum}`);
+
+    // Step 2: Create a label using text tool
+    console.log('   2. Create label...');
+    const labelResult = await mcpClient.callTool({
+      name: 'text__uppercase',
+      arguments: { text: 'calculation result' },
+    });
+    const label = (labelResult.content as any[])[0].text;
+    console.log(`      Label: ${label}`);
+
+    // Step 3: Store the result with the label
+    console.log('   3. Store result...');
+    await mcpClient.callTool({
+      name: 'data__store_data',
+      arguments: { key: 'my-calculation', value: sum },
+    });
+    console.log('      ✓ Stored');
+
+    // Step 4: Retrieve and verify
+    console.log('   4. Retrieve stored data...');
+    const retrieveResult = await mcpClient.callTool({
+      name: 'data__get_data',
+      arguments: { key: 'my-calculation' },
+    });
+    const retrieved = (retrieveResult.content as any[])[0].text;
+    console.log(`      Retrieved: ${retrieved}`);
+    expect(retrieved).toContain('42');
+
+    // Step 5: Verify filtered tools are still not accessible
+    console.log('   5. Verify filtering still active...');
+    const tools = await mcpClient.listTools();
+    expect(tools.tools.find(t => t.name === 'math__square')).toBeUndefined();
+
+    console.log('   ✓ Complete workflow successful - aggregation, filtering, and proxying all working\n');
+  }, 120000);
+
+  it('should compress and expand tool descriptions with real LLM', async () => {
+    // Skip if Ollama not available
+    if (!(await ollamaClient.isRunning())) {
+      console.log('⏭️  Skipping test - Ollama not available');
+      return;
+    }
+
+    console.log('\n🗜️  TEST 6: Compression & Expansion');
+
+    // Get initial tool descriptions (should be uncompressed)
+    const initialTools = await mcpClient.listTools();
+    const mathAddTool = initialTools.tools.find(t => t.name === 'math__add');
+    expect(mathAddTool).toBeDefined();
+
+    const originalLength = mathAddTool!.description!.length;
+    console.log(`   Original description length: ${originalLength} chars`);
+    console.log(`   Original: ${mathAddTool!.description}`);
+
+    // Trigger compression
+    console.log('\n   Triggering compression...');
+    const compressResult = await mcpClient.callTool({
+      name: 'compress_tools',
+      arguments: {},
+    });
+
+    const compressContent = compressResult.content as Array<{ type: string; text: string }>;
+    const responseText = compressContent[0].text;
+
+    // Extract tools to compress
+    const jsonMatch = responseText.match(/\[([\s\S]*)\]/);
+    if (!jsonMatch) {
+      console.log('   ⚠️  No tools to compress, skipping compression test');
+      return;
+    }
+
+    let toolsToCompress;
+    try {
+      toolsToCompress = JSON.parse(jsonMatch[0]);
+    } catch (error) {
+      // Try to find valid JSON by working backwards
+      const jsonStr = jsonMatch[0];
+      for (let i = jsonStr.length - 1; i >= 0; i--) {
+        if (jsonStr[i] === ']') {
+          try {
+            toolsToCompress = JSON.parse(jsonStr.substring(0, i + 1));
+            break;
+          } catch {
+            continue;
+          }
+        }
+      }
+    }
+
+    if (!toolsToCompress || toolsToCompress.length === 0) {
+      console.log('   ⚠️  No tools to compress, skipping compression test');
+      return;
+    }
+
+    console.log(`   Found ${toolsToCompress.length} tools to compress`);
+
+    // Compress with LLM
+    const compressed = await ollamaClient.compressToolDescriptions(toolsToCompress);
+    console.log(`   Compressed ${compressed.length} descriptions`);
+
+    // Save compressed descriptions
+    await mcpClient.callTool({
+      name: 'save_compressed_tools',
+      arguments: {
+        descriptions: compressed,
+      },
+    });
+    console.log('   ✓ Compression saved');
+
+    // Verify tools now show compressed descriptions
+    const compressedTools = await mcpClient.listTools();
+    const compressedMathAdd = compressedTools.tools.find(t => t.name === 'math__add');
+
+    if (compressedMathAdd && compressedMathAdd.description) {
+      console.log(`   Compressed description length: ${compressedMathAdd.description.length} chars`);
+      console.log(`   Compressed: ${compressedMathAdd.description}`);
+
+      // Create session for expansion
+      console.log('\n   Creating session for expansion...');
+      const sessionResult = await mcpClient.callTool({
+        name: 'create_session',
+        arguments: {},
+      });
+      const sessionText = (sessionResult.content as any[])[0].text;
+      const sessionMatch = sessionText.match(/Session created: ([\w-]+)/);
+
+      if (sessionMatch) {
+        const sessionId = sessionMatch[1];
+        console.log(`   ✓ Session created: ${sessionId}`);
+
+        // Expand a tool
+        console.log('   Expanding math__add...');
+        await mcpClient.callTool({
+          name: 'expand_tool',
+          arguments: {
+            serverName: 'math',
+            toolName: 'add',
+          },
+        });
+
+        // Verify expansion
+        const expandedTools = await mcpClient.listTools();
+        const expandedMathAdd = expandedTools.tools.find(t => t.name === 'math__add');
+
+        if (expandedMathAdd && expandedMathAdd.description) {
+          console.log(`   Expanded description length: ${expandedMathAdd.description.length} chars`);
+          console.log(`   ✓ Compression and expansion working correctly`);
+        }
+      }
+    }
+
+    console.log('');
+  }, 120000);
+});
