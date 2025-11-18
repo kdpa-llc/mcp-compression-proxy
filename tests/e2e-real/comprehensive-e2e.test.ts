@@ -318,6 +318,7 @@ Return a JSON array of tool names to use: `;
 
     // Extract tool names from response - try multiple patterns
     let jsonMatch = llmResponse.match(/\[[^\]]+\]/);
+    let selectedTools: string[];
 
     // If no JSON array found, try to extract tool names from natural language
     if (!jsonMatch) {
