@@ -250,6 +250,86 @@ describe('CompressionCache', () => {
     });
   });
 
+  describe('noCompress patterns', () => {
+    it('should not save compressed description for tools matching noCompress pattern', () => {
+      cache.setNoCompressPatterns(['filesystem__*']);
+
+      const serverName = 'filesystem';
+      const toolName = 'read_file';
+      const compressed = 'Read file (compressed)';
+      const original = 'Read file (original)';
+
+      cache.saveCompressed(serverName, toolName, compressed, original);
+
+      expect(cache.hasCompressed(serverName, toolName)).toBe(false);
+    });
+
+    it('should always return original description for noCompress tools', () => {
+      cache.setNoCompressPatterns(['github__*']);
+
+      const serverName = 'github';
+      const toolName = 'create_issue';
+      const original = 'Create GitHub issue (original)';
+
+      const result = cache.getDescription(serverName, toolName, original, false);
+
+      expect(result).toBe(original);
+    });
+
+    it('should bypass compression for wildcard patterns', () => {
+      cache.setNoCompressPatterns(['*__delete*']);
+
+      cache.saveCompressed('filesystem', 'delete_file', 'compressed', 'original');
+      cache.saveCompressed('github', 'delete_repo', 'compressed', 'original');
+
+      expect(cache.hasCompressed('filesystem', 'delete_file')).toBe(false);
+      expect(cache.hasCompressed('github', 'delete_repo')).toBe(false);
+    });
+
+    it('should allow compression for tools not matching noCompress pattern', () => {
+      cache.setNoCompressPatterns(['filesystem__*']);
+
+      cache.saveCompressed('github', 'create_issue', 'compressed', 'original');
+
+      expect(cache.hasCompressed('github', 'create_issue')).toBe(true);
+    });
+
+    it('should respect noCompress patterns even when expanded in session', () => {
+      cache.setNoCompressPatterns(['filesystem__*']);
+
+      const serverName = 'filesystem';
+      const toolName = 'read_file';
+      const original = 'Read file (original)';
+
+      // Even if expanded in session, should return original for noCompress tools
+      const result = cache.getDescription(serverName, toolName, original, true);
+
+      expect(result).toBe(original);
+    });
+
+    it('should handle multiple noCompress patterns', () => {
+      cache.setNoCompressPatterns(['filesystem__*', 'github__delete*', '*__experimental*']);
+
+      cache.saveCompressed('filesystem', 'read_file', 'c1', 'o1');
+      cache.saveCompressed('github', 'delete_repo', 'c2', 'o2');
+      cache.saveCompressed('server', 'experimental_feature', 'c3', 'o3');
+      cache.saveCompressed('github', 'create_issue', 'c4', 'o4');
+
+      expect(cache.hasCompressed('filesystem', 'read_file')).toBe(false);
+      expect(cache.hasCompressed('github', 'delete_repo')).toBe(false);
+      expect(cache.hasCompressed('server', 'experimental_feature')).toBe(false);
+      expect(cache.hasCompressed('github', 'create_issue')).toBe(true); // Not matching pattern
+    });
+
+    it('should be case insensitive for noCompress patterns', () => {
+      cache.setNoCompressPatterns(['FileSystem__*']);
+
+      cache.saveCompressed('filesystem', 'read_file', 'compressed', 'original');
+
+      expect(cache.hasCompressed('filesystem', 'read_file')).toBe(false);
+    });
+  });
+
   describe('persistence integration', () => {
     describe('loadFromDisk', () => {
       it('should load cache from persistence', async () => {

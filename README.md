@@ -255,7 +255,8 @@ Create or edit your JSON configuration file at:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `mcpServers` | array | ✅ | Array of server configurations |
-| `ignoreTools` | string[] | ❌ | Tool name patterns to ignore (supports wildcards) |
+| `excludeTools` | string[] | ❌ | Tool name patterns to exclude from tool list entirely (supports wildcards) |
+| `noCompressTools` | string[] | ❌ | Tool name patterns to never compress - descriptions pass through unchanged (supports wildcards) |
 
 **Server Configuration:**
 | Field | Type | Required | Description |
@@ -288,18 +289,35 @@ Use `${VAR_NAME}` syntax to reference environment variables:
 
 Variables are expanded at runtime from your shell environment.
 
-#### Tool Ignore Patterns
+#### Tool Filtering Patterns
 
-Use the `ignoreTools` field to filter out unwanted tools using wildcard patterns (case-insensitive):
+**Exclude Tools** - Remove tools from the tool list entirely:
+
+Use the `excludeTools` field to filter out unwanted tools using wildcard patterns (case-insensitive):
 
 ```json
 {
   "mcpServers": [...],
-  "ignoreTools": [
-    "github__*",        // Ignore all GitHub tools
-    "*__delete*",       // Ignore all delete operations
-    "filesystem__write_*",  // Ignore filesystem write tools
-    "set_*"             // Ignore management tools starting with set_
+  "excludeTools": [
+    "github__delete_*",     // Exclude all GitHub delete tools
+    "*__experimental*",     // Exclude all experimental tools
+    "filesystem__write_*",  // Exclude filesystem write tools
+    "set_*"                 // Exclude management tools starting with set_
+  ]
+}
+```
+
+**No-Compress Tools** - Keep tools but never compress their descriptions:
+
+Use the `noCompressTools` field to bypass compression for specific tools (descriptions pass through unchanged):
+
+```json
+{
+  "mcpServers": [...],
+  "noCompressTools": [
+    "filesystem__*",        // Never compress filesystem tool descriptions
+    "*__help",              // Never compress help commands
+    "github__search_*"      // Never compress GitHub search tools
   ]
 }
 ```
@@ -309,6 +327,10 @@ Use the `ignoreTools` field to filter out unwanted tools using wildcard patterns
 - `"*__toolPattern*"` - Tools matching pattern from any server
 - `"exact_tool_name"` - Exact tool name match
 
+**Use Cases:**
+- **excludeTools**: Remove dangerous tools, unwanted features, or tools not relevant to your workflow
+- **noCompressTools**: Preserve detailed descriptions for complex tools where compression might lose important information
+
 #### Configuration Aggregation
 
 Both config files are loaded and combined:
@@ -316,13 +338,15 @@ Both config files are loaded and combined:
 1. Load user config (`~/.mcp-compression-proxy/servers.json`)
 2. Load project config (`./servers.json`)
 3. Aggregate servers from both configs
-4. Aggregate ignore patterns from both configs
-5. Apply ignore patterns to filter tools
+4. Aggregate exclude and noCompress patterns from both configs
+5. Apply exclude patterns to filter tools
+6. Apply noCompress patterns to bypass compression
 
 This allows:
 - Personal defaults in user config
 - Team/project-specific servers in project config
-- Fine-grained tool filtering with ignore patterns
+- Fine-grained tool filtering with exclude patterns
+- Selective compression bypass with noCompress patterns
 
 ### Environment Variables
 

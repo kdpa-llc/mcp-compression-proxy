@@ -10,7 +10,7 @@ import {
 import { MCPClientManager } from './mcp/client-manager.js';
 import { CompressionCache } from './services/compression-cache.js';
 import { SessionManager } from './services/session-manager.js';
-import { getEnabledServers, getIgnorePatterns } from './config/servers.js';
+import { getEnabledServers, getExcludePatterns, getNoCompressPatterns } from './config/servers.js';
 import { matchesIgnorePattern } from './config/loader.js';
 import pino from 'pino';
 
@@ -203,17 +203,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 
   const allTools = [...aggregatorTools, ...aggregatedTools];
 
-  // Apply ignore patterns
-  const ignorePatterns = getIgnorePatterns();
+  // Apply exclude patterns to filter out tools
+  const excludePatterns = getExcludePatterns();
   const filteredTools = allTools.filter(tool => {
-    const isIgnored = matchesIgnorePattern(tool.name, ignorePatterns);
-    if (isIgnored) {
-      logger.debug({ tool: tool.name }, 'Tool ignored by pattern');
+    const isExcluded = matchesIgnorePattern(tool.name, excludePatterns);
+    if (isExcluded) {
+      logger.debug({ tool: tool.name }, 'Tool excluded by pattern');
     }
-    return !isIgnored;
+    return !isExcluded;
   });
 
-  logger.debug({ count: filteredTools.length, ignored: allTools.length - filteredTools.length }, 'Returning tools');
+  logger.debug({ count: filteredTools.length, excluded: allTools.length - filteredTools.length }, 'Returning tools');
 
   return { tools: filteredTools };
 });
@@ -533,6 +533,10 @@ async function main() {
   } catch (error) {
     logger.warn({ error }, 'Failed to load cache, continuing with empty cache');
   }
+
+  // Configure noCompress patterns
+  const noCompressPatterns = getNoCompressPatterns();
+  compressionCache.setNoCompressPatterns(noCompressPatterns);
 
   // Initialize MCP clients
   const servers = getEnabledServers();
