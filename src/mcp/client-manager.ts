@@ -13,18 +13,47 @@ import type { Logger } from 'pino';
 export class MCPClientManager {
   private connections: Map<string, MCPClientConnection> = new Map();
   private logger: Logger;
+  private readonly DEFAULT_TIMEOUT_MS = 30000; // 30 seconds default timeout
 
   constructor(logger: Logger) {
     this.logger = logger;
   }
 
   /**
-   * Initialize and connect to all configured MCP servers
+   * Wraps a promise with a timeout
    */
-  async initializeServers(servers: MCPServerConfig[]): Promise<void> {
+  private withTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number
+  ): Promise<T> {
+    return Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error(`Connection timeout after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  }
+
+  /**
+   * Initialize and connect to all configured MCP servers
+   * @param servers - Server configurations to initialize
+   * @param defaultTimeout - Optional default timeout in seconds (overrides class default)
+   */
+  async initializeServers(
+    servers: MCPServerConfig[],
+    defaultTimeout?: number
+  ): Promise<void> {
     this.logger.info({ count: servers.length }, 'Initializing MCP servers');
 
-    const connectionPromises = servers.map(async (config) => {
+    // Apply default timeout to servers that don't have one specified
+    const serversWithTimeout = servers.map(server => ({
+      ...server,
+      timeout: server.timeout ?? defaultTimeout
+    }));
+
+    const connectionPromises = serversWithTimeout.map(async (config) => {
       try {
         await this.connectToServer(config);
       } catch (error) {
@@ -48,10 +77,18 @@ export class MCPClientManager {
   }
 
   /**
-   * Connect to a single MCP server
+   * Connect to a single MCP server with timeout
    */
   private async connectToServer(config: MCPServerConfig): Promise<void> {
-    this.logger.info({ server: config.name }, 'Connecting to MCP server');
+    // Use server-specific timeout or default (convert seconds to milliseconds)
+    const timeoutMs = config.timeout
+      ? config.timeout * 1000
+      : this.DEFAULT_TIMEOUT_MS;
+
+    this.logger.info(
+      { server: config.name, timeoutMs },
+      'Connecting to MCP server'
+    );
 
     const transport = new StdioClientTransport({
       command: config.command,
@@ -70,7 +107,11 @@ export class MCPClientManager {
     );
 
     try {
-      await client.connect(transport);
+      // Wrap connection with timeout
+      await this.withTimeout(
+        client.connect(transport),
+        timeoutMs
+      );
 
       this.connections.set(config.name, {
         name: config.name,

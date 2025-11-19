@@ -415,52 +415,47 @@ Return a JSON array of tool names to use: `;
     console.log(`   Original text__count_words description: ${originalLength} chars`);
     console.log(`   "${originalDescription}"`);
 
-    // Trigger compression
-    console.log('\n   Triggering compression...');
-    const compressResult = await mcpClient.callTool({
-      name: 'compress_tools',
-      arguments: {},
+    // Get tools to compress
+    console.log('\n   Getting tools to compress...');
+    const getResult = await mcpClient.callTool({
+      name: 'mcp-compression-proxy__get_uncompressed_tools',
+      arguments: { limit: 100 },
     });
 
-    const compressContent = compressResult.content as Array<{ type: string; text: string }>;
-    const responseText = compressContent[0].text;
+    const getContent = getResult.content as Array<{ type: string; text: string }>;
+    const responseText = getContent[0].text;
 
-    // Extract tools to compress
-    const jsonMatch = responseText.match(/\[([\s\S]*)\]/);
-    if (!jsonMatch) {
+    // Extract file path
+    const fileMatch = responseText.match(/Wrote \d+ tools to file: (.+)/);
+    if (!fileMatch) {
       console.log('   ⚠️  No tools to compress');
       return;
     }
 
+    // Read tools from file
+    const { readFileSync } = await import('fs');
+    const filePath = fileMatch[1];
     let toolsToCompress;
     try {
-      toolsToCompress = JSON.parse(jsonMatch[0]);
+      const fileContent = readFileSync(filePath, 'utf-8');
+      toolsToCompress = JSON.parse(fileContent);
     } catch (error) {
-      const jsonStr = jsonMatch[0];
-      for (let i = jsonStr.length - 1; i >= 0; i--) {
-        if (jsonStr[i] === ']') {
-          try {
-            toolsToCompress = JSON.parse(jsonStr.substring(0, i + 1));
-            break;
-          } catch {
-            continue;
-          }
-        }
-      }
+      console.log('   ⚠️  Failed to read tools file');
+      return;
     }
 
     // Compress with LLM
     const compressed = await ollamaClient.compressToolDescriptions(toolsToCompress);
     console.log(`   Compressed ${compressed.length} tools`);
 
-    // Save compressed descriptions
+    // Cache compressed descriptions
     await mcpClient.callTool({
-      name: 'save_compressed_tools',
+      name: 'mcp-compression-proxy__cache_compressed_tools',
       arguments: {
         descriptions: compressed,
       },
     });
-    console.log('   ✓ Compression saved');
+    console.log('   ✓ Compression cached');
 
     // Verify text__count_words STILL has full description (not compressed)
     const toolsAfterCompression = await mcpClient.listTools();
@@ -557,39 +552,33 @@ Return a JSON array of tool names to use: `;
     console.log(`   Original description length: ${originalLength} chars`);
     console.log(`   Original: ${mathAddTool!.description}`);
 
-    // Trigger compression
-    console.log('\n   Triggering compression...');
-    const compressResult = await mcpClient.callTool({
-      name: 'compress_tools',
-      arguments: {},
+    // Get tools to compress
+    console.log('\n   Getting tools to compress...');
+    const getResult = await mcpClient.callTool({
+      name: 'mcp-compression-proxy__get_uncompressed_tools',
+      arguments: { limit: 100 },
     });
 
-    const compressContent = compressResult.content as Array<{ type: string; text: string }>;
-    const responseText = compressContent[0].text;
+    const getContent = getResult.content as Array<{ type: string; text: string }>;
+    const responseText = getContent[0].text;
 
-    // Extract tools to compress
-    const jsonMatch = responseText.match(/\[([\s\S]*)\]/);
-    if (!jsonMatch) {
+    // Extract file path
+    const fileMatch = responseText.match(/Wrote \d+ tools to file: (.+)/);
+    if (!fileMatch) {
       console.log('   ⚠️  No tools to compress, skipping compression test');
       return;
     }
 
+    // Read tools from file
+    const { readFileSync } = await import('fs');
+    const filePath = fileMatch[1];
     let toolsToCompress;
     try {
-      toolsToCompress = JSON.parse(jsonMatch[0]);
+      const fileContent = readFileSync(filePath, 'utf-8');
+      toolsToCompress = JSON.parse(fileContent);
     } catch (error) {
-      // Try to find valid JSON by working backwards
-      const jsonStr = jsonMatch[0];
-      for (let i = jsonStr.length - 1; i >= 0; i--) {
-        if (jsonStr[i] === ']') {
-          try {
-            toolsToCompress = JSON.parse(jsonStr.substring(0, i + 1));
-            break;
-          } catch {
-            continue;
-          }
-        }
-      }
+      console.log('   ⚠️  Failed to read tools file, skipping compression test');
+      return;
     }
 
     if (!toolsToCompress || toolsToCompress.length === 0) {
@@ -603,14 +592,14 @@ Return a JSON array of tool names to use: `;
     const compressed = await ollamaClient.compressToolDescriptions(toolsToCompress);
     console.log(`   Compressed ${compressed.length} descriptions`);
 
-    // Save compressed descriptions
+    // Cache compressed descriptions
     await mcpClient.callTool({
-      name: 'save_compressed_tools',
+      name: 'mcp-compression-proxy__cache_compressed_tools',
       arguments: {
         descriptions: compressed,
       },
     });
-    console.log('   ✓ Compression saved');
+    console.log('   ✓ Compression cached');
 
     // Verify tools now show compressed descriptions
     const compressedTools = await mcpClient.listTools();
@@ -623,7 +612,7 @@ Return a JSON array of tool names to use: `;
       // Create session for expansion
       console.log('\n   Creating session for expansion...');
       const sessionResult = await mcpClient.callTool({
-        name: 'create_session',
+        name: 'mcp-compression-proxy__create_session',
         arguments: {},
       });
       const sessionText = (sessionResult.content as any[])[0].text;
@@ -636,7 +625,7 @@ Return a JSON array of tool names to use: `;
         // Expand a tool
         console.log('   Expanding math__add...');
         await mcpClient.callTool({
-          name: 'expand_tool',
+          name: 'mcp-compression-proxy__expand_tool',
           arguments: {
             serverName: 'math',
             toolName: 'add',

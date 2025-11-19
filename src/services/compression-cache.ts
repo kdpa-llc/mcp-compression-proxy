@@ -19,18 +19,20 @@ export class CompressionCache {
   }
 
   /**
-   * Set patterns for tools that should never be compressed
+   * Set patterns for tools that should display original descriptions
+   * (tools are still compressed and cached, but show original when listing)
    */
   setNoCompressPatterns(patterns: string[]): void {
     this.noCompressPatterns = patterns;
     this.logger.debug(
       { patterns },
-      'Set noCompress patterns'
+      'Set noCompress patterns (display-only bypass)'
     );
   }
 
   /**
-   * Check if a tool should bypass compression
+   * Check if a tool should bypass compression display
+   * (for showing original descriptions while still caching compressed versions)
    */
   private shouldBypassCompression(toolName: string): boolean {
     return matchesIgnorePattern(toolName, this.noCompressPatterns);
@@ -45,7 +47,7 @@ export class CompressionCache {
 
   /**
    * Save compressed description for a tool
-   * Skips compression if tool matches noCompress patterns
+   * Always saves compression to cache regardless of noCompress patterns
    */
   saveCompressed(
     serverName: string,
@@ -53,17 +55,6 @@ export class CompressionCache {
     compressedDescription: string,
     originalDescription?: string
   ): void {
-    const fullToolName = `${serverName}__${toolName}`;
-
-    // Skip compression for tools matching noCompress patterns
-    if (this.shouldBypassCompression(fullToolName)) {
-      this.logger.debug(
-        { serverName, toolName },
-        'Skipping compression (matches noCompress pattern)'
-      );
-      return;
-    }
-
     const key = this.getKey(serverName, toolName);
 
     this.cache[key] = {
@@ -80,7 +71,7 @@ export class CompressionCache {
 
   /**
    * Get description for a tool (session-aware)
-   * - If tool matches noCompress pattern: always use original
+   * - If tool matches noCompress pattern: always use original (display-only bypass)
    * - If tool is expanded in session: use original
    * - If compressed exists: use compressed
    * - Otherwise: use original

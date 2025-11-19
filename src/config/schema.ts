@@ -38,9 +38,28 @@ export const serverConfigSchema = {
             type: 'boolean',
             description: 'Whether the server is enabled',
           },
+          disabled: {
+            type: 'boolean',
+            description: 'Whether the server is disabled (legacy field)',
+          },
+          timeout: {
+            type: 'number',
+            description: 'Server timeout in seconds',
+          },
+          type: {
+            type: 'string',
+            description: 'Server transport type (usually "stdio")',
+          },
+          autoApprove: {
+            type: 'array',
+            description: 'Tools to auto-approve',
+            items: {
+              type: 'string',
+            },
+          },
         },
         required: ['name', 'command'],
-        additionalProperties: false,
+        additionalProperties: true,
       },
     },
     excludeTools: {
@@ -52,10 +71,15 @@ export const serverConfigSchema = {
     },
     noCompressTools: {
       type: 'array',
-      description: 'Tool name patterns to never compress - descriptions pass through unchanged (supports wildcards, case-insensitive). Tools still appear in list but are never cached/compressed.',
+      description: 'Tool name patterns whose original descriptions should always be shown to the LLM (supports wildcards, case-insensitive). Tools are still compressed and cached in the background for efficiency, but their original descriptions are always displayed when listing tools.',
       items: {
         type: 'string',
       },
+    },
+    defaultTimeout: {
+      type: 'number',
+      description: 'Default timeout in seconds for all servers (can be overridden per-server). Default is 30 seconds if not specified.',
+      minimum: 1,
     },
   },
   required: ['mcpServers'],
@@ -69,7 +93,12 @@ export type ServerConfigJSON = {
     args?: string[];
     env?: Record<string, string>;
     enabled?: boolean;
+    disabled?: boolean;
+    timeout?: number;
+    type?: string;
+    autoApprove?: string[];
   }>;
   excludeTools?: string[];
   noCompressTools?: string[];
+  defaultTimeout?: number;
 };
