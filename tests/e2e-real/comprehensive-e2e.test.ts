@@ -418,7 +418,7 @@ Return a JSON array of tool names to use: `;
     // Trigger compression
     console.log('\n   Triggering compression...');
     const compressResult = await mcpClient.callTool({
-      name: 'compress_tools',
+      name: 'mcp-compression-proxy__compress_tools',
       arguments: {},
     });
 
@@ -455,7 +455,7 @@ Return a JSON array of tool names to use: `;
 
     // Save compressed descriptions
     await mcpClient.callTool({
-      name: 'save_compressed_tools',
+      name: 'mcp-compression-proxy__save_compressed_tools',
       arguments: {
         descriptions: compressed,
       },
@@ -560,7 +560,7 @@ Return a JSON array of tool names to use: `;
     // Trigger compression
     console.log('\n   Triggering compression...');
     const compressResult = await mcpClient.callTool({
-      name: 'compress_tools',
+      name: 'mcp-compression-proxy__compress_tools',
       arguments: {},
     });
 
@@ -605,7 +605,7 @@ Return a JSON array of tool names to use: `;
 
     // Save compressed descriptions
     await mcpClient.callTool({
-      name: 'save_compressed_tools',
+      name: 'mcp-compression-proxy__save_compressed_tools',
       arguments: {
         descriptions: compressed,
       },
@@ -623,7 +623,7 @@ Return a JSON array of tool names to use: `;
       // Create session for expansion
       console.log('\n   Creating session for expansion...');
       const sessionResult = await mcpClient.callTool({
-        name: 'create_session',
+        name: 'mcp-compression-proxy__create_session',
         arguments: {},
       });
       const sessionText = (sessionResult.content as any[])[0].text;
@@ -636,7 +636,7 @@ Return a JSON array of tool names to use: `;
         // Expand a tool
         console.log('   Expanding math__add...');
         await mcpClient.callTool({
-          name: 'expand_tool',
+          name: 'mcp-compression-proxy__expand_tool',
           arguments: {
             serverName: 'math',
             toolName: 'add',

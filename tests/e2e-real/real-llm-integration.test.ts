@@ -94,9 +94,9 @@ describe('Real LLM E2E Integration', () => {
     expect(initialTools.tools.length).toBeGreaterThan(0);
 
     // Step 2: Call compress_tools management tool
-    console.log('\n🗜️  PHASE 2: Call compress_tools');
+    console.log('\n🗜️  PHASE 2: Call mcp-compression-proxy__compress_tools');
     const compressResult = await mcpClient.callTool({
-      name: 'compress_tools',
+      name: 'mcp-compression-proxy__compress_tools',
       arguments: {},
     });
 
@@ -199,7 +199,7 @@ describe('Real LLM E2E Integration', () => {
     // Step 4: Save compressed descriptions via MCP
     console.log('\n💾 PHASE 4: Save compressed descriptions');
     const saveResult = await mcpClient.callTool({
-      name: 'save_compressed_tools',
+      name: 'mcp-compression-proxy__save_compressed_tools',
       arguments: {
         descriptions: compressed,
       },
@@ -252,7 +252,7 @@ describe('Real LLM E2E Integration', () => {
     // First, we need to compress some tools
     console.log('   Setting up compression...');
     const compressResult = await mcpClient.callTool({
-      name: 'compress_tools',
+      name: 'mcp-compression-proxy__compress_tools',
       arguments: {},
     });
 
@@ -306,7 +306,7 @@ describe('Real LLM E2E Integration', () => {
 
     // Save compressed description
     await mcpClient.callTool({
-      name: 'save_compressed_tools',
+      name: 'mcp-compression-proxy__save_compressed_tools',
       arguments: {
         descriptions: compressed,
       },
@@ -316,7 +316,7 @@ describe('Real LLM E2E Integration', () => {
 
     // Create a session
     const sessionResult = await mcpClient.callTool({
-      name: 'create_session',
+      name: 'mcp-compression-proxy__create_session',
       arguments: {},
     });
 
@@ -330,7 +330,7 @@ describe('Real LLM E2E Integration', () => {
 
     // Expand a tool
     const expandResult = await mcpClient.callTool({
-      name: 'expand_tool',
+      name: 'mcp-compression-proxy__expand_tool',
       arguments: {
         serverName: 'filesystem',
         toolName: 'read_file',
@@ -366,7 +366,7 @@ describe('Real LLM E2E Integration', () => {
 
     // Get compress_tools description
     const tools = await mcpClient.listTools();
-    const compressTool = tools.tools.find(t => t.name === 'compress_tools');
+    const compressTool = tools.tools.find(t => t.name === 'mcp-compression-proxy__compress_tools');
 
     expect(compressTool).toBeDefined();
     console.log(`   Tool: ${compressTool!.name}`);
@@ -374,7 +374,7 @@ describe('Real LLM E2E Integration', () => {
 
     // Verify description contains key instructions
     expect(compressTool!.description).toContain('compress');
-    expect(compressTool!.description).toContain('save_compressed_tools');
+    expect(compressTool!.description).toContain('mcp-compression-proxy__save_compressed_tools');
 
     // Ask LLM to understand the workflow
     const llmUnderstanding = await ollamaClient.chat(
