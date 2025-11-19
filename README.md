@@ -373,7 +373,7 @@ The proxy initializes all configured MCP servers in **parallel** before becoming
 - All servers initialize in parallel (not sequentially)
 - If a server exceeds its timeout, it's marked as failed but doesn't block other servers
 - The proxy reports ready only after all servers have either connected or timed out
-- This ensures all available tools are loaded before the MCP client (e.g., Q CLI) can query them
+- This ensures all available tools are loaded before the MCP client can query them
 
 **Why this matters:** Without proper timeout handling, a single hanging server could make the entire proxy unresponsive.
 

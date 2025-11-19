@@ -11,3 +11,11 @@ dist/
 .vscode/
 coverage/
 .nyc_output/
+
+# Debug and test files
+debug-*.js
+debug-*.txt
+test-*.js
+test-*.txt
+*-output.txt
+example-tools.json
