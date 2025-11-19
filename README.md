@@ -212,6 +212,10 @@ Restart your MCP client (e.g., Claude Desktop) to load the new configuration. Th
 | `cache_compressed_tools` | Save compressed descriptions to cache (batch processing) |
 | `expand_tool` | Expand a tool to show full description (session-specific) |
 | `collapse_tool` | Collapse tool back to compressed description |
+| `stats` | Return JSON summary of coverage, cache health, sessions, and per-server tool counts |
+
+Use `stats` from your client (e.g., `mcp-compression-proxy__stats`) to sanity-check coverage. Optional inputs: `serverName` to scope to one backend and `detailLevel` (`summary` or `full`, default `summary`). The response includes coverage %, estimated token savings, cache state, active sessions, and per-server tool counts (respecting your exclude patterns).
+| `stats` | Return JSON summary of coverage, cache health, sessions, and per-server tool counts |
 
 ### Workflow Example
 

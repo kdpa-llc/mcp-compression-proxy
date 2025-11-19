@@ -14,6 +14,7 @@ import { loadJSONServers, matchesIgnorePattern } from './config/loader.js';
 import { writeFileSync, readFileSync } from 'fs';
 import { resolve } from 'path';
 import pino from 'pino';
+import { StatsService } from './services/stats-service.js';
 
 /**
  * MCP Server that aggregates tools from multiple MCP servers
@@ -37,6 +38,12 @@ const logger = pino({
 const clientManager = new MCPClientManager(logger);
 const compressionCache = new CompressionCache(logger);
 const sessionManager = new SessionManager(logger);
+const statsService = new StatsService(
+  logger,
+  clientManager,
+  compressionCache,
+  sessionManager
+);
 
 // Current session context (set by tools)
 let currentSessionId: string | undefined;
@@ -186,6 +193,25 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
         },
         required: ['serverName', 'toolName'],
+      },
+    },
+    {
+      name: 'mcp-compression-proxy__stats',
+      description: 'Get compression and server statistics. Optional inputs: serverName filter and detailLevel ("summary" | "full", default summary). Returns JSON with coverage, cache, and session details.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          serverName: {
+            type: 'string',
+            description: 'Optional server name to scope stats to a single backend server',
+          },
+          detailLevel: {
+            type: 'string',
+            description: 'Detail level for stats ("summary" | "full")',
+            enum: ['summary', 'full'],
+            default: 'summary',
+          },
+        },
       },
     },
   ];
@@ -637,6 +663,37 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         },
       ],
     };
+  }
+
+  if (name === 'mcp-compression-proxy__stats') {
+    const { serverName, detailLevel } = args as {
+      serverName?: string;
+      detailLevel?: 'summary' | 'full';
+    };
+
+    try {
+      const stats = await statsService.getStats({ serverName, detailLevel });
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(stats, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      logger.error({ error, serverName }, 'Failed to compute stats');
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Error generating stats: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          },
+        ],
+        isError: true,
+      };
+    }
   }
 
   // Aggregated MCP tool call

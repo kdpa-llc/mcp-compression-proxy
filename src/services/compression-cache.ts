@@ -1,4 +1,5 @@
 import type { CompressedToolCache, CompressionStats } from '../types/compression.js';
+import type { CacheMetrics } from '../types/compression.js';
 import type { Logger } from 'pino';
 import { CompressionPersistence } from './compression-persistence.js';
 import { matchesIgnorePattern } from '../config/loader.js';
@@ -28,6 +29,28 @@ export class CompressionCache {
       { patterns },
       'Set noCompress patterns (display-only bypass)'
     );
+  }
+
+  /**
+   * Get all cached entries (for reporting/stats)
+   */
+  getCacheEntries(): Array<{
+    serverName: string;
+    toolName: string;
+    original?: string;
+    compressed: string;
+    compressedAt: string;
+  }> {
+    return Object.entries(this.cache).map(([key, value]) => {
+      const [serverName, toolName] = key.split(':');
+      return {
+        serverName,
+        toolName,
+        original: value.original,
+        compressed: value.compressed,
+        compressedAt: value.compressedAt,
+      };
+    });
   }
 
   /**
@@ -142,6 +165,62 @@ export class CompressionCache {
   }
 
   /**
+   * Detailed cache metrics for reporting
+   */
+  getCacheMetrics(): CacheMetrics {
+    const entries = this.getCacheEntries();
+
+    const perServer: CacheMetrics['perServer'] = {};
+    let totalOriginalChars = 0;
+    let totalCompressedChars = 0;
+    let missingOriginals = 0;
+    let latestCompressedAt: string | undefined;
+
+    for (const entry of entries) {
+      const originalLength = entry.original?.length ?? 0;
+      const compressedLength = entry.compressed.length;
+
+      if (!perServer[entry.serverName]) {
+        perServer[entry.serverName] = {
+          cached: 0,
+          totalOriginalChars: 0,
+          totalCompressedChars: 0,
+          missingOriginals: 0,
+          latestCompressedAt: undefined,
+        };
+      }
+
+      perServer[entry.serverName].cached += 1;
+      perServer[entry.serverName].totalOriginalChars += originalLength;
+      perServer[entry.serverName].totalCompressedChars += compressedLength;
+      if (!entry.original) {
+        perServer[entry.serverName].missingOriginals += 1;
+      }
+      const serverLatest = perServer[entry.serverName].latestCompressedAt;
+      if (entry.compressedAt && (!serverLatest || serverLatest < entry.compressedAt)) {
+        perServer[entry.serverName].latestCompressedAt = entry.compressedAt;
+      }
+
+      totalOriginalChars += originalLength;
+      totalCompressedChars += compressedLength;
+      if (!entry.original) missingOriginals += 1;
+      if (!latestCompressedAt || latestCompressedAt < entry.compressedAt) {
+        latestCompressedAt = entry.compressedAt;
+      }
+    }
+
+    return {
+      totalCached: entries.length,
+      totalOriginalChars,
+      totalCompressedChars,
+      missingOriginals,
+      latestCompressedAt,
+      cacheSizeBytes: Buffer.byteLength(JSON.stringify(this.cache)),
+      perServer,
+    };
+  }
+
+  /**
    * Clear all compressed descriptions
    */
   clear(): void {
@@ -191,5 +270,12 @@ export class CompressionCache {
   async clearAll(): Promise<void> {
     this.clear();
     await this.persistence.clear();
+  }
+
+  /**
+   * Get on-disk cache file path if available
+   */
+  getCacheFilePath(): string {
+    return this.persistence.getCacheFilePath();
   }
 }
