@@ -66,7 +66,7 @@ Instead of connecting to multiple MCP servers separately and consuming thousands
 - **🤖 LLM-Based Compression** - Intelligent description compression (50-80% token reduction)
 - **💾 Persistent Storage** - Compressed descriptions saved to disk and restored on restart
 - **🎭 Session-Based Expansion** - Independent expansion state per conversation
-- **⚡ Eager Loading** - All servers connect at startup for zero-latency access
+- **⚡ Parallel Initialization** - All servers connect in parallel with configurable timeouts
 - **🎯 Selective Expansion** - Compress all tools, expand only what you need
 - **📦 Zero Config** - Works out-of-the-box with sensible defaults
 - **🔥 Standard MCP** - Compatible with any MCP client (Claude Desktop, Cline, etc.)
@@ -308,6 +308,7 @@ Create or edit your JSON configuration file at:
 | `mcpServers` | array | ✅ | Array of server configurations |
 | `excludeTools` | string[] | ❌ | Tool name patterns to exclude from tool list entirely (supports wildcards) |
 | `noCompressTools` | string[] | ❌ | Tool name patterns to never compress - descriptions pass through unchanged (supports wildcards) |
+| `defaultTimeout` | number | ❌ | Default timeout in seconds for all servers (default: 30). Can be overridden per-server. |
 
 **Server Configuration:**
 | Field | Type | Required | Description |
@@ -317,6 +318,7 @@ Create or edit your JSON configuration file at:
 | `args` | string[] | ❌ | Command arguments |
 | `env` | object | ❌ | Environment variables |
 | `enabled` | boolean | ❌ | Enable/disable server (default: true) |
+| `timeout` | number | ❌ | Server-specific timeout in seconds (overrides `defaultTimeout`) |
 
 #### Environment Variable Expansion
 
@@ -339,6 +341,41 @@ Use `${VAR_NAME}` syntax to reference environment variables:
 ```
 
 Variables are expanded at runtime from your shell environment.
+
+#### Server Initialization and Timeouts
+
+The proxy initializes all configured MCP servers in **parallel** before becoming ready. Each server connection is wrapped with a timeout to prevent indefinite hanging:
+
+- **Default timeout**: 30 seconds (if not specified)
+- **Global timeout**: Set `defaultTimeout` in config to change the default for all servers
+- **Per-server timeout**: Set `timeout` on individual servers to override the default
+
+```json
+{
+  "defaultTimeout": 60,
+  "mcpServers": [
+    {
+      "name": "fast-server",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+    },
+    {
+      "name": "slow-server",
+      "command": "python",
+      "args": ["slow_mcp_server.py"],
+      "timeout": 120
+    }
+  ]
+}
+```
+
+**Behavior:**
+- All servers initialize in parallel (not sequentially)
+- If a server exceeds its timeout, it's marked as failed but doesn't block other servers
+- The proxy reports ready only after all servers have either connected or timed out
+- This ensures all available tools are loaded before the MCP client (e.g., Q CLI) can query them
+
+**Why this matters:** Without proper timeout handling, a single hanging server could make the entire proxy unresponsive.
 
 #### Tool Filtering Patterns
 

@@ -334,11 +334,100 @@ describe('Config Loader', () => {
       const { loadJSONServers } = await importLoader();
 
       expect(() => loadJSONServers()).not.toThrow();
-      
+
       const result = loadJSONServers();
       expect(result).not.toBeNull();
       expect(result!.servers[0].name).toBe('test-server');
       expect((result!.servers[0] as any).customField).toBe('additional property should be allowed');
+    });
+
+    it('should load per-server timeout configuration', async () => {
+      const config = {
+        mcpServers: [
+          {
+            name: 'fast-server',
+            command: 'npx',
+            timeout: 10,
+          },
+          {
+            name: 'slow-server',
+            command: 'npx',
+            timeout: 120,
+          },
+          {
+            name: 'default-server',
+            command: 'npx',
+            // No timeout - will use default
+          },
+        ],
+      };
+
+      writeFileSync(join(testDir, 'servers.json'), JSON.stringify(config));
+
+      const { loadJSONServers } = await importLoader();
+      const result = loadJSONServers();
+
+      expect(result).not.toBeNull();
+      expect(result!.servers).toHaveLength(3);
+      expect(result!.servers[0].timeout).toBe(10);
+      expect(result!.servers[1].timeout).toBe(120);
+      expect(result!.servers[2].timeout).toBeUndefined();
+    });
+
+    it('should load global defaultTimeout configuration', async () => {
+      const config = {
+        defaultTimeout: 45,
+        mcpServers: [
+          {
+            name: 'test-server',
+            command: 'npx',
+          },
+        ],
+      };
+
+      writeFileSync(join(testDir, 'servers.json'), JSON.stringify(config));
+
+      const { loadJSONServers } = await importLoader();
+      const result = loadJSONServers();
+
+      expect(result).not.toBeNull();
+      expect(result!.defaultTimeout).toBe(45);
+    });
+
+    it('should prioritize project-level defaultTimeout over user-level', async () => {
+      const userConfig = {
+        defaultTimeout: 30,
+        mcpServers: [
+          {
+            name: 'user-server',
+            command: 'npx',
+          },
+        ],
+      };
+
+      const projectConfig = {
+        defaultTimeout: 60,
+        mcpServers: [
+          {
+            name: 'project-server',
+            command: 'npx',
+          },
+        ],
+      };
+
+      mkdirSync(join(testDir, '.mcp-compression-proxy'), { recursive: true });
+      writeFileSync(
+        join(testDir, '.mcp-compression-proxy', 'servers.json'),
+        JSON.stringify(userConfig)
+      );
+      writeFileSync(join(testDir, 'servers.json'), JSON.stringify(projectConfig));
+
+      const { loadJSONServers } = await importLoader();
+      const result = loadJSONServers();
+
+      expect(result).not.toBeNull();
+      expect(result!.defaultTimeout).toBe(60); // Project config wins
+      expect(result!.servers).toHaveLength(2); // Both servers present
     });
 
     it('should handle empty environment variable substitution', async () => {

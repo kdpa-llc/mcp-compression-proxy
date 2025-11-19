@@ -386,4 +386,193 @@ describe('MCPClientManager', () => {
       expect(mockLogger.info).toHaveBeenCalled();
     });
   });
+
+  describe('timeout handling', () => {
+    it('should timeout when server connection exceeds timeout', async () => {
+      const servers: MCPServerConfig[] = [
+        {
+          name: 'slow-server',
+          command: 'slow-cmd',
+          enabled: true,
+          timeout: 1, // 1 second timeout
+        },
+      ];
+
+      // Create a client that takes longer than timeout to connect
+      const slowClient = {
+        ...mockClient,
+        connect: jest.fn<() => Promise<void>>().mockImplementation(
+          () => new Promise((resolve) => setTimeout(resolve, 5000)) // 5 seconds
+        ),
+      };
+
+      const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+      (Client as unknown as jest.Mock).mockImplementation(() => slowClient);
+
+      const startTime = Date.now();
+      await clientManager.initializeServers(servers);
+      const duration = Date.now() - startTime;
+
+      // Should timeout around 1 second, not wait full 5 seconds
+      expect(duration).toBeLessThan(3000);
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          server: 'slow-server',
+        }),
+        'Failed to connect to MCP server'
+      );
+    });
+
+    it('should successfully connect when server responds within timeout', async () => {
+      const servers: MCPServerConfig[] = [
+        {
+          name: 'fast-server',
+          command: 'fast-cmd',
+          enabled: true,
+          timeout: 5, // 5 second timeout
+        },
+      ];
+
+      // Create a client that connects quickly
+      const fastClient = {
+        ...mockClient,
+        connect: jest.fn<() => Promise<void>>().mockImplementation(
+          () => new Promise((resolve) => setTimeout(resolve, 100)) // 100ms
+        ),
+      };
+
+      const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+      (Client as unknown as jest.Mock).mockImplementation(() => fastClient);
+
+      await clientManager.initializeServers(servers);
+
+      const client = clientManager.getClient('fast-server');
+      expect(client).toBeDefined();
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ server: 'fast-server' }),
+        'Successfully connected to MCP server'
+      );
+    });
+
+    it('should use default timeout when not specified', async () => {
+      const servers: MCPServerConfig[] = [
+        {
+          name: 'default-timeout-server',
+          command: 'cmd',
+          enabled: true,
+          // No timeout specified - should use default (30 seconds)
+        },
+      ];
+
+      const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+      (Client as unknown as jest.Mock).mockImplementation(() => mockClient);
+
+      await clientManager.initializeServers(servers);
+
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.objectContaining({
+          server: 'default-timeout-server',
+          timeoutMs: 30000, // 30 seconds default
+        }),
+        'Connecting to MCP server'
+      );
+    });
+
+    it('should apply global default timeout to servers without specific timeout', async () => {
+      const servers: MCPServerConfig[] = [
+        {
+          name: 'server1',
+          command: 'cmd1',
+          enabled: true,
+          // No timeout - should use global default
+        },
+        {
+          name: 'server2',
+          command: 'cmd2',
+          enabled: true,
+          timeout: 60, // Override with specific timeout
+        },
+      ];
+
+      const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+      (Client as unknown as jest.Mock).mockImplementation(() => mockClient);
+
+      const globalDefaultTimeout = 45; // 45 seconds global default
+      await clientManager.initializeServers(servers, globalDefaultTimeout);
+
+      // Server1 should use global default (45s)
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.objectContaining({
+          server: 'server1',
+          timeoutMs: 45000,
+        }),
+        'Connecting to MCP server'
+      );
+
+      // Server2 should use its specific timeout (60s)
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.objectContaining({
+          server: 'server2',
+          timeoutMs: 60000,
+        }),
+        'Connecting to MCP server'
+      );
+    });
+
+    it('should handle multiple servers with different timeouts in parallel', async () => {
+      const servers: MCPServerConfig[] = [
+        {
+          name: 'fast-server',
+          command: 'cmd1',
+          enabled: true,
+          timeout: 5,
+        },
+        {
+          name: 'slow-server',
+          command: 'cmd2',
+          enabled: true,
+          timeout: 1, // Will timeout
+        },
+      ];
+
+      let callCount = 0;
+      const fastClient = {
+        ...mockClient,
+        connect: jest.fn<() => Promise<void>>().mockImplementation(
+          () => new Promise((resolve) => setTimeout(resolve, 100))
+        ),
+      };
+
+      const slowClient = {
+        ...mockClient,
+        connect: jest.fn<() => Promise<void>>().mockImplementation(
+          () => new Promise((resolve) => setTimeout(resolve, 5000))
+        ),
+      };
+
+      const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+      (Client as unknown as jest.Mock).mockImplementation(() => {
+        callCount++;
+        return callCount === 1 ? fastClient : slowClient;
+      });
+
+      await clientManager.initializeServers(servers);
+
+      // Fast server should connect
+      expect(clientManager.getClient('fast-server')).toBeDefined();
+
+      // Slow server should fail due to timeout
+      expect(clientManager.getClient('slow-server')).toBeUndefined();
+
+      const statuses = clientManager.getServerStatuses();
+      expect(statuses).toHaveLength(2);
+
+      const fastStatus = statuses.find(s => s.name === 'fast-server');
+      const slowStatus = statuses.find(s => s.name === 'slow-server');
+
+      expect(fastStatus?.connected).toBe(true);
+      expect(slowStatus?.connected).toBe(false);
+      expect(slowStatus?.lastError).toContain('timeout');
+    });
+  });
 });

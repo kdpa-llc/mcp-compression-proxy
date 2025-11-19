@@ -728,14 +728,9 @@ async function main() {
 
   // Load configuration from JSON files
   const config = loadJSONServers();
-  
-  // Start server with stdio transport FIRST (complete MCP handshake with Q CLI)
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
 
-  logger.info('MCP Tool Aggregator Server running on stdio');
-
-  // Initialize backend MCP servers AFTER handshake is complete
+  // Initialize backend MCP servers BEFORE connecting to Q CLI
+  // This ensures all tools are available when the MCP client queries us
   if (!config) {
     logger.warn('No valid configuration found. Server will start with no backend MCP servers. Please create a servers.json file to add MCP servers.');
     // Continue with empty configuration - server will only provide management tools
@@ -750,21 +745,27 @@ async function main() {
       // Server is enabled if enabled field is not explicitly false
       return server.enabled !== false;
     });
-    
-    logger.info({ 
-      total: config.servers.length, 
+
+    logger.info({
+      total: config.servers.length,
       enabled: enabledServers.length,
       servers: enabledServers.map(s => s.name)
-    }, 'Filtered enabled servers, initializing now');
+    }, 'Initializing backend MCP servers with timeout protection');
 
-    // Wait for servers to initialize (handshake already complete, so this won't block Q CLI)
+    // Wait for all servers to initialize or timeout before reporting ready
     try {
-      await clientManager.initializeServers(enabledServers);
+      await clientManager.initializeServers(enabledServers, config.defaultTimeout);
       logger.info('Backend MCP servers initialization complete');
     } catch (error) {
       logger.error({ error }, 'Error during backend server initialization');
     }
   }
+
+  // Now connect to Q CLI - all backend servers are ready (or timed out)
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+
+  logger.info('MCP Tool Aggregator Server ready and connected to stdio');
 }
 
 main().catch((error) => {

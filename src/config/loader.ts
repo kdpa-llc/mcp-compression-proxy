@@ -131,6 +131,7 @@ export type ConfigResult = {
   servers: MCPServerConfig[];
   excludePatterns: string[];
   noCompressPatterns: string[];
+  defaultTimeout?: number;
 } | null;
 
 /**
@@ -144,6 +145,7 @@ export function loadJSONServers(): ConfigResult {
   let aggregatedServers: MCPServerConfig[] = [];
   let aggregatedExcludePatterns: string[] = [];
   let aggregatedNoCompressPatterns: string[] = [];
+  let defaultTimeout: number | undefined;
   let hasAnyConfig = false;
 
   // Step 1: Load user-level config
@@ -159,6 +161,9 @@ export function loadJSONServers(): ConfigResult {
     }
     if (userConfig.noCompressTools) {
       aggregatedNoCompressPatterns = [...userConfig.noCompressTools];
+    }
+    if (userConfig.defaultTimeout) {
+      defaultTimeout = userConfig.defaultTimeout;
     }
   } else {
     console.error(`[Config] No user-level config found at: ${paths.user}`);
@@ -182,6 +187,11 @@ export function loadJSONServers(): ConfigResult {
     // Append project noCompress patterns
     if (projectConfig.noCompressTools) {
       aggregatedNoCompressPatterns = [...aggregatedNoCompressPatterns, ...projectConfig.noCompressTools];
+    }
+
+    // Project-level defaultTimeout overrides user-level
+    if (projectConfig.defaultTimeout) {
+      defaultTimeout = projectConfig.defaultTimeout;
     }
   } else {
     console.error(`[Config] No project-level config found at: ${paths.project}`);
@@ -207,12 +217,18 @@ export function loadJSONServers(): ConfigResult {
     console.error(`[Config] Tool noCompress patterns: ${aggregatedNoCompressPatterns.join(', ')}`);
   }
 
+  // Log default timeout
+  if (defaultTimeout) {
+    console.error(`[Config] Default timeout: ${defaultTimeout} seconds`);
+  }
+
   console.error(`[Config] Total servers after aggregation: ${aggregatedServers.length}`);
 
   return {
     servers: aggregatedServers,
     excludePatterns: aggregatedExcludePatterns,
     noCompressPatterns: aggregatedNoCompressPatterns,
+    defaultTimeout,
   };
 }
 

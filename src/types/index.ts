@@ -7,6 +7,7 @@ export interface MCPServerConfig {
   args?: string[];
   env?: Record<string, string>;
   enabled?: boolean;
+  timeout?: number; // Timeout in seconds for server initialization
 }
 
 export interface MCPClientConnection {

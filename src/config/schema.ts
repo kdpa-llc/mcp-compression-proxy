@@ -76,6 +76,11 @@ export const serverConfigSchema = {
         type: 'string',
       },
     },
+    defaultTimeout: {
+      type: 'number',
+      description: 'Default timeout in seconds for all servers (can be overridden per-server). Default is 30 seconds if not specified.',
+      minimum: 1,
+    },
   },
   required: ['mcpServers'],
   additionalProperties: false,
@@ -95,4 +100,5 @@ export type ServerConfigJSON = {
   }>;
   excludeTools?: string[];
   noCompressTools?: string[];
+  defaultTimeout?: number;
 };
