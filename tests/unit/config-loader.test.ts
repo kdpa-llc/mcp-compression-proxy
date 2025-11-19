@@ -317,22 +317,28 @@ describe('Config Loader', () => {
       expect(result!.servers[1].enabled).toBe(false);
     });
 
-    it('should reject additional properties', async () => {
-      const invalidConfig = {
+    it('should allow additional properties', async () => {
+      const configWithAdditionalProps = {
         mcpServers: [
           {
             name: 'test-server',
             command: 'npx',
-            invalidField: 'should not be here',
+            customField: 'additional property should be allowed',
+            anotherField: 42,
           },
         ],
       };
 
-      writeFileSync(join(testDir, 'servers.json'), JSON.stringify(invalidConfig));
+      writeFileSync(join(testDir, 'servers.json'), JSON.stringify(configWithAdditionalProps));
 
       const { loadJSONServers } = await importLoader();
 
-      expect(() => loadJSONServers()).toThrow('Invalid server configuration');
+      expect(() => loadJSONServers()).not.toThrow();
+      
+      const result = loadJSONServers();
+      expect(result).not.toBeNull();
+      expect(result!.servers[0].name).toBe('test-server');
+      expect((result!.servers[0] as any).customField).toBe('additional property should be allowed');
     });
 
     it('should handle empty environment variable substitution', async () => {

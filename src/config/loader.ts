@@ -53,9 +53,11 @@ function validateConfig(config: unknown): ServerConfigJSON {
     const errors = validate.errors
       ?.map((err) => {
         const path = err.instancePath || 'root';
-        return `  - ${path}: ${err.message}`;
+        const data = err.data ? JSON.stringify(err.data, null, 2) : 'undefined';
+        return `  - ${path}: ${err.message}\n    Data: ${data}`;
       })
       .join('\n');
+    console.error(`[Config] Validation failed:\n${errors}`);
     throw new Error(`Invalid server configuration:\n${errors}`);
   }
   return config as ServerConfigJSON;
@@ -148,7 +150,8 @@ export function loadJSONServers(): ConfigResult {
   const userConfig = loadJSONConfig(paths.user);
   if (userConfig) {
     hasAnyConfig = true;
-    console.log(`[Config] Loaded user-level configuration from: ${paths.user}`);
+    console.error(`[Config] Loaded user-level configuration from: ${paths.user}`);
+    console.error(`[Config] User config contains ${userConfig.mcpServers.length} servers`);
 
     aggregatedServers = [...userConfig.mcpServers];
     if (userConfig.excludeTools) {
@@ -157,13 +160,16 @@ export function loadJSONServers(): ConfigResult {
     if (userConfig.noCompressTools) {
       aggregatedNoCompressPatterns = [...userConfig.noCompressTools];
     }
+  } else {
+    console.error(`[Config] No user-level config found at: ${paths.user}`);
   }
 
   // Step 2: Load project-level config and append
   const projectConfig = loadJSONConfig(paths.project);
   if (projectConfig) {
     hasAnyConfig = true;
-    console.log(`[Config] Loaded project-level configuration from: ${paths.project}`);
+    console.error(`[Config] Loaded project-level configuration from: ${paths.project}`);
+    console.error(`[Config] Project config contains ${projectConfig.mcpServers.length} servers`);
 
     // Append project servers
     aggregatedServers = [...aggregatedServers, ...projectConfig.mcpServers];
@@ -177,6 +183,8 @@ export function loadJSONServers(): ConfigResult {
     if (projectConfig.noCompressTools) {
       aggregatedNoCompressPatterns = [...aggregatedNoCompressPatterns, ...projectConfig.noCompressTools];
     }
+  } else {
+    console.error(`[Config] No project-level config found at: ${paths.project}`);
   }
 
   if (!hasAnyConfig) {
@@ -186,20 +194,20 @@ export function loadJSONServers(): ConfigResult {
   // Log disabled servers
   const disabled = aggregatedServers.filter(s => s.enabled === false);
   if (disabled.length > 0) {
-    console.warn(`[Config] Found ${disabled.length} disabled server(s): ${disabled.map(s => s.name).join(', ')}`);
+    console.error(`[Config] Found ${disabled.length} disabled server(s): ${disabled.map(s => s.name).join(', ')}`);
   }
 
   // Log exclude patterns
   if (aggregatedExcludePatterns.length > 0) {
-    console.log(`[Config] Tool exclude patterns: ${aggregatedExcludePatterns.join(', ')}`);
+    console.error(`[Config] Tool exclude patterns: ${aggregatedExcludePatterns.join(', ')}`);
   }
 
   // Log noCompress patterns
   if (aggregatedNoCompressPatterns.length > 0) {
-    console.log(`[Config] Tool noCompress patterns: ${aggregatedNoCompressPatterns.join(', ')}`);
+    console.error(`[Config] Tool noCompress patterns: ${aggregatedNoCompressPatterns.join(', ')}`);
   }
 
-  console.log(`[Config] Total servers after aggregation: ${aggregatedServers.length}`);
+  console.error(`[Config] Total servers after aggregation: ${aggregatedServers.length}`);
 
   return {
     servers: aggregatedServers,

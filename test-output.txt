@@ -1,0 +1,589 @@
+Testing compression-proxy...
+
+Sending initialize request...
+STDERR: [Config] Loaded user-level configuration from: /Users/rafdam/.mcp-compression-proxy/servers.json
+
+STDERR: [Config] User config contains 22 servers
+[Config] No project-level config found at: /Users/rafdam/Documents/Projects/Amazon/mcp-compression-proxy/servers.json
+[Config] Tool exclude patterns: docling__*, taskmaster-ai__*, outlook-mcp-server__*, beacon-mcp-server__*, bwp-dev-mcp-server__*, bwp-mcp-server__*, cornell-mcp-server__*, santos-code-mcp-server__*, santos-confluence-mcp-server__*, santos-dida-mcp-server__*, santos-ops-mcp-server__*, santos-ticket-mcp-server__*, identity-mcp-server__*, santos-mci-mcp-server__*, amazon-builder-gen-ai-power-users-mcp-server__*, jetbrains-mcp-proxy-server__*
+[Config] Tool noCompress patterns: local-skills__*
+[Config] Total servers after aggregation: 22
+
+Response: {
+  "result": {
+    "protocolVersion": "2024-11-05",
+    "capabilities": {
+      "tools": {}
+    },
+    "serverInfo": {
+      "name": "mcp-compression-proxy",
+      "version": "0.1.0"
+    }
+  },
+  "jsonrpc": "2.0",
+  "id": 1
+}
+Response: "local-skills"
+STDERR: Local Skills MCP Server v0.4.4 running on stdio
+
+STDERR: Aggregating skills from 1 directory:
+  - /Users/rafdam/.nvm/versions/node/v20.19.5/lib/node_modules/local-skills-mcp/skills
+
+STDERR: 
+Usage:
+
+STDERR:   npx mcp-funnel                    # Uses .mcp-funnel.json from current directory
+  npx mcp-funnel path/to/config.json # Uses specified config file
+
+Example config (.mcp-funnel.json):
+{
+  "servers": [
+    {
+      "name": "github",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {
+        "GITHUB_TOKEN": "your-token-here"
+      }
+    },
+    {
+      "name": "memory",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ]
+    }
+  ],
+  "hideTools": [
+    "github__list_workflow_runs",
+    "github__get_workflow_run_logs",
+    "memory__debug_*",
+    "memory__dashboard_*"
+  ]
+}
+
+STDERR: [ERROR] An unexpected request error occurred: AggregateError
+
+STDERR: 2025/11/18 18:35:37 Failed to force refresh the credentials: unable to retrieve credentials: unable to assume credentials for account "296410404219" and role "UsageReport": Get "https://isengard-service.amazon.com": dial tcp 52.94.239.51:443: connect: network is unreachable
+
+STDERR: 2025/11/18 18:35:37 Failed to force refresh the credentials: unable to retrieve credentials: unable to assume credentials for account "296410404219" and role "UsageReport": Get "https://isengard-service.amazon.com": dial tcp 52.94.239.51:443: connect: network is unreachable
+
+STDERR: [WARN] Retrying operation after 1000ms delay...
+
+
+Sending tools/list request (after 10s delay for backend init)...
+STDERR: [Config] Loaded user-level configuration from: /Users/rafdam/.mcp-compression-proxy/servers.json
+
+STDERR: [Config] User config contains 22 servers
+[Config] No project-level config found at: /Users/rafdam/Documents/Projects/Amazon/mcp-compression-proxy/servers.json
+[Config] Tool exclude patterns: docling__*, taskmaster-ai__*, outlook-mcp-server__*, beacon-mcp-server__*, bwp-dev-mcp-server__*, bwp-mcp-server__*, cornell-mcp-server__*, santos-code-mcp-server__*, santos-confluence-mcp-server__*, santos-dida-mcp-server__*, santos-ops-mcp-server__*, santos-ticket-mcp-server__*, identity-mcp-server__*, santos-mci-mcp-server__*, amazon-builder-gen-ai-power-users-mcp-server__*, jetbrains-mcp-proxy-server__*
+[Config] Tool noCompress patterns: local-skills__*
+[Config] Total servers after aggregation: 22
+
+Response: {
+  "result": {
+    "tools": [
+      {
+        "name": "mcp-compression-proxy__create_session",
+        "description": "Create a new session for independent tool expansion control",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "mcp-compression-proxy__delete_session",
+        "description": "Delete a session",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "sessionId": {
+              "type": "string",
+              "description": "Session ID to delete"
+            }
+          },
+          "required": [
+            "sessionId"
+          ]
+        }
+      },
+      {
+        "name": "mcp-compression-proxy__set_session",
+        "description": "Set the active session for subsequent tool calls (affects which tools show expanded descriptions)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "sessionId": {
+              "type": "string",
+              "description": "Session ID to use (from create_session)"
+            }
+          },
+          "required": [
+            "sessionId"
+          ]
+        }
+      },
+      {
+        "name": "mcp-compression-proxy__clear_compressed_tools_cache",
+        "description": "Clear all cached compressed tool descriptions. Use this to start fresh with compression or when tool descriptions have changed significantly.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "mcp-compression-proxy__get_uncompressed_tools",
+        "description": "Get tools that need compression (those without cached compressed descriptions). Returns up to the specified limit of tools that need compression. After compressing these descriptions, call mcp-compression-proxy__cache_compressed_tools. Repeat this process until no uncached tools remain.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": "number",
+              "description": "Maximum number of tools to return (default: 25, max: 100)",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            },
+            "outputFile": {
+              "type": "string",
+              "description": "Optional file path to write tools JSON instead of returning as text"
+            }
+          }
+        }
+      },
+      {
+        "name": "mcp-compression-proxy__cache_compressed_tools",
+        "description": "Save compressed tool descriptions to cache (max 100 tools per call). Provide either descriptions array or inputFile path. After caching, call mcp-compression-proxy__get_uncompressed_tools again to get the next batch if any remain uncached. Continue until all tools are compressed.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "descriptions": {
+              "type": "array",
+              "description": "Array of compressed tool descriptions (max 100). Use this OR inputFile, not both.",
+              "maxItems": 100,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "serverName": {
+                    "type": "string"
+                  },
+                  "toolName": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "serverName",
+                  "toolName",
+                  "description"
+                ]
+              }
+            },
+            "inputFile": {
+              "type": "string",
+              "description": "File path to read compressed tools JSON. Use this OR descriptions, not both."
+            }
+          }
+        }
+      },
+      {
+        "name": "mcp-compression-proxy__expand_tool",
+        "description": "Expand a tool to show its full original description (session-specific)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "serverName": {
+              "type": "string",
+              "description": "Server name (e.g., \"filesystem\")"
+            },
+            "toolName": {
+              "type": "string",
+              "description": "Tool name (e.g., \"read_file\")"
+            }
+          },
+          "required": [
+            "serverName",
+            "toolName"
+          ]
+        }
+      },
+      {
+        "name": "mcp-compression-proxy__collapse_tool",
+        "description": "Collapse a tool back to compressed description (session-specific)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "serverName": {
+              "type": "string",
+              "description": "Server name"
+            },
+            "toolName": {
+              "type": "string",
+              "description": "Tool name"
+            }
+          },
+          "required": [
+            "serverName",
+            "toolName"
+          ]
+        }
+      },
+      {
+        "name": "local-skills__get_skill",
+        "description": "Loads specialized expert prompt instructions that transform your capabilities for specific tasks. Each skill provides comprehensive guidance, proven methodologies, and domain-specific best practices. Use when you need focused expertise, systematic approaches, or professional standards for any task that would benefit from specialized knowledge. Invoke with the skill name to receive detailed instructions that enhance your problem-solving approach with structured, expert-level guidance.\n\nAvailable skills:\n- local-skills-mcp-guide: Expert guide for understanding the Local Skills MCP server repository - its structure, architecture, and implementation. Use when exploring this MCP server's codebase, understanding how Local Skill...\n- local-skills-mcp-usage: Comprehensive guide for using Local Skills MCP - creating skills in the right locations, understanding skill directories, setup, and configuration. Use when creating new skills, deciding where to s...\n- skill-creator: Creates effective SKILL.md files with proper YAML frontmatter, trigger keywords, and best practices. Use when creating skills, writing skill descriptions, authoring SKILL.md files, or learning skil...",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "skill_name": {
+              "type": "string",
+              "description": "The name of the skill to retrieve (e.g., \"code-reviewer\", \"test-generator\")"
+            }
+          },
+          "required": [
+            "skill_name"
+          ]
+        }
+      },
+      {
+        "name": "santos-quip-mcp-server__get_quip_documents",
+        "description": "Retrieves Quip documents as Markdown",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "urls": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "A set of Quip document URLs with domain quip-amazon.com"
+            }
+          },
+          "required": [
+            "urls"
+          ]
+        }
+      },
+      {
+        "name": "santos-quip-mcp-server__search_quip_documents",
+        "description": "Searches for Quip documents",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Quip document search query."
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "santos-slack-mcp-server__search",
+        "description": "Search Slack messages and files with advanced modifiers and filtering",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search query. May contains booleans, etc."
+            },
+            "page": {
+              "type": "number",
+              "default": 1,
+              "description": "Page number of results to return."
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "santos-slack-mcp-server__batch_get_conversation_history",
+        "description": "Get conversation history for multiple Slack channels with date filtering",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "channels": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "channelId": {
+                    "type": "string",
+                    "description": "Slack Channel ID"
+                  },
+                  "cursor": {
+                    "type": "string",
+                    "description": "Pagination cursor for this channel"
+                  },
+                  "limit": {
+                    "type": "number",
+                    "description": "Number of messages to return for this channel, between 1-1000. Default is 100."
+                  },
+                  "oldest": {
+                    "type": "string",
+                    "description": "Start timestamp for fetching messages. Can be ISO 8601 date string (e.g., \"2023-01-01T00:00:00Z\")."
+                  },
+                  "latest": {
+                    "type": "string",
+                    "description": "End timestamp for fetching messages. Can be ISO 8601 date string (e.g., \"2023-01-31T23:59:59Z\")."
+                  }
+                },
+                "required": [
+                  "channelId"
+                ],
+                "additionalProperties": false
+              },
+              "description": "List of channels to fetch history for"
+            }
+          },
+          "required": [
+            "channels"
+          ]
+        }
+      },
+      {
+        "name": "santos-slack-mcp-server__batch_get_thread_replies",
+        "description": "Get thread replies for multiple Slack threads in single request",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "threads": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "channelId": {
+                    "type": "string",
+                    "description": "Slack Channel ID"
+                  },
+                  "threadTs": {
+                    "type": "string",
+                    "description": "Timestamp of the parent message to get replies for"
+                  },
+                  "cursor": {
+                    "type": "string",
+                    "description": "Pagination cursor for this thread"
+                  }
+                },
+                "required": [
+                  "channelId",
+                  "threadTs"
+                ],
+                "additionalProperties": false
+              },
+              "description": "List of threads to fetch replies for"
+            }
+          },
+          "required": [
+            "threads"
+          ]
+        }
+      },
+      {
+        "name": "santos-slack-mcp-server__get_channel_sections",
+        "description": "Get Slack channel sections and their associated channels",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "santos-slack-mcp-server__batch_get_user_info",
+        "description": "Get information for multiple Slack users (name, email, etc.)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "users": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Slack User ID to get information about"
+              },
+              "minItems": 1,
+              "description": "List of user IDs to fetch their display name, real name, email, etc."
+            }
+          },
+          "required": [
+            "users"
+          ]
+        }
+      },
+      {
+        "name": "santos-slack-mcp-server__post_message",
+        "description": "Post messages to Slack channels with thread support",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "channelId": {
+              "type": "string",
+              "description": "Slack Channel ID to post the message to"
+            },
+            "text": {
+              "type": "string",
+              "description": "The message text to post (support basic markdown syntax)"
+            },
+            "threadTs": {
+              "type": "string",
+              "description": "Timestamp of parent message to reply to (for threaded replies)"
+            },
+            "asUser": {
+              "type": "boolean",
+              "description": "Post as the authenticated user (default: false)"
+            }
+          },
+          "required": [
+            "channelId",
+            "text"
+          ]
+        }
+      },
+      {
+        "name": "santos-slack-mcp-server__get_reactions",
+        "description": "List reactions made by user with pagination",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "user": {
+              "type": "string",
+              "description": "Show reactions made by this user. Defaults to the authed user."
+            },
+            "count": {
+              "type": "number",
+              "description": "Number of items to return per page (default: 100, max: 1000)"
+            },
+            "page": {
+              "type": "number",
+              "description": "Page number of results to return (default: 1)"
+            },
+            "cursor": {
+              "type": "string",
+              "description": "Pagination cursor for next page"
+            },
+            "limit": {
+              "type": "number",
+              "description": "The maximum number of items to return (default: 100, max: 1000)"
+            }
+          }
+        }
+      },
+      {
+        "name": "santos-slack-mcp-server__add_reaction",
+        "description": "Add emoji reactions to Slack messages",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "channelId": {
+              "type": "string",
+              "description": "Slack Channel ID where the message is located"
+            },
+            "timestamp": {
+              "type": "string",
+              "description": "Timestamp of the message to add reaction to"
+            },
+            "name": {
+              "type": "string",
+              "description": "Emoji name without colons (e.g., \"thumbsup\", \"green\", \"eyes\")"
+            }
+          },
+          "required": [
+            "channelId",
+            "timestamp",
+            "name"
+          ]
+        }
+      },
+      {
+        "name": "santos-slack-mcp-server__download_file_content",
+        "description": "Download Slack file content including canvas documents with metadata",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string",
+              "description": "File ID (canvas IDs like F0166DCSTS7 work for downloading canvas content and metadata)"
+            }
+          },
+          "required": [
+            "file"
+          ]
+        }
+      },
+      {
+        "name": "santos-slack-mcp-server__get_file_download_url",
+        "description": "Get downloadable URL for Slack files without downloading content",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string",
+              "description": "File ID to get download URL for"
+            }
+          },
+          "required": [
+            "file"
+          ]
+        }
+      },
+      {
+        "name": "santos-slack-mcp-server__download_file",
+        "description": "Download Slack files with authentication to local directory",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string",
+              "description": "File ID to download"
+            },
+            "destination": {
+              "type": "string",
+              "description": "Local directory path where the file should be saved"
+            }
+          },
+          "required": [
+            "file",
+            "destination"
+          ]
+        }
+      }
+    ]
+  },
+  "jsonrpc": "2.0",
+  "id": 2
+}
+
+✅ SUCCESS: Got 22 tools
+
+Tool names:
+  - mcp-compression-proxy__create_session
+  - mcp-compression-proxy__delete_session
+  - mcp-compression-proxy__set_session
+  - mcp-compression-proxy__clear_compressed_tools_cache
+  - mcp-compression-proxy__get_uncompressed_tools
+  - mcp-compression-proxy__cache_compressed_tools
+  - mcp-compression-proxy__expand_tool
+  - mcp-compression-proxy__collapse_tool
+  - local-skills__get_skill
+  - santos-quip-mcp-server__get_quip_documents
+  - santos-quip-mcp-server__search_quip_documents
+  - santos-slack-mcp-server__search
+  - santos-slack-mcp-server__batch_get_conversation_history
+  - santos-slack-mcp-server__batch_get_thread_replies
+  - santos-slack-mcp-server__get_channel_sections
+  - santos-slack-mcp-server__batch_get_user_info
+  - santos-slack-mcp-server__post_message
+  - santos-slack-mcp-server__get_reactions
+  - santos-slack-mcp-server__add_reaction
+  - santos-slack-mcp-server__download_file_content
+  - santos-slack-mcp-server__get_file_download_url
+  - santos-slack-mcp-server__download_file

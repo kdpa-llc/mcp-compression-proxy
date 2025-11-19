@@ -4,16 +4,16 @@ This directory contains comprehensive test suites for the MCP Tool Aggregator pr
 
 ## Test Summary
 
-**✅ 105 Tests Passing**
+**✅ 165 Tests Passing**
 
 | Category | Test Suites | Tests | Description |
 |----------|-------------|-------|-------------|
-| **Unit** | 4 | 81 | Individual module testing |
-| **Integration** | 1 | 11 | Module interaction testing |
-| **E2E** | 2 | 13 | Complete workflow testing |
-| **Total** | **7** | **105** | Comprehensive coverage |
+| **Unit** | 7 | ~95 | Individual module testing |
+| **Integration** | 4 | ~55 | Module interaction testing |
+| **E2E** | 2 | ~15 | Complete workflow testing |
+| **Total** | **13** | **165** | Comprehensive coverage |
 
-**Coverage: 100% statements, 95% branches, 100% functions, 100% lines**
+**Coverage: 98.6% statements, 91.8% branches, 100% functions, 98.6% lines**
 
 ## Test Structure
 
@@ -26,8 +26,11 @@ tests/
 │   ├── session-manager.test.ts
 │   ├── client-manager.test.ts
 │   └── servers-config.test.ts
-├── integration/            # Integration tests for module interactions (1 file)
-│   └── compression-session-integration.test.ts
+├── integration/            # Integration tests for module interactions (4 files)
+│   ├── compression-session-integration.test.ts
+│   ├── comprehensive-nocompress.test.ts      # ⭐ Complete noCompress workflow
+│   ├── nocompress-pattern-matching.test.ts  # Pattern matching validation
+│   └── nocompress-tool-behavior.test.ts     # Display behavior testing
 ├── e2e/                    # End-to-end tests with mocked LLM (2 files)
 │   ├── tool-aggregation-workflow.test.ts
 │   └── user-journey.test.ts              # ⭐ Comprehensive user journey

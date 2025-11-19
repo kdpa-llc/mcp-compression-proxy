@@ -167,6 +167,18 @@
 
 ---
 
+### 15. **Tool Filtering - noCompress Patterns**
+**Description:** Tools matching noCompressTools patterns display original descriptions while being cached compressed for efficiency
+
+**Test Coverage:**
+- ✅ Integration: `comprehensive-nocompress.test.ts` - End-to-end noCompress workflow verification
+- ✅ Integration: `nocompress-pattern-matching.test.ts` - Wildcard pattern matching validation
+- ✅ Integration: `nocompress-tool-behavior.test.ts` - Display behavior and caching logic testing
+
+**Status:** ✅ Fully Covered
+
+---
+
 ## Test Coverage Summary
 
 | Feature | Unit | Integration | E2E | Status |
@@ -185,31 +197,9 @@
 | Management Tools | ✅ | - | ⚠️ | ⚠️ Needs API E2E |
 | Statistics/Monitoring | ✅ | ✅ | ✅ | ✅ Complete |
 | Server Health Reporting | ✅ | - | - | ✅ Complete |
+| Tool Filtering - noCompress | - | ✅ | ✅ | ✅ Complete |
 
 ## Identified Gaps
-
-### 🔴 Critical Gap: Comprehensive User Journey E2E Test
-
-**Missing Test:** A realistic end-to-end test that simulates a complete user workflow across multiple sessions
-
-**Required Test Scenario:**
-1. Initial state - tools not compressed
-2. User calls `compress_tools` management tool
-3. User compresses descriptions and calls `save_compressed_tools`
-4. Verify tools are now compressed
-5. User creates session 1
-6. User expands specific tool in session 1
-7. Verify tool shows full description in session 1
-8. Session 1 ends
-9. User creates session 2 (new conversation)
-10. Verify tools are still compressed (persistence)
-11. Verify previously expanded tool is compressed in session 2 (isolation)
-12. User expands different tool in session 2
-13. Verify session 2 expansion doesn't affect other sessions
-
-**Impact:** This test would validate the core user experience and multi-session behavior
-
----
 
 ### 🟡 Minor Gap: Management Tools Integration Test
 
@@ -229,6 +219,6 @@
 
 ## Recommendations
 
-1. **High Priority:** Implement comprehensive user journey E2E test
-2. **Medium Priority:** Add management tools integration test
-3. **Low Priority:** Consider adding performance benchmarks for compression ratios
+1. **Medium Priority:** Add management tools integration test
+2. **Low Priority:** Consider adding performance benchmarks for compression ratios
+3. **Maintenance:** Address test teardown warnings in integration tests

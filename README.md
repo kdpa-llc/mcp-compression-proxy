@@ -207,8 +207,9 @@ Restart your MCP client (e.g., Claude Desktop) to load the new configuration. Th
 | `create_session` | Create a new session for independent tool expansion |
 | `set_session` | Set the active session |
 | `delete_session` | Delete a session |
-| `compress_tools` | Get tools for compression |
-| `save_compressed_tools` | Save compressed descriptions to cache |
+| `clear_compressed_tools_cache` | Clear all cached compressed tool descriptions |
+| `get_uncompressed_tools` | Get tools that need compression (batch processing) |
+| `cache_compressed_tools` | Save compressed descriptions to cache (batch processing) |
 | `expand_tool` | Expand a tool to show full description (session-specific) |
 | `collapse_tool` | Collapse tool back to compressed description |
 
@@ -234,12 +235,12 @@ AI: I have access to these tools:
 Ask your AI assistant to compress the descriptions:
 
 ```
-User: Compress the tool descriptions to save context
+User: Use the mcp-compression-proxy tools to compress tool descriptions and save model context
 
 AI: I'll compress the tool descriptions:
-1. Getting all tools via compress_tools...
+1. Getting all tools via get_uncompressed_tools...
 2. Compressing descriptions intelligently...
-3. Saving compressed versions via save_compressed_tools...
+3. Saving compressed versions via cache_compressed_tools...
 
 Done! Tool descriptions are now compressed and saved to cache.
 ```

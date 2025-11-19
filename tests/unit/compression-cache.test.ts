@@ -250,8 +250,8 @@ describe('CompressionCache', () => {
     });
   });
 
-  describe('noCompress patterns', () => {
-    it('should not save compressed description for tools matching noCompress pattern', () => {
+  describe('noCompress patterns (display-only bypass)', () => {
+    it('should still save compressed description for tools matching noCompress pattern', () => {
       cache.setNoCompressPatterns(['filesystem__*']);
 
       const serverName = 'filesystem';
@@ -261,7 +261,10 @@ describe('CompressionCache', () => {
 
       cache.saveCompressed(serverName, toolName, compressed, original);
 
-      expect(cache.hasCompressed(serverName, toolName)).toBe(false);
+      // Tool should be cached even with noCompress pattern
+      expect(cache.hasCompressed(serverName, toolName)).toBe(true);
+      expect(cache.getCompressedDescription(serverName, toolName)).toBe(compressed);
+      expect(cache.getOriginalDescription(serverName, toolName)).toBe(original);
     });
 
     it('should always return original description for noCompress tools', () => {
@@ -276,25 +279,29 @@ describe('CompressionCache', () => {
       expect(result).toBe(original);
     });
 
-    it('should bypass compression for wildcard patterns', () => {
+    it('should cache all tools regardless of noCompress patterns', () => {
       cache.setNoCompressPatterns(['*__delete*']);
 
       cache.saveCompressed('filesystem', 'delete_file', 'compressed', 'original');
       cache.saveCompressed('github', 'delete_repo', 'compressed', 'original');
 
-      expect(cache.hasCompressed('filesystem', 'delete_file')).toBe(false);
-      expect(cache.hasCompressed('github', 'delete_repo')).toBe(false);
+      // Both tools should be cached now
+      expect(cache.hasCompressed('filesystem', 'delete_file')).toBe(true);
+      expect(cache.hasCompressed('github', 'delete_repo')).toBe(true);
     });
 
-    it('should allow compression for tools not matching noCompress pattern', () => {
+    it('should allow compression for all tools including those matching noCompress pattern', () => {
       cache.setNoCompressPatterns(['filesystem__*']);
 
-      cache.saveCompressed('github', 'create_issue', 'compressed', 'original');
+      cache.saveCompressed('filesystem', 'read_file', 'compressed1', 'original1');
+      cache.saveCompressed('github', 'create_issue', 'compressed2', 'original2');
 
+      // Both should be cached now
+      expect(cache.hasCompressed('filesystem', 'read_file')).toBe(true);
       expect(cache.hasCompressed('github', 'create_issue')).toBe(true);
     });
 
-    it('should respect noCompress patterns even when expanded in session', () => {
+    it('should respect noCompress patterns for display even when expanded in session', () => {
       cache.setNoCompressPatterns(['filesystem__*']);
 
       const serverName = 'filesystem';
@@ -307,7 +314,7 @@ describe('CompressionCache', () => {
       expect(result).toBe(original);
     });
 
-    it('should handle multiple noCompress patterns', () => {
+    it('should cache all tools but display originals for matching patterns', () => {
       cache.setNoCompressPatterns(['filesystem__*', 'github__delete*', '*__experimental*']);
 
       cache.saveCompressed('filesystem', 'read_file', 'c1', 'o1');
@@ -315,10 +322,17 @@ describe('CompressionCache', () => {
       cache.saveCompressed('server', 'experimental_feature', 'c3', 'o3');
       cache.saveCompressed('github', 'create_issue', 'c4', 'o4');
 
-      expect(cache.hasCompressed('filesystem', 'read_file')).toBe(false);
-      expect(cache.hasCompressed('github', 'delete_repo')).toBe(false);
-      expect(cache.hasCompressed('server', 'experimental_feature')).toBe(false);
-      expect(cache.hasCompressed('github', 'create_issue')).toBe(true); // Not matching pattern
+      // All should be cached now
+      expect(cache.hasCompressed('filesystem', 'read_file')).toBe(true);
+      expect(cache.hasCompressed('github', 'delete_repo')).toBe(true);
+      expect(cache.hasCompressed('server', 'experimental_feature')).toBe(true);
+      expect(cache.hasCompressed('github', 'create_issue')).toBe(true);
+
+      // But display behavior should respect patterns
+      expect(cache.getDescription('filesystem', 'read_file', 'o1', false)).toBe('o1');
+      expect(cache.getDescription('github', 'delete_repo', 'o2', false)).toBe('o2');
+      expect(cache.getDescription('server', 'experimental_feature', 'o3', false)).toBe('o3');
+      expect(cache.getDescription('github', 'create_issue', 'o4', false)).toBe('c4'); // Should use compressed
     });
 
     it('should be case insensitive for noCompress patterns', () => {
@@ -326,7 +340,10 @@ describe('CompressionCache', () => {
 
       cache.saveCompressed('filesystem', 'read_file', 'compressed', 'original');
 
-      expect(cache.hasCompressed('filesystem', 'read_file')).toBe(false);
+      // Should be cached
+      expect(cache.hasCompressed('filesystem', 'read_file')).toBe(true);
+      // But should display original
+      expect(cache.getDescription('filesystem', 'read_file', 'original', false)).toBe('original');
     });
   });
 
