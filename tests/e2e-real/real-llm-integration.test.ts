@@ -93,54 +93,39 @@ describe('Real LLM E2E Integration', () => {
     console.log(`   Found ${initialTools.tools.length} tools`);
     expect(initialTools.tools.length).toBeGreaterThan(0);
 
-    // Step 2: Call compress_tools management tool
-    console.log('\n🗜️  PHASE 2: Call mcp-compression-proxy__compress_tools');
-    const compressResult = await mcpClient.callTool({
-      name: 'mcp-compression-proxy__compress_tools',
-      arguments: {},
+    // Step 2: Get uncompressed tools using new batch API
+    console.log('\n🗜️  PHASE 2: Call mcp-compression-proxy__get_uncompressed_tools');
+    const getResult = await mcpClient.callTool({
+      name: 'mcp-compression-proxy__get_uncompressed_tools',
+      arguments: { limit: 100 },
     });
 
-    expect(compressResult.content).toBeDefined();
-    expect(Array.isArray(compressResult.content)).toBe(true);
-    const content = compressResult.content as Array<{ type: string; text: string }>;
+    expect(getResult.content).toBeDefined();
+    expect(Array.isArray(getResult.content)).toBe(true);
+    const content = getResult.content as Array<{ type: string; text: string }>;
     expect(content[0].type).toBe('text');
 
     const responseText = content[0].text;
     console.log(`   Response preview: ${responseText.substring(0, 100)}...`);
 
-    // Extract tools from response
-    // Use greedy match to get the full JSON array
-    const jsonMatch = responseText.match(/\[([\s\S]*)\]/);
-    expect(jsonMatch).toBeTruthy();
-
-    let toolsToCompress;
-    try {
-      toolsToCompress = JSON.parse(jsonMatch![0]);
-    } catch (error) {
-      // If direct parsing fails, try to find valid JSON by working backwards
-      const jsonStr = jsonMatch![0];
-      let parsed = false;
-
-      for (let i = jsonStr.length - 1; i >= 0 && !parsed; i--) {
-        if (jsonStr[i] === ']') {
-          try {
-            const candidate = jsonStr.substring(0, i + 1);
-            toolsToCompress = JSON.parse(candidate);
-            console.log(`   Warning: Had to truncate response to parse valid JSON`);
-            parsed = true;
-          } catch {
-            continue;
-          }
-        }
-      }
-
-      if (!parsed) {
-        console.error(`   Full response: ${responseText}`);
-        throw error;
-      }
+    // Check if there are tools to compress
+    const countMatch = responseText.match(/Found (\d+) tools without compressed descriptions/);
+    if (!countMatch || parseInt(countMatch[1]) === 0) {
+      console.log('   ⏭️  Skipping test - all tools already compressed');
+      return;
     }
 
-    console.log(`   Extracted ${toolsToCompress.length} tools to compress`);
+    // Extract file path from response
+    const fileMatch = responseText.match(/Wrote \d+ tools to file: (.+)/);
+    expect(fileMatch).toBeTruthy();
+    const filePath = fileMatch![1];
+    console.log(`   Tools written to: ${filePath}`);
+
+    // Read the file to get tools
+    const fs = await import('fs/promises');
+    const fileContent = await fs.readFile(filePath, 'utf-8');
+    const toolsToCompress = JSON.parse(fileContent);
+    console.log(`   Read ${toolsToCompress.length} tools from file`);
 
     // Step 3: Use real LLM to compress descriptions
     console.log('\n🤖 PHASE 3: Real LLM compression');
@@ -196,20 +181,20 @@ describe('Real LLM E2E Integration', () => {
       expect(avgCompressionRatio).toBeGreaterThan(0);
     }
 
-    // Step 4: Save compressed descriptions via MCP
-    console.log('\n💾 PHASE 4: Save compressed descriptions');
-    const saveResult = await mcpClient.callTool({
-      name: 'mcp-compression-proxy__save_compressed_tools',
+    // Step 4: Cache compressed descriptions via MCP
+    console.log('\n💾 PHASE 4: Cache compressed descriptions');
+    const cacheResult = await mcpClient.callTool({
+      name: 'mcp-compression-proxy__cache_compressed_tools',
       arguments: {
         descriptions: compressed,
       },
     });
 
-    const saveContent = saveResult.content as Array<{ type: string; text: string }>;
-    expect(saveContent[0].type).toBe('text');
-    const saveText = saveContent[0].text;
-    console.log(`   ${saveText}`);
-    expect(saveText).toContain('Saved');
+    const cacheContent = cacheResult.content as Array<{ type: string; text: string }>;
+    expect(cacheContent[0].type).toBe('text');
+    const cacheText = cacheContent[0].text;
+    console.log(`   ${cacheText}`);
+    expect(cacheText).toContain('Cached');
 
     // Step 5: Verify tools now use compressed descriptions
     console.log('\n✅ PHASE 5: Verify compression is active');
@@ -249,47 +234,32 @@ describe('Real LLM E2E Integration', () => {
 
     console.log('\n🔓 Testing session-based tool expansion');
 
-    // First, we need to compress some tools
+    // First, we need to get tools to compress
     console.log('   Setting up compression...');
-    const compressResult = await mcpClient.callTool({
-      name: 'mcp-compression-proxy__compress_tools',
-      arguments: {},
+    const getResult = await mcpClient.callTool({
+      name: 'mcp-compression-proxy__get_uncompressed_tools',
+      arguments: { limit: 100 },
     });
 
-    const compressContent = compressResult.content as Array<{ type: string; text: string }>;
-    const responseText = compressContent[0].text;
-    const jsonMatch = responseText.match(/\[([\s\S]*)\]/);
+    const getContent = getResult.content as Array<{ type: string; text: string }>;
+    const responseText = getContent[0].text;
+    const fileMatch = responseText.match(/Wrote \d+ tools to file: (.+)/);
 
-    if (!jsonMatch) {
+    if (!fileMatch) {
       console.log('   ⚠️  Skipping expansion test - no tools to compress');
       return;
     }
 
+    // Read tools from file
+    const fs = await import('fs/promises');
+    const filePath = fileMatch[1];
     let toolsToCompress;
     try {
-      toolsToCompress = JSON.parse(jsonMatch[0]);
+      const fileContent = await fs.readFile(filePath, 'utf-8');
+      toolsToCompress = JSON.parse(fileContent);
     } catch (error) {
-      // If direct parsing fails, try to find valid JSON by working backwards
-      const jsonStr = jsonMatch[0];
-      let parsed = false;
-
-      for (let i = jsonStr.length - 1; i >= 0 && !parsed; i--) {
-        if (jsonStr[i] === ']') {
-          try {
-            const candidate = jsonStr.substring(0, i + 1);
-            toolsToCompress = JSON.parse(candidate);
-            console.log(`   Warning: Had to truncate response to parse valid JSON`);
-            parsed = true;
-          } catch {
-            continue;
-          }
-        }
-      }
-
-      if (!parsed) {
-        console.log('   ⚠️  Skipping expansion test - failed to parse tools');
-        return;
-      }
+      console.log('   ⚠️  Skipping expansion test - failed to read tools file');
+      return;
     }
 
     // Compress with LLM (just compress one tool to save time)
@@ -304,9 +274,9 @@ describe('Real LLM E2E Integration', () => {
 
     const compressed = await ollamaClient.compressToolDescriptions([singleTool]);
 
-    // Save compressed description
+    // Cache compressed description
     await mcpClient.callTool({
-      name: 'mcp-compression-proxy__save_compressed_tools',
+      name: 'mcp-compression-proxy__cache_compressed_tools',
       arguments: {
         descriptions: compressed,
       },
@@ -364,30 +334,31 @@ describe('Real LLM E2E Integration', () => {
 
     console.log('\n📖 Testing LLM understanding of tool descriptions');
 
-    // Get compress_tools description
+    // Get get_uncompressed_tools description
     const tools = await mcpClient.listTools();
-    const compressTool = tools.tools.find(t => t.name === 'mcp-compression-proxy__compress_tools');
+    const getTool = tools.tools.find(t => t.name === 'mcp-compression-proxy__get_uncompressed_tools');
 
-    expect(compressTool).toBeDefined();
-    console.log(`   Tool: ${compressTool!.name}`);
-    console.log(`   Description: ${compressTool!.description}`);
+    expect(getTool).toBeDefined();
+    console.log(`   Tool: ${getTool!.name}`);
+    console.log(`   Description: ${getTool!.description}`);
 
     // Verify description contains key instructions
-    expect(compressTool!.description).toContain('compress');
-    expect(compressTool!.description).toContain('mcp-compression-proxy__save_compressed_tools');
+    expect(getTool!.description).toContain('compress');
+    expect(getTool!.description).toContain('mcp-compression-proxy__cache_compressed_tools');
 
     // Ask LLM to understand the workflow
     const llmUnderstanding = await ollamaClient.chat(
       'You are analyzing MCP tool descriptions. Extract the workflow steps.',
-      `Given this tool description:\n"${compressTool!.description}"\n\nWhat should a user do after calling this tool? Answer in one sentence.`
+      `Given this tool description:\n"${getTool!.description}"\n\nWhat should a user do after calling this tool? Answer in one sentence.`
     );
 
     console.log(`   LLM understanding: ${llmUnderstanding}`);
 
-    // LLM should understand it needs to compress and call save_compressed_tools
+    // LLM should understand it needs to compress and call cache_compressed_tools
     const understanding = llmUnderstanding.toLowerCase();
     expect(
       understanding.includes('compress') ||
+      understanding.includes('cache') ||
       understanding.includes('save')
     ).toBe(true);
 
