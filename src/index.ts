@@ -29,6 +29,7 @@ const logger = pino({
       colorize: false,
       translateTime: 'HH:MM:ss Z',
       ignore: 'pid,hostname',
+      destination: 2, // Forces output to stderr (FD 2) to keep stdout clean for MCP JSON-RPC
     },
   },
 });
