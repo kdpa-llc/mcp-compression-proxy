@@ -23,3 +23,22 @@ export interface SessionInfo {
   lastAccessedAt: string;
   expandedTools: string[];
 }
+
+export interface CacheMetrics {
+  totalCached: number;
+  totalOriginalChars: number;
+  totalCompressedChars: number;
+  missingOriginals: number;
+  latestCompressedAt?: string;
+  cacheSizeBytes: number;
+  perServer: Record<
+    string,
+    {
+      cached: number;
+      totalOriginalChars: number;
+      totalCompressedChars: number;
+      missingOriginals: number;
+      latestCompressedAt?: string;
+    }
+  >;
+}

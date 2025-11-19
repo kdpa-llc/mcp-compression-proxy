@@ -187,6 +187,27 @@ describe('CompressionCache', () => {
     });
   });
 
+  describe('getCacheMetrics', () => {
+    it('should compute metrics for cached entries', () => {
+      cache.saveCompressed('server1', 'tool1', 'compressed', 'original');
+      cache.saveCompressed('server1', 'tool2', 'compressed-two');
+      cache.saveCompressed('server2', 'tool3', 'c3', 'orig3');
+
+      const metrics = cache.getCacheMetrics();
+
+      expect(metrics.totalCached).toBe(3);
+      expect(metrics.totalCompressedChars).toBe(
+        'compressed'.length + 'compressed-two'.length + 'c3'.length
+      );
+      expect(metrics.totalOriginalChars).toBe('original'.length + 0 + 'orig3'.length);
+      expect(metrics.missingOriginals).toBe(1);
+      expect(metrics.perServer.server1.cached).toBe(2);
+      expect(metrics.perServer.server2.cached).toBe(1);
+      expect(metrics.cacheSizeBytes).toBeGreaterThan(0);
+      expect(metrics.latestCompressedAt).toBeDefined();
+    });
+  });
+
   describe('clear', () => {
     it('should clear all cached descriptions', () => {
       cache.saveCompressed('server1', 'tool1', 'compressed1');
