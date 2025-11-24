@@ -798,8 +798,6 @@ async function main() {
 
     // Initialize MCP clients (only enabled servers)
     const enabledServers = config.servers.filter(server => {
-      // Server is disabled if disabled=true, regardless of enabled field
-      if ((server as any).disabled === true) return false;
       // Server is enabled if enabled field is not explicitly false
       return server.enabled !== false;
     });

@@ -38,10 +38,6 @@ export const serverConfigSchema = {
             type: 'boolean',
             description: 'Whether the server is enabled',
           },
-          disabled: {
-            type: 'boolean',
-            description: 'Whether the server is disabled (legacy field)',
-          },
           timeout: {
             type: 'number',
             description: 'Server timeout in seconds',
@@ -93,7 +89,6 @@ export type ServerConfigJSON = {
     args?: string[];
     env?: Record<string, string>;
     enabled?: boolean;
-    disabled?: boolean;
     timeout?: number;
     type?: string;
     autoApprove?: string[];
