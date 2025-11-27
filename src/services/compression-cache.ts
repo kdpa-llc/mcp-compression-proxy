@@ -13,10 +13,19 @@ export class CompressionCache {
   private logger: Logger;
   private persistence: CompressionPersistence;
   private noCompressPatterns: string[] = [];
+  private fallbackBehavior: 'original' | 'blank' = 'original';
 
   constructor(logger: Logger, persistence?: CompressionPersistence) {
     this.logger = logger;
     this.persistence = persistence || new CompressionPersistence(logger);
+  }
+
+  /**
+   * Set fallback behavior for when no compressed description exists
+   */
+  setFallbackBehavior(behavior: 'original' | 'blank'): void {
+    this.fallbackBehavior = behavior;
+    this.logger.debug({ behavior }, 'Set compression fallback behavior');
   }
 
   /**
@@ -118,8 +127,13 @@ export class CompressionCache {
       return this.cache[key]?.original || originalDescription;
     }
 
-    // Otherwise use compressed if available, fallback to original
-    return this.cache[key]?.compressed || originalDescription;
+    // Otherwise use compressed if available, fallback to behavior
+    if (this.cache[key]?.compressed) {
+      return this.cache[key].compressed;
+    }
+
+    // No compressed description available - use fallback behavior
+    return this.fallbackBehavior === 'blank' ? '' : originalDescription;
   }
 
   /**

@@ -77,6 +77,12 @@ export const serverConfigSchema = {
       description: 'Default timeout in seconds for all servers (can be overridden per-server). Default is 30 seconds if not specified.',
       minimum: 1,
     },
+    compressionFallbackBehavior: {
+      type: 'string',
+      description: 'Behavior when no compressed description exists for a tool. "original" (default) shows the original description. "blank" shows an empty string.',
+      enum: ['original', 'blank'],
+      default: 'original',
+    },
   },
   required: ['mcpServers'],
   additionalProperties: false,
@@ -96,4 +102,5 @@ export type ServerConfigJSON = {
   excludeTools?: string[];
   noCompressTools?: string[];
   defaultTimeout?: number;
+  compressionFallbackBehavior?: 'original' | 'blank';
 };

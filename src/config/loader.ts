@@ -132,6 +132,7 @@ export type ConfigResult = {
   excludePatterns: string[];
   noCompressPatterns: string[];
   defaultTimeout?: number;
+  compressionFallbackBehavior: 'original' | 'blank';
 } | null;
 
 /**
@@ -146,6 +147,7 @@ export function loadJSONServers(): ConfigResult {
   let aggregatedExcludePatterns: string[] = [];
   let aggregatedNoCompressPatterns: string[] = [];
   let defaultTimeout: number | undefined;
+  let compressionFallbackBehavior: 'original' | 'blank' = 'original';
   let hasAnyConfig = false;
 
   // Step 1: Load user-level config
@@ -164,6 +166,9 @@ export function loadJSONServers(): ConfigResult {
     }
     if (userConfig.defaultTimeout) {
       defaultTimeout = userConfig.defaultTimeout;
+    }
+    if (userConfig.compressionFallbackBehavior) {
+      compressionFallbackBehavior = userConfig.compressionFallbackBehavior;
     }
   } else {
     console.error(`[Config] No user-level config found at: ${paths.user}`);
@@ -192,6 +197,11 @@ export function loadJSONServers(): ConfigResult {
     // Project-level defaultTimeout overrides user-level
     if (projectConfig.defaultTimeout) {
       defaultTimeout = projectConfig.defaultTimeout;
+    }
+
+    // Project-level compressionFallbackBehavior overrides user-level
+    if (projectConfig.compressionFallbackBehavior) {
+      compressionFallbackBehavior = projectConfig.compressionFallbackBehavior;
     }
   } else {
     console.error(`[Config] No project-level config found at: ${paths.project}`);
@@ -222,6 +232,11 @@ export function loadJSONServers(): ConfigResult {
     console.error(`[Config] Default timeout: ${defaultTimeout} seconds`);
   }
 
+  // Log fallback behavior
+  if (compressionFallbackBehavior !== 'original') {
+    console.error(`[Config] Compression fallback behavior: ${compressionFallbackBehavior}`);
+  }
+
   console.error(`[Config] Total servers after aggregation: ${aggregatedServers.length}`);
 
   return {
@@ -229,6 +244,7 @@ export function loadJSONServers(): ConfigResult {
     excludePatterns: aggregatedExcludePatterns,
     noCompressPatterns: aggregatedNoCompressPatterns,
     defaultTimeout,
+    compressionFallbackBehavior,
   };
 }
 

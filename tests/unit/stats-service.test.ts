@@ -73,6 +73,7 @@ describe('StatsService', () => {
       excludePatterns: ['serverA__skip_*'],
       noCompressPatterns: ['serverA__no_compress_*'],
       defaultTimeout: 30,
+      compressionFallbackBehavior: 'original' as const,
     });
 
     const service = new StatsService(
@@ -129,7 +130,12 @@ describe('StatsService', () => {
       mockClientManager,
       cache,
       sessionManager,
-      () => ({ servers: [], excludePatterns: [], noCompressPatterns: [] })
+      () => ({
+        servers: [],
+        excludePatterns: [],
+        noCompressPatterns: [],
+        compressionFallbackBehavior: 'original' as const
+      })
     );
 
     await expect(service.getStats({ serverName: 'missing' })).rejects.toThrow(
@@ -148,7 +154,12 @@ describe('StatsService', () => {
       mockClientManager,
       cache,
       sessionManager,
-      () => ({ servers: [], excludePatterns: [], noCompressPatterns: [] })
+      () => ({
+        servers: [],
+        excludePatterns: [],
+        noCompressPatterns: [],
+        compressionFallbackBehavior: 'original' as const
+      })
     );
 
     const stats = await service.getStats();
