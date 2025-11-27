@@ -796,6 +796,9 @@ async function main() {
     // Configure noCompress patterns
     compressionCache.setNoCompressPatterns(config.noCompressPatterns);
 
+    // Configure fallback behavior
+    compressionCache.setFallbackBehavior(config.compressionFallbackBehavior);
+
     // Initialize MCP clients (only enabled servers)
     const enabledServers = config.servers.filter(server => {
       // Server is enabled if enabled field is not explicitly false
