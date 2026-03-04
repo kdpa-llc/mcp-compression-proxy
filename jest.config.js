@@ -29,6 +29,8 @@ export default {
     'src/**/*.ts',
     '!src/**/*.d.ts',
     '!src/index.ts', // Main entry point, covered by e2e tests
+    '!src/cli/daemon.ts', // CLI daemon entry point (requires real filesystem/process)
+    '!src/cli/index.ts', // CLI entry point (requires running daemon process)
   ],
   coverageThreshold: {
     global: {
