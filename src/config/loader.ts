@@ -132,6 +132,11 @@ export type ConfigResult = {
   excludePatterns: string[];
   noCompressPatterns: string[];
   defaultTimeout?: number;
+  cli?: {
+    payloadThreshold?: number;
+    autoStartDaemon?: boolean;
+    daemonLogLevel?: string;
+  };
 } | null;
 
 /**
@@ -146,6 +151,7 @@ export function loadJSONServers(): ConfigResult {
   let aggregatedExcludePatterns: string[] = [];
   let aggregatedNoCompressPatterns: string[] = [];
   let defaultTimeout: number | undefined;
+  let cliConfig: { payloadThreshold?: number; autoStartDaemon?: boolean; daemonLogLevel?: string } | undefined;
   let hasAnyConfig = false;
 
   // Step 1: Load user-level config
@@ -164,6 +170,9 @@ export function loadJSONServers(): ConfigResult {
     }
     if (userConfig.defaultTimeout) {
       defaultTimeout = userConfig.defaultTimeout;
+    }
+    if (userConfig.cli) {
+      cliConfig = { ...userConfig.cli };
     }
   } else {
     console.error(`[Config] No user-level config found at: ${paths.user}`);
@@ -192,6 +201,11 @@ export function loadJSONServers(): ConfigResult {
     // Project-level defaultTimeout overrides user-level
     if (projectConfig.defaultTimeout) {
       defaultTimeout = projectConfig.defaultTimeout;
+    }
+
+    // Project-level CLI config overrides user-level
+    if (projectConfig.cli) {
+      cliConfig = { ...cliConfig, ...projectConfig.cli };
     }
   } else {
     console.error(`[Config] No project-level config found at: ${paths.project}`);
@@ -229,6 +243,7 @@ export function loadJSONServers(): ConfigResult {
     excludePatterns: aggregatedExcludePatterns,
     noCompressPatterns: aggregatedNoCompressPatterns,
     defaultTimeout,
+    cli: cliConfig,
   };
 }
 
@@ -238,4 +253,18 @@ export function loadJSONServers(): ConfigResult {
  */
 export function getConfigPath(): string {
   return join(homedir(), '.mcp-compression-proxy', 'servers.json');
+}
+
+/**
+ * Get the daemon Unix socket path
+ */
+export function getSocketPath(): string {
+  return join(homedir(), '.mcp-compression-proxy', 'daemon.sock');
+}
+
+/**
+ * Get the daemon PID file path
+ */
+export function getPidFilePath(): string {
+  return join(homedir(), '.mcp-compression-proxy', 'daemon.pid');
 }

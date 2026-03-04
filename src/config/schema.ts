@@ -77,6 +77,30 @@ export const serverConfigSchema = {
       description: 'Default timeout in seconds for all servers (can be overridden per-server). Default is 30 seconds if not specified.',
       minimum: 1,
     },
+    cli: {
+      type: 'object',
+      description: 'CLI (mcp-cli) configuration for lazy-loading mode',
+      properties: {
+        payloadThreshold: {
+          type: 'number',
+          description: 'Character threshold for redirecting large tool outputs to temp files. Default: 500.',
+          minimum: 0,
+          default: 500,
+        },
+        autoStartDaemon: {
+          type: 'boolean',
+          description: 'Auto-start daemon when running CLI commands. Default: true.',
+          default: true,
+        },
+        daemonLogLevel: {
+          type: 'string',
+          description: 'Log level for the daemon process. Default: "info".',
+          enum: ['debug', 'info', 'warn', 'error'],
+          default: 'info',
+        },
+      },
+      additionalProperties: false,
+    },
   },
   required: ['mcpServers'],
   additionalProperties: false,
@@ -96,4 +120,9 @@ export type ServerConfigJSON = {
   excludeTools?: string[];
   noCompressTools?: string[];
   defaultTimeout?: number;
+  cli?: {
+    payloadThreshold?: number;
+    autoStartDaemon?: boolean;
+    daemonLogLevel?: string;
+  };
 };

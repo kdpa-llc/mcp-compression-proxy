@@ -22,5 +22,10 @@
   ],
   "noCompressTools": [
     "filesystem__*"
-  ]
+  ],
+  "cli": {
+    "payloadThreshold": 500,
+    "autoStartDaemon": true,
+    "daemonLogLevel": "info"
+  }
 }

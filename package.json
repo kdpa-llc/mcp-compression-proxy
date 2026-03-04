@@ -20,11 +20,14 @@
     "test:e2e:real-llm": "npm run build && npm run build:test-servers && jest tests/e2e-real --testTimeout=120000 --testPathIgnorePatterns='/node_modules/'",
     "docker:e2e": "docker-compose -f docker-compose.e2e.yml up --abort-on-container-exit",
     "migrate-config": "tsx scripts/migrate-config.ts",
+    "cli:start": "node dist/cli/index.js daemon start",
+    "cli:stop": "node dist/cli/index.js daemon stop",
     "prepare": "husky || true",
     "prepublishOnly": "npm run build && npm test"
   },
   "bin": {
-    "mcp-compression-proxy": "./dist/index.js"
+    "mcp-compression-proxy": "./dist/index.js",
+    "mcp-cli": "./dist/cli/index.js"
   },
   "files": [
     "dist/**/*.js",
