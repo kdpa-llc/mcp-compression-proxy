@@ -194,12 +194,32 @@ Restart your MCP client (e.g., Claude Desktop) to load the new configuration. Th
 | `clear_compressed_tools_cache` | Clear all cached compressed tool descriptions |
 | `get_uncompressed_tools` | Get tools that need compression (batch processing) |
 | `cache_compressed_tools` | Save compressed descriptions to cache (batch processing) |
+| `compress_via_sampling` | Compress automatically using the client's own LLM (requires sampling support) |
 | `expand_tool` | Expand a tool to show full description (session-specific) |
 | `collapse_tool` | Collapse tool back to compressed description |
 | `stats` | Return JSON summary of coverage, cache health, sessions, and per-server tool counts |
 
 Use `stats` from your client (e.g., `mcp-compression-proxy__stats`) to sanity-check coverage. Optional inputs: `serverName` to scope to one backend and `detailLevel` (`summary` or `full`, default `summary`). The response includes coverage %, estimated token savings, cache state, active sessions, and per-server tool counts (respecting your exclude patterns).
-| `stats` | Return JSON summary of coverage, cache health, sessions, and per-server tool counts |
+
+#### Automatic Compression (MCP Sampling)
+
+If your client supports [MCP sampling][mcp-sampling], the proxy can compress
+descriptions by borrowing the client's own LLM — no API key, no second model
+to configure, and no work for you beyond one tool call:
+
+```
+mcp-compression-proxy__compress_via_sampling
+```
+
+It reads the uncompressed tools, asks the host to rewrite them, caches the
+results, and reports before/after coverage. Call it again for the next batch
+until nothing remains. Batches are sent one at a time, since a host may ask
+you to approve each request.
+
+Support varies by client — Cursor implements sampling; Claude Desktop and
+Cline did not at the time of writing. On a client without it the tool returns
+an error pointing at the manual `get_uncompressed_tools` →
+`cache_compressed_tools` flow, which works everywhere.
 
 ### Workflow Example
 
@@ -772,6 +792,7 @@ Made with ❤️ by KDPA
 [nodejs]: https://nodejs.org/
 [mcp-badge]: https://img.shields.io/badge/MCP-Compatible-purple.svg
 [mcp-protocol]: https://modelcontextprotocol.io/
+[mcp-sampling]: https://modelcontextprotocol.io/docs/concepts/sampling
 
 <!-- CI/CD Badges -->
 
