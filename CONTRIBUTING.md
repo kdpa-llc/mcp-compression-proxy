@@ -142,13 +142,18 @@ BREAKING CHANGE: Sessions now require explicit creation
 mcp-compression-proxy/
 ├── src/
 │   ├── index.ts                    # MCP server entry point
+│   ├── version.ts                  # Version advertised over MCP
+│   ├── cli/                        # mcp-cli daemon and client
 │   ├── mcp/
 │   │   └── client-manager.ts      # MCP client management
 │   ├── services/
 │   │   ├── compression-cache.ts   # Compression storage
-│   │   └── session-manager.ts     # Session handling
+│   │   ├── compression-persistence.ts # On-disk cache
+│   │   ├── session-manager.ts     # Session handling
+│   │   └── stats-service.ts       # Coverage and savings stats
 │   ├── config/
-│   │   └── servers.ts             # Server configuration
+│   │   ├── loader.ts              # Config loading and env expansion
+│   │   └── schema.ts              # JSON schema for servers.json
 │   └── types/                     # TypeScript types
 ├── tests/
 │   ├── unit/                      # Unit tests

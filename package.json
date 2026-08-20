@@ -26,7 +26,6 @@
     "test:e2e": "jest --testPathPattern=e2e",
     "test:e2e:real-llm": "npm run build && npm run build:test-servers && jest tests/e2e-real --testTimeout=120000 --testPathIgnorePatterns='/node_modules/'",
     "docker:e2e": "docker-compose -f docker-compose.e2e.yml up --abort-on-container-exit",
-    "migrate-config": "tsx scripts/migrate-config.ts",
     "cli:start": "node dist/cli/index.js daemon start",
     "cli:stop": "node dist/cli/index.js daemon stop",
     "sync-version": "node scripts/sync-version.mjs",
@@ -105,6 +104,6 @@
     "typescript-eslint": "^8.67.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.0.0"
   }
 }

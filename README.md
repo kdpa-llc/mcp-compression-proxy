@@ -75,7 +75,7 @@ Instead of connecting to multiple MCP servers separately and consuming thousands
 
 ### Prerequisites
 
-- **Node.js 18+** installed on your system
+- **Node.js 22+** installed on your system
 - An **MCP-compatible client** (Claude Desktop, Cline, Continue.dev, etc.)
 
 ### 1. Install
@@ -166,24 +166,6 @@ Create a JSON configuration file to define which MCP servers to aggregate:
 ```
 
 > **Note:** No rebuild needed! Just edit the JSON file and restart your MCP client.
-
-#### Migration from TypeScript Config (if upgrading)
-
-If you're upgrading from a previous version that used TypeScript configuration:
-
-```bash
-# Migrate to user-level config
-npm run migrate-config
-
-# Or migrate to project-level config
-npm run migrate-config ./servers.json
-```
-
-The migration script will:
-1. Read your TypeScript configuration
-2. Convert it to JSON format
-3. Save it to the specified location
-4. Warn if config already exists (prevents accidental overwrites)
 
 ### 4. Restart Your MCP Client
 
@@ -727,7 +709,7 @@ Made with ❤️ by KDPA
 [npm-types-badge]: https://img.shields.io/npm/types/mcp-compression-proxy
 [license-badge]: https://img.shields.io/badge/License-MIT-yellow.svg
 [license]: https://opensource.org/licenses/MIT
-[node-badge]: https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg
+[node-badge]: https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen.svg
 [nodejs]: https://nodejs.org/
 [mcp-badge]: https://img.shields.io/badge/MCP-Compatible-purple.svg
 [mcp-protocol]: https://modelcontextprotocol.io/
