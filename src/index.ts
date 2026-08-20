@@ -488,19 +488,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       inputFile?: string;
     };
 
-    // Validate that exactly one parameter is provided
-    if (!descriptions && !inputFile) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: 'Error: Must provide either descriptions array or inputFile path.',
-          },
-        ],
-        isError: true,
-      };
-    }
-
+    // Validate that exactly one parameter is provided. The "neither" case is
+    // handled by the final else below, which lets the compiler narrow
+    // `descriptions` instead of needing a non-null assertion.
     if (descriptions && inputFile) {
       return {
         content: [
@@ -513,8 +503,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
-    // Assigned by both branches below; no initializer, or the empty array is
-    // dead on every path.
+    // Assigned by every branch below; an initializer would be dead on all of
+    // them.
     let toolsToCache: Array<{
       serverName: string;
       toolName: string;
@@ -553,9 +543,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           isError: true,
         };
       }
+    } else if (descriptions) {
+      toolsToCache = descriptions;
     } else {
-      // Use descriptions parameter
-      toolsToCache = descriptions!;
+      return {
+        content: [
+          {
+            type: 'text',
+            text: 'Error: Must provide either descriptions array or inputFile path.',
+          },
+        ],
+        isError: true,
+      };
     }
 
     if (toolsToCache.length > 100) {

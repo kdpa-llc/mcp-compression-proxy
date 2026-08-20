@@ -15,7 +15,7 @@ describe('E2E: Tool Aggregation Workflow', () => {
   let logger: Logger;
 
   beforeEach(() => {
-    logger = getMockLogger() as unknown as Logger;
+    logger = getMockLogger();
     compressionCache = new CompressionCache(logger);
     sessionManager = new SessionManager(logger);
   });

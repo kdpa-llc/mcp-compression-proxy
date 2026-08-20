@@ -1,4 +1,5 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import type { Logger } from 'pino';
 
 /**
  * Mock MCP Client for testing
@@ -190,17 +191,23 @@ export function createFailingMockClient(): MockMCPClient {
 }
 
 /**
- * Get mock logger for testing
+ * Get mock logger for testing.
+ *
+ * Returns a real `Logger` so callers do not each have to cast: one assertion
+ * on a deliberately partial stub, rather than one per method and another at
+ * every call site.
  */
-export function getMockLogger() {
+export function getMockLogger(): Logger {
+  const noop = () => {};
+
   return {
-    debug: (() => {}) as any,
-    info: (() => {}) as any,
-    warn: (() => {}) as any,
-    error: (() => {}) as any,
-    fatal: (() => {}) as any,
-    trace: (() => {}) as any,
-  };
+    debug: noop,
+    info: noop,
+    warn: noop,
+    error: noop,
+    fatal: noop,
+    trace: noop,
+  } as unknown as Logger;
 }
 
 /**

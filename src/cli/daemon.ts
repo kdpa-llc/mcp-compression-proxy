@@ -224,9 +224,11 @@ async function startDaemon(): Promise<void> {
             const content = result.content as Array<{ type: string; text?: string }>;
 
             // Extract text content
-            const textParts = content
-              .filter(c => c.type === 'text' && c.text)
-              .map(c => c.text!);
+            // flatMap rather than filter+map: filter does not narrow the
+            // element type, which is why this needed a non-null assertion.
+            const textParts = content.flatMap((c) =>
+              c.type === 'text' && c.text ? [c.text] : []
+            );
             const fullOutput = textParts.join('\n');
 
             // Apply payload interception
