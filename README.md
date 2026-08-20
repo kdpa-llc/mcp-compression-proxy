@@ -313,6 +313,8 @@ Create or edit your JSON configuration file at:
 | `excludeTools` | string[] | ❌ | Tool name patterns to exclude from tool list entirely (supports wildcards) |
 | `noCompressTools` | string[] | ❌ | Tool name patterns to never compress - descriptions pass through unchanged (supports wildcards) |
 | `defaultTimeout` | number | ❌ | Default timeout in seconds for all servers (default: 30). Can be overridden per-server. |
+| `inheritEnv` | boolean \| string[] | ❌ | Which of the proxy's environment variables backend servers inherit (default: `true`). Can be overridden per-server. |
+| `compressionFallbackBehavior` | `"original"` \| `"blank"` | ❌ | What to show for a tool that has not been compressed yet (default: `"original"`) |
 
 **Server Configuration:**
 | Field | Type | Required | Description |
@@ -321,6 +323,7 @@ Create or edit your JSON configuration file at:
 | `command` | string | ✅ | Command to execute |
 | `args` | string[] | ❌ | Command arguments |
 | `env` | object | ❌ | Environment variables |
+| `inheritEnv` | boolean \| string[] | ❌ | Overrides the root-level `inheritEnv` for this server |
 | `enabled` | boolean | ❌ | Enable/disable server (default: true) |
 | `timeout` | number | ❌ | Server-specific timeout in seconds (overrides `defaultTimeout`) |
 
@@ -345,6 +348,70 @@ Use `${VAR_NAME}` syntax to reference environment variables:
 ```
 
 Variables are expanded at runtime from your shell environment.
+
+Two extra forms are supported:
+
+| Syntax | Meaning |
+|--------|---------|
+| `${VAR}` | Substitutes `VAR`, or an empty string with a warning if it is not set |
+| `${VAR:-fallback}` | Substitutes `VAR`, or `fallback` when unset or empty |
+| `$${VAR}` | Escapes the expansion — produces the literal text `${VAR}` |
+
+If a `${VAR}` reference cannot be resolved, the proxy logs a warning naming
+the variable. An unset variable becomes an empty string, which downstream
+servers usually report as an authentication failure rather than a config
+error, so check the startup log first when a server rejects valid-looking
+credentials.
+
+#### What Backend Servers Inherit
+
+Backend servers inherit the proxy's full environment by default, so variables
+you exported in your shell are visible to them without being listed in `env`.
+Entries in `env` always take precedence over inherited values.
+
+Narrow this with `inheritEnv` when a server should not see unrelated secrets:
+
+```json
+{
+  "inheritEnv": ["HOME", "PATH", "LANG"],
+  "mcpServers": [
+    {
+      "name": "trusted",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "inheritEnv": true
+    },
+    {
+      "name": "untrusted",
+      "command": "some-third-party-server",
+      "inheritEnv": false,
+      "env": { "API_KEY": "${THIRD_PARTY_KEY}" }
+    }
+  ]
+}
+```
+
+| Value | Effect |
+|-------|--------|
+| `true` (default) | Pass the proxy's full environment through |
+| `false` | Pass only the stdio transport's safe defaults (`PATH`, `HOME`, `SHELL`, …) |
+| `string[]` | Pass only the named variables, plus the transport's safe defaults |
+
+#### Uncompressed Tool Descriptions
+
+Before a tool has been compressed, the proxy shows its original description.
+Set `compressionFallbackBehavior` to `"blank"` to show nothing instead, so
+uncompressed tools cost no context while you work through them:
+
+```json
+{
+  "compressionFallbackBehavior": "blank",
+  "mcpServers": []
+}
+```
+
+This affects only tools with no cached compressed description. Compressed
+tools, expanded tools, and anything matching `noCompressTools` are unchanged.
 
 #### Server Initialization and Timeouts
 
