@@ -6,6 +6,8 @@ export interface MCPServerConfig {
   command: string;
   args?: string[];
   env?: Record<string, string>;
+  /** Which of the proxy's env vars to pass through. Defaults to all. */
+  inheritEnv?: boolean | string[];
   enabled?: boolean;
   timeout?: number; // Timeout in seconds for server initialization
 }
