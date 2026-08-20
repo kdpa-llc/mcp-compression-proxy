@@ -173,8 +173,7 @@ export async function handleDaemonStatus(socketPath: string): Promise<void> {
     uptime: number;
     connectedServers: number;
     totalServers: number;
-    toolCount: number;
-    compressedCount: number;
+    cachedToolCount: number;
     socketPath: string;
     servers: Array<{ name: string; connected: boolean; lastError?: string }>;
   };
@@ -185,7 +184,7 @@ export async function handleDaemonStatus(socketPath: string): Promise<void> {
 
   console.log(`Daemon running (PID ${status.pid}, uptime ${uptimeStr})`);
   console.log(`Servers: ${status.connectedServers} connected, ${status.totalServers - status.connectedServers} failed`);
-  console.log(`Tools: ${status.toolCount} cached`);
+  console.log(`Tools: ${status.cachedToolCount} cached`);
   console.log(`Socket: ${status.socketPath}`);
 
   // Show failed servers
