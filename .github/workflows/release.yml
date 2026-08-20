@@ -27,11 +27,27 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           persist-credentials: true
 
+      # Pinned rather than lts/*: npm trusted publishing (OIDC) requires npm
+      # >= 11.5.1 and Node >= 22.14.0. Node 22 LTS still ships npm 10.9.x, so
+      # if lts/* ever resolved to the 22 line the OIDC token exchange would
+      # fail and semantic-release would silently fall back to token auth -
+      # which, with no NPM_TOKEN configured, fails the release. Node 24 ships
+      # npm 11.17+, and 24 is one of the two versions the test matrix covers.
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "lts/*"
+          node-version: "24.x"
           cache: "npm"
+
+      - name: Verify npm supports trusted publishing
+        run: |
+          npm_version=$(npm --version)
+          echo "npm $npm_version, node $(node --version)"
+          required=11.5.1
+          if [ "$(printf '%s\n%s\n' "$required" "$npm_version" | sort -V | head -n1)" != "$required" ]; then
+            echo "::error::npm $npm_version is below $required, which trusted publishing (OIDC) requires."
+            exit 1
+          fi
 
       - name: Install dependencies
         run: npm ci

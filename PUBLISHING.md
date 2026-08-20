@@ -199,13 +199,44 @@ hand before semantic-release can take over. Until that happens the README's
 5. After the first publish, semantic-release handles every subsequent
    release from `main`. Nothing further needs doing by hand.
 
-### Optional: npm provenance
+### Trusted publishing (OIDC) — no stored token
 
-`release.yml` already requests `id-token: write`, so releases can carry npm
-provenance attestations. This requires configuring the repository as a
-trusted publisher on npmjs.com **before** the workflow can use OIDC — see
-[npm trusted publishing](https://docs.npmjs.com/trusted-publishers). Without
-it, releases fall back to `NPM_TOKEN`, which works fine.
+`@semantic-release/npm` 13.1.5 supports npm trusted publishing. When it works,
+the release needs **no `NPM_TOKEN` at all**: `verify-auth` exchanges the
+GitHub Actions OIDC token for a short-lived npm token and returns before it
+ever looks for a stored credential.
+
+**There is a bootstrap order, and it cannot be skipped.** Trusted publishers
+are configured on a package's settings page on npmjs.com, and the OIDC
+exchange endpoint is package-scoped
+(`/-/npm/v1/oidc/token/exchange/package/<name>`). Neither exists until the
+package does. So for a package that has never been published:
+
+1. **Publish once manually** to claim the name — the `First-Time Publishing`
+   steps above. This is the only step that needs a personal npm login.
+2. **Configure the trusted publisher** on npmjs.com: package settings →
+   Trusted Publisher → GitHub Actions, with this repository and
+   `release.yml` as the workflow.
+3. **Optionally disallow tokens** for the package once OIDC works, which is
+   npm's recommended hardening — it removes the stored-credential risk
+   entirely.
+4. From then on, every release from `main` publishes over OIDC with
+   provenance attestation, and no secret is stored in the repository.
+
+Requirements, all already satisfied by `release.yml`:
+
+| Requirement | Where |
+|---|---|
+| `id-token: write` permission | `permissions:` block |
+| npm >= 11.5.1 | Node 24 pin, plus an explicit version gate that fails loudly |
+| Node >= 22.14.0 | Node 24 pin |
+| Official registry | default |
+
+The Node version is pinned rather than `lts/*` on purpose: Node 22 LTS still
+ships npm 10.9.x, and on that version the OIDC exchange fails and
+semantic-release falls back to token auth. With no token configured that
+fails the release — so the workflow checks the npm version explicitly rather
+than letting it degrade quietly.
 
 ## Best Practices
 
