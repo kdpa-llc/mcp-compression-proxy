@@ -1,6 +1,7 @@
 import eslint from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import prettier from 'eslint-config-prettier';
+import globals from 'globals';
 
 export default tseslint.config(
   eslint.configs.recommended,
@@ -29,6 +30,15 @@ export default tseslint.config(
       '@typescript-eslint/no-non-null-assertion': 'warn',
       // The proxy logs config diagnostics to stderr before pino exists.
       'no-console': 'off',
+    },
+  },
+  {
+    // Plain JS tooling scripts. TypeScript resolves globals for .ts files, but
+    // these need Node's declared explicitly or no-undef flags process/console.
+    files: ['**/*.js', '**/*.mjs'],
+    ...tseslint.configs.disableTypeChecked,
+    languageOptions: {
+      globals: globals.node,
     },
   },
   {

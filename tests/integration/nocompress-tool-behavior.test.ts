@@ -86,7 +86,7 @@ describe('NoCompress Tool Behavior', () => {
     // Clean up test home directory
     try {
       rmSync(testHome, { recursive: true, force: true });
-    } catch (error) {
+    } catch {
       // Ignore cleanup errors
     }
   });

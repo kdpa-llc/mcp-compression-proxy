@@ -11,7 +11,6 @@ import { homedir } from 'os';
 import { mcpServers } from '../src/config/servers.js';
 
 const DEFAULT_USER_CONFIG_PATH = join(homedir(), '.mcp-compression-proxy', 'servers.json');
-const DEFAULT_PROJECT_CONFIG_PATH = join(process.cwd(), 'servers.json');
 
 function migrateConfig(outputPath: string = DEFAULT_USER_CONFIG_PATH) {
   // Check if config already exists
