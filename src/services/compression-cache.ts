@@ -3,6 +3,7 @@ import type { CacheMetrics } from '../types/compression.js';
 import type { Logger } from 'pino';
 import { CompressionPersistence } from './compression-persistence.js';
 import { matchesIgnorePattern } from '../config/loader.js';
+import type { CompressionFallbackBehavior } from '../config/schema.js';
 
 /**
  * In-memory cache for compressed tool descriptions
@@ -13,10 +14,28 @@ export class CompressionCache {
   private logger: Logger;
   private persistence: CompressionPersistence;
   private noCompressPatterns: string[] = [];
+  private fallbackBehavior: CompressionFallbackBehavior = 'original';
 
   constructor(logger: Logger, persistence?: CompressionPersistence) {
     this.logger = logger;
     this.persistence = persistence || new CompressionPersistence(logger);
+  }
+
+  /**
+   * Set what to show for tools that have no compressed description yet.
+   * 'original' (default) keeps the server's description; 'blank' hides it so
+   * uncompressed tools cost no context until they have been compressed.
+   */
+  setFallbackBehavior(behavior: CompressionFallbackBehavior): void {
+    this.fallbackBehavior = behavior;
+    this.logger.debug({ behavior }, 'Set compression fallback behavior');
+  }
+
+  /**
+   * Current fallback behavior for uncompressed tools.
+   */
+  getFallbackBehavior(): CompressionFallbackBehavior {
+    return this.fallbackBehavior;
   }
 
   /**
@@ -97,7 +116,7 @@ export class CompressionCache {
    * - If tool matches noCompress pattern: always use original (display-only bypass)
    * - If tool is expanded in session: use original
    * - If compressed exists: use compressed
-   * - Otherwise: use original
+   * - Otherwise: apply the configured fallback behavior
    */
   getDescription(
     serverName: string,
@@ -118,8 +137,14 @@ export class CompressionCache {
       return this.cache[key]?.original || originalDescription;
     }
 
-    // Otherwise use compressed if available, fallback to original
-    return this.cache[key]?.compressed || originalDescription;
+    const compressed = this.cache[key]?.compressed;
+    if (compressed) {
+      return compressed;
+    }
+
+    // Nothing compressed yet - 'blank' keeps the tool callable while costing
+    // no context; 'original' (default) shows the server's own description.
+    return this.fallbackBehavior === 'blank' ? '' : originalDescription;
   }
 
   /**
