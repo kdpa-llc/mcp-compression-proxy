@@ -779,6 +779,8 @@ async function shutdown(reason: string, exitCode = 0): Promise<void> {
     logger.debug({ error }, 'Error while closing server transport');
   }
 
+  sessionManager.destroy();
+
   process.exit(exitCode);
 }
 
