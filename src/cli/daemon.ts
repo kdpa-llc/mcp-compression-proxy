@@ -32,8 +32,13 @@ export function getPidFilePath(): string {
  * and handles IPC requests from the CLI client.
  */
 async function startDaemon(): Promise<void> {
-  // Ensure base directory exists
-  fs.mkdirSync(BASE_DIR, { recursive: true });
+  // Ensure base directory exists. 0700 rather than the umask default: the
+  // control socket in here accepts commands that run downstream MCP tools,
+  // so it should not be reachable by other local users.
+  fs.mkdirSync(BASE_DIR, { recursive: true, mode: 0o700 });
+  // mkdirSync ignores `mode` when the directory already exists, so an
+  // upgrade from a previous version still gets tightened.
+  fs.chmodSync(BASE_DIR, 0o700);
 
   const logger = pino({
     name: 'mcp-cli-daemon',
