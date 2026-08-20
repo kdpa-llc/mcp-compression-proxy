@@ -34,6 +34,14 @@ export const serverConfigSchema = {
               type: 'string',
             },
           },
+          inheritEnv: {
+            description:
+              "Which of the proxy's own environment variables this server inherits. true = inherit all (default), false = inherit only the transport's safe defaults (PATH, HOME, ...), or an array of variable names to inherit. Values in `env` always take precedence. Overrides the top-level `inheritEnv`.",
+            oneOf: [
+              { type: 'boolean' },
+              { type: 'array', items: { type: 'string' } },
+            ],
+          },
           enabled: {
             type: 'boolean',
             description: 'Whether the server is enabled',
@@ -77,10 +85,54 @@ export const serverConfigSchema = {
       description: 'Default timeout in seconds for all servers (can be overridden per-server). Default is 30 seconds if not specified.',
       minimum: 1,
     },
+    cli: {
+      type: 'object',
+      description: 'CLI (mcp-cli) configuration for lazy-loading mode',
+      properties: {
+        payloadThreshold: {
+          type: 'number',
+          description: 'Character threshold for redirecting large tool outputs to temp files. Default: 500.',
+          minimum: 0,
+          default: 500,
+        },
+        autoStartDaemon: {
+          type: 'boolean',
+          description: 'Auto-start daemon when running CLI commands. Default: true.',
+          default: true,
+        },
+        daemonLogLevel: {
+          type: 'string',
+          description: 'Log level for the daemon process. Default: "info".',
+          enum: ['debug', 'info', 'warn', 'error'],
+          default: 'info',
+        },
+      },
+      additionalProperties: false,
+    },
+    inheritEnv: {
+      description:
+        "Default environment inheritance for all servers (can be overridden per-server). true = pass the proxy's full environment to every backend server (default), false = pass only the transport's safe defaults (PATH, HOME, ...), or an array of variable names to pass through.",
+      oneOf: [
+        { type: 'boolean' },
+        { type: 'array', items: { type: 'string' } },
+      ],
+    },
+    compressionFallbackBehavior: {
+      type: 'string',
+      description:
+        "What to show for a tool that has no compressed description yet. 'original' (default) shows the server's original description; 'blank' shows an empty description so uncompressed tools consume no context.",
+      enum: ['original', 'blank'],
+    },
   },
   required: ['mcpServers'],
   additionalProperties: false,
 };
+
+/** Environment inheritance policy: all, none/safe-defaults, or an allowlist. */
+export type InheritEnv = boolean | string[];
+
+/** How to describe a tool that has no compressed description cached yet. */
+export type CompressionFallbackBehavior = 'original' | 'blank';
 
 export type ServerConfigJSON = {
   mcpServers: Array<{
@@ -88,6 +140,7 @@ export type ServerConfigJSON = {
     command: string;
     args?: string[];
     env?: Record<string, string>;
+    inheritEnv?: InheritEnv;
     enabled?: boolean;
     timeout?: number;
     type?: string;
@@ -96,4 +149,11 @@ export type ServerConfigJSON = {
   excludeTools?: string[];
   noCompressTools?: string[];
   defaultTimeout?: number;
+  cli?: {
+    payloadThreshold?: number;
+    autoStartDaemon?: boolean;
+    daemonLogLevel?: string;
+  };
+  inheritEnv?: InheritEnv;
+  compressionFallbackBehavior?: CompressionFallbackBehavior;
 };

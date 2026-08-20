@@ -6,6 +6,7 @@ import type {
   ServerStatus
 } from '../types/index.js';
 import type { Logger } from 'pino';
+import { SERVER_NAME, VERSION } from '../version.js';
 
 /**
  * Manages connections to multiple MCP servers
@@ -20,37 +21,84 @@ export class MCPClientManager {
   }
 
   /**
-   * Wraps a promise with a timeout
+   * Wraps a promise with a timeout.
+   *
+   * The timer is always cleared - leaving it pending keeps the Node event loop
+   * alive for the full duration even after a fast connection succeeds.
    */
-  private withTimeout<T>(
+  private async withTimeout<T>(
     promise: Promise<T>,
     timeoutMs: number
   ): Promise<T> {
-    return Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        setTimeout(() => {
-          reject(new Error(`Connection timeout after ${timeoutMs}ms`));
-        }, timeoutMs);
-      }),
-    ]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error(`Connection timeout after ${timeoutMs}ms`));
+          }, timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+    }
+  }
+
+  /**
+   * Build the environment handed to a spawned server.
+   *
+   * The stdio transport only inherits a small allowlist of "safe" variables
+   * (PATH, HOME, ...), so anything else the user exported - API tokens, base
+   * URLs - never reaches the child unless it is passed explicitly. By default
+   * we forward the proxy's full environment, matching what users expect from a
+   * process they launched themselves. `inheritEnv` narrows that when a server
+   * should not see unrelated secrets.
+   */
+  private buildEnv(config: MCPServerConfig): Record<string, string> | undefined {
+    const inherit = config.inheritEnv ?? true;
+
+    // `false` defers entirely to the transport's safe defaults.
+    if (inherit === false) {
+      return config.env;
+    }
+
+    const names = Array.isArray(inherit) ? inherit : Object.keys(process.env);
+    const inherited: Record<string, string> = {};
+
+    for (const name of names) {
+      const value = process.env[name];
+      if (value === undefined) continue;
+      // Skip exported shell functions, which are a known injection vector.
+      if (value.startsWith('()')) continue;
+      inherited[name] = value;
+    }
+
+    // Explicit `env` entries always win over inherited ones.
+    return { ...inherited, ...config.env };
   }
 
   /**
    * Initialize and connect to all configured MCP servers
    * @param servers - Server configurations to initialize
    * @param defaultTimeout - Optional default timeout in seconds (overrides class default)
+   * @param defaultInheritEnv - Optional default env inheritance policy (overridden per-server)
    */
   async initializeServers(
     servers: MCPServerConfig[],
-    defaultTimeout?: number
+    defaultTimeout?: number,
+    defaultInheritEnv?: boolean | string[]
   ): Promise<void> {
     this.logger.info({ count: servers.length }, 'Initializing MCP servers');
 
-    // Apply default timeout to servers that don't have one specified
+    // Apply defaults to servers that don't specify their own
     const serversWithTimeout = servers.map(server => ({
       ...server,
-      timeout: server.timeout ?? defaultTimeout
+      timeout: server.timeout ?? defaultTimeout,
+      inheritEnv: server.inheritEnv ?? defaultInheritEnv,
     }));
 
     const connectionPromises = serversWithTimeout.map(async (config) => {
@@ -93,13 +141,13 @@ export class MCPClientManager {
     const transport = new StdioClientTransport({
       command: config.command,
       args: config.args,
-      env: config.env,
+      env: this.buildEnv(config),
     });
 
     const client = new Client(
       {
-        name: 'mcp-compression-proxy',
-        version: '0.1.0',
+        name: SERVER_NAME,
+        version: VERSION,
       },
       {
         capabilities: {},
@@ -107,11 +155,12 @@ export class MCPClientManager {
     );
 
     try {
-      // Wrap connection with timeout
-      await this.withTimeout(
-        client.connect(transport),
-        timeoutMs
-      );
+      const connectPromise = client.connect(transport);
+      // If the timeout wins the race below, this promise may still reject on its
+      // own later; swallow it so it doesn't surface as an unhandled rejection.
+      connectPromise.catch(() => {});
+
+      await this.withTimeout(connectPromise, timeoutMs);
 
       this.connections.set(config.name, {
         name: config.name,
@@ -123,6 +172,17 @@ export class MCPClientManager {
       this.logger.info({ server: config.name }, 'Successfully connected to MCP server');
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+
+      // A timed-out connect leaves the spawned process running. Tear the
+      // transport down so we don't orphan a child for the proxy's lifetime.
+      try {
+        await transport.close();
+      } catch (closeError) {
+        this.logger.debug(
+          { server: config.name, error: closeError },
+          'Failed to close transport for unsuccessful connection'
+        );
+      }
 
       this.connections.set(config.name, {
         name: config.name,

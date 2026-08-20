@@ -163,20 +163,49 @@ mcp-compression-proxy --version
 
 ## First-Time Publishing
 
-For the initial npm publish:
+The package has never been published, so the name must be claimed once by
+hand before semantic-release can take over. Until that happens the README's
+`npm install -g mcp-compression-proxy` returns a 404.
 
-1. Ensure package name is available:
+1. Confirm the name is still available:
    ```bash
    npm view mcp-compression-proxy
-   # Should return 404 if available
+   # 404 means available
    ```
 
-2. Publish manually for first release:
+2. Inspect exactly what would ship, without publishing anything:
    ```bash
-   npm publish
+   npm run build
+   npm pack --dry-run
+   ```
+   Check that `dist/index.js`, `dist/cli/index.js` and the `.d.ts` files are
+   present, and that no test or source files leaked in. Both `bin` entries
+   must start with a `#!/usr/bin/env node` shebang or the installed commands
+   will not be executable.
+
+3. Publish the first version:
+   ```bash
+   npm publish --access public
+   ```
+   `prepublishOnly` runs the build and the full test suite first, so a
+   failing suite blocks the publish.
+
+4. Verify it landed:
+   ```bash
+   npm info mcp-compression-proxy
+   npx mcp-compression-proxy@latest --help
    ```
 
-3. After first publish, semantic-release will handle future releases automatically
+5. After the first publish, semantic-release handles every subsequent
+   release from `main`. Nothing further needs doing by hand.
+
+### Optional: npm provenance
+
+`release.yml` already requests `id-token: write`, so releases can carry npm
+provenance attestations. This requires configuring the repository as a
+trusted publisher on npmjs.com **before** the workflow can use OIDC — see
+[npm trusted publishing](https://docs.npmjs.com/trusted-publishers). Without
+it, releases fall back to `NPM_TOKEN`, which works fine.
 
 ## Best Practices
 

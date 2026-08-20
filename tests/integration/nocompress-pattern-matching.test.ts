@@ -85,7 +85,7 @@ describe('NoCompress Pattern Matching', () => {
     // Clean up test home directory
     try {
       rmSync(testHome, { recursive: true, force: true });
-    } catch (error) {
+    } catch {
       // Ignore cleanup errors
     }
   });
@@ -101,18 +101,18 @@ describe('NoCompress Pattern Matching', () => {
 
     // Step 2: Check if it appears in get_uncompressed_tools initially
     console.log('1. Getting uncompressed tools (should include the tool)...');
-    let getResult = await mcpClient.callTool({
+    const getResult = await mcpClient.callTool({
       name: 'mcp-compression-proxy__get_uncompressed_tools',
       arguments: { limit: 10 },
     });
 
-    let resultText = (getResult.content as any[])[0].text as string;
+    const resultText = (getResult.content as any[])[0].text as string;
     console.log('   Get result:', resultText.substring(0, 300) + '...');
 
     // Parse tools
-    let toolsMatch = resultText.match(/Tools to compress:\s*(\[[\s\S]*?\])/);
+    const toolsMatch = resultText.match(/Tools to compress:\s*(\[[\s\S]*?\])/);
     if (toolsMatch) {
-      let tools = JSON.parse(toolsMatch[1]);
+      const tools = JSON.parse(toolsMatch[1]);
       const foundTool = tools.find((t: any) => t.toolName === 'single_tool' && t.serverName === 'local-skills');
       expect(foundTool).toBeDefined();
       console.log('   ✓ noCompress tool appears in initial get_uncompressed_tools');

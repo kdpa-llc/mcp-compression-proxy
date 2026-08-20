@@ -3,7 +3,7 @@ import type { MCPClientManager } from '../mcp/client-manager.js';
 import type { CompressionCache } from './compression-cache.js';
 import type { SessionManager } from './session-manager.js';
 import type { ConfigResult } from '../config/loader.js';
-import { matchesIgnorePattern, loadJSONServers } from '../config/loader.js';
+import { matchesIgnorePattern, loadJSONServersCached } from '../config/loader.js';
 
 type DetailLevel = 'summary' | 'full';
 
@@ -56,6 +56,32 @@ export type StatsPayload = {
   };
 };
 
+/** A tool as seen during aggregation, before its description is rewritten. */
+export type ObservedTool = {
+  serverName: string;
+  toolName: string;
+  description?: string;
+};
+
+/** Compression coverage over a set of tools, computed without extra I/O. */
+export type LiveCoverage = {
+  totalTools: number;
+  compressedTools: number;
+  uncompressedTools: number;
+  coveragePercent: number;
+  originalChars: number;
+  compressedChars: number;
+  estimatedTokensSaved: number;
+  latestCompressedAt?: string;
+};
+
+/** Render a token/char count compactly (1234 -> "1.2k"). */
+function compact(value: number): string {
+  if (value < 1000) return `${value}`;
+  if (value < 1_000_000) return `${(value / 1000).toFixed(1)}k`;
+  return `${(value / 1_000_000).toFixed(1)}M`;
+}
+
 export class StatsService {
   private logger: Logger;
   private clientManager: MCPClientManager;
@@ -68,7 +94,7 @@ export class StatsService {
     clientManager: MCPClientManager,
     compressionCache: CompressionCache,
     sessionManager: SessionManager,
-    configLoader: () => ConfigResult = loadJSONServers
+    configLoader: () => ConfigResult = loadJSONServersCached
   ) {
     this.logger = logger;
     this.clientManager = clientManager;
@@ -265,6 +291,79 @@ export class StatsService {
     };
 
     return payload;
+  }
+
+  /**
+   * Compute coverage over tools already fetched during aggregation.
+   *
+   * Unlike {@link getStats} this issues no `listTools` calls, so it is cheap
+   * enough to run on every `tools/list`.
+   */
+  computeCoverage(tools: ObservedTool[]): LiveCoverage {
+    let compressedTools = 0;
+    let originalChars = 0;
+    let compressedChars = 0;
+    let latestCompressedAt: string | undefined;
+
+    for (const tool of tools) {
+      const cachedOriginal = this.compressionCache.getOriginalDescription(
+        tool.serverName,
+        tool.toolName
+      );
+      const original = cachedOriginal ?? tool.description ?? '';
+      const compressed = this.compressionCache.getCompressedDescription(
+        tool.serverName,
+        tool.toolName
+      );
+
+      originalChars += original.length;
+
+      if (compressed !== undefined) {
+        compressedTools += 1;
+        compressedChars += compressed.length;
+      } else {
+        // Uncompressed tools still occupy their original description.
+        compressedChars += original.length;
+      }
+    }
+
+    for (const entry of this.compressionCache.getCacheEntries()) {
+      if (!latestCompressedAt || latestCompressedAt < entry.compressedAt) {
+        latestCompressedAt = entry.compressedAt;
+      }
+    }
+
+    return {
+      totalTools: tools.length,
+      compressedTools,
+      uncompressedTools: Math.max(tools.length - compressedTools, 0),
+      coveragePercent: this.coverage(compressedTools, tools.length),
+      originalChars,
+      compressedChars,
+      estimatedTokensSaved: this.calculateTokensSaved(originalChars, compressedChars),
+      latestCompressedAt,
+    };
+  }
+
+  /**
+   * One-line coverage summary suitable for appending to a tool description.
+   * Kept terse - it ships on every `tools/list`.
+   */
+  formatCoverage(coverage: LiveCoverage): string {
+    if (coverage.totalTools === 0) {
+      return '[live: no backend tools available]';
+    }
+
+    const parts = [
+      `${coverage.compressedTools}/${coverage.totalTools} compressed (${coverage.coveragePercent}%)`,
+      `${coverage.uncompressedTools} remaining`,
+    ];
+
+    if (coverage.estimatedTokensSaved > 0) {
+      parts.push(`~${compact(coverage.estimatedTokensSaved)} tokens saved`);
+    }
+
+    return `[live: ${parts.join(' · ')}]`;
   }
 
   private coverage(done: number, total: number): number {

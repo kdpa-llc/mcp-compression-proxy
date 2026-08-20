@@ -84,7 +84,7 @@ describe('Comprehensive NoCompress Verification', () => {
 
     try {
       rmSync(testHome, { recursive: true, force: true });
-    } catch (error) {
+    } catch {
       // Ignore cleanup errors
     }
   });

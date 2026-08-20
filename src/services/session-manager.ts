@@ -14,8 +14,11 @@ export class SessionManager {
   constructor(logger: Logger) {
     this.logger = logger;
 
-    // Cleanup expired sessions every 5 minutes
+    // Cleanup expired sessions every 5 minutes. unref'd because housekeeping
+    // should never be the reason the process stays alive - without it every
+    // SessionManager holds the event loop open until destroy() is called.
     this.cleanupTimer = setInterval(() => this.cleanupExpiredSessions(), 5 * 60 * 1000);
+    this.cleanupTimer.unref?.();
   }
 
   /**
