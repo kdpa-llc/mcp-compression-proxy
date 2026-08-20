@@ -23,6 +23,7 @@
 
 [Quick Start](#-quick-start) •
 [Features](#-features) •
+[mcp-cli](#️-mcp-cli-progressive-tool-discovery) •
 [Configuration](#-configuration) •
 [FAQ](#-faq) •
 [Contributing](#-contributing)
@@ -37,6 +38,7 @@
 - [✨ Features](#-features)
 - [🚀 Quick Start](#-quick-start)
 - [🎯 Usage](#-usage)
+- [⌨️ mcp-cli (Progressive Tool Discovery)](#️-mcp-cli-progressive-tool-discovery)
 - [🔧 Configuration](#-configuration)
 - [💡 Best Practices](#-best-practices)
 - [❓ FAQ](#-faq)
@@ -261,6 +263,63 @@ node dist/index.js --clear-cache
 ```
 
 > **💡 Tip**: After setting up, simply tell your AI: *"Compress the tool descriptions to save context"* and it will handle the rest!
+
+## ⌨️ mcp-cli (Progressive Tool Discovery)
+
+The package also installs `mcp-cli`, a second entry point for agents that
+would rather *shell out* than hold every tool definition in context. Instead
+of loading all tools up front, the agent lists or searches for what it needs
+and pulls the full schema only for the tool it is about to call.
+
+A background daemon keeps warm connections to the backend MCP servers, so
+each command is a short IPC round-trip rather than a fresh server startup.
+
+```bash
+mcp-cli tools                          # List all tools (compressed)
+mcp-cli search <query>                 # Search tools by name/description
+mcp-cli info <server>/<tool>           # Full schema for one tool
+mcp-cli call <server>/<tool> '<json>'  # Execute a tool
+mcp-cli stats                          # Compression statistics
+
+mcp-cli daemon start                   # Start the background daemon
+mcp-cli daemon status                  # Show daemon status
+mcp-cli daemon stop                    # Stop the daemon
+```
+
+The daemon starts automatically on first use. Pass `--no-auto-start` to fail
+fast instead when it is not already running.
+
+`call` also accepts its JSON argument on stdin, which avoids shell quoting
+problems with large payloads:
+
+```bash
+echo '{"path": "/tmp/notes.md"}' | mcp-cli call filesystem/read_file
+```
+
+### CLI Configuration
+
+The optional `cli` block in `servers.json` tunes daemon behavior:
+
+```json
+{
+  "cli": {
+    "payloadThreshold": 500,
+    "autoStartDaemon": true,
+    "daemonLogLevel": "info"
+  },
+  "mcpServers": []
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `payloadThreshold` | number | `500` | Tool output longer than this many characters is written to a temp file and replaced with a reference, keeping large payloads out of the agent's context |
+| `autoStartDaemon` | boolean | `true` | Start the daemon automatically when a command needs it |
+| `daemonLogLevel` | string | `"info"` | Daemon log level (`debug`, `info`, `warn`, `error`) |
+
+Daemon state lives in `~/.mcp-compression-proxy/` (socket, PID file, and
+`daemon.log`), created with `0700` permissions since the control socket
+accepts commands that execute downstream MCP tools.
 
 ## 🔧 Configuration
 

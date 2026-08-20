@@ -317,6 +317,30 @@ async function startDaemon(): Promise<void> {
     });
   });
 
+  // Without this, a failed listen emits an unhandled 'error' event and kills
+  // the daemon. Because it is forked with stdio: 'ignore', the crash goes
+  // nowhere: the log simply stops mid-startup and the CLI reports only
+  // "Failed to start daemon." Log the cause and leave no stale PID behind.
+  server.on('error', (error: NodeJS.ErrnoException) => {
+    let hint = '';
+    if (error.code === 'EADDRINUSE') {
+      hint = ' Another daemon may already be running; try "mcp-cli daemon stop".';
+    } else if (error.code === 'EACCES') {
+      hint = ` Check permissions on ${BASE_DIR}.`;
+    } else if (SOCKET_PATH.length > 100) {
+      // Unix domain socket paths are capped near 107 bytes on Linux/macOS.
+      hint = ` The socket path is ${SOCKET_PATH.length} characters, which likely exceeds the ~107 byte limit for Unix sockets.`;
+    }
+
+    logger.error(
+      { socketPath: SOCKET_PATH, code: error.code, error: error.message },
+      `Failed to listen on the daemon socket.${hint}`
+    );
+
+    try { fs.unlinkSync(PID_FILE); } catch { /* ignore */ }
+    process.exit(1);
+  });
+
   server.listen(SOCKET_PATH, () => {
     logger.info({ socketPath: SOCKET_PATH, pid: process.pid }, 'Daemon listening');
 
