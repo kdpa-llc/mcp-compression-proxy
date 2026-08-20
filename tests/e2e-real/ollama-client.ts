@@ -166,7 +166,10 @@ Return ONLY a JSON array with this exact format:
       }
 
       if (!parsed) {
-        throw new Error(`Failed to parse JSON from LLM response. Original error: ${error}\nResponse: ${response}`);
+        throw new Error(
+          `Failed to parse JSON from LLM response. Original error: ${error}\nResponse: ${response}`,
+          { cause: error }
+        );
       }
     }
 
