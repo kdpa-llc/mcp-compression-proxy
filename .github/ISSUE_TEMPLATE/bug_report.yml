@@ -54,7 +54,7 @@ body:
     id: version
     attributes:
       label: Version
-      description: What version of MCP Tool Aggregator are you running?
+      description: What version of MCP Compression Proxy are you running?
       placeholder: "0.1.0"
     validations:
       required: true

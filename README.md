@@ -728,10 +728,10 @@ Note: This project follows a [Code of Conduct][code-of-conduct].
 
 **Portable, reusable prompt libraries for any MCP client**
 
-While MCP Tool Aggregator optimizes your tool descriptions, [Local Skills MCP][local-skills-mcp] provides expert-level prompt instructions that work across any MCP-compatible client.
+While MCP Compression Proxy optimizes your tool descriptions, [Local Skills MCP][local-skills-mcp] provides expert-level prompt instructions that work across any MCP-compatible client.
 
 **Perfect combination:**
-- **MCP Tool Aggregator** - Aggregates and compresses tool descriptions (50-80% token reduction)
+- **MCP Compression Proxy** - Aggregates and compresses tool descriptions (50-80% token reduction)
 - **Local Skills MCP** - Provides expert skills with lazy loading (~50 tokens/skill)
 
 **Together they enable:**

@@ -900,7 +900,7 @@ function parseArgs(): { clearCache: boolean } {
  * Start the server
  */
 async function main() {
-  logger.info('Starting MCP Tool Aggregator Server');
+  logger.info('Starting MCP Compression Proxy Server');
 
   // Parse command-line arguments
   const { clearCache } = parseArgs();
@@ -974,7 +974,7 @@ async function main() {
 
   await server.connect(transport);
 
-  logger.info('MCP Tool Aggregator Server ready and connected to stdio');
+  logger.info('MCP Compression Proxy Server ready and connected to stdio');
 }
 
 main().catch((error) => {

@@ -1,6 +1,6 @@
 # Testing Infrastructure
 
-This directory contains comprehensive test suites for the MCP Tool Aggregator project.
+This directory contains comprehensive test suites for the MCP Compression Proxy project.
 
 ## Test Summary
 

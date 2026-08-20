@@ -1,6 +1,6 @@
-# Contributing to MCP Tool Aggregator
+# Contributing to MCP Compression Proxy
 
-Thank you for your interest in contributing to MCP Tool Aggregator! We welcome contributions from the community.
+Thank you for your interest in contributing to MCP Compression Proxy! We welcome contributions from the community.
 
 ## How to Contribute
 
