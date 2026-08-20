@@ -24,6 +24,18 @@ updates:
       - "dependencies"
       - "automated"
     open-pull-requests-limit: 5
+    ignore:
+      # TypeScript 7 does not expose the JavaScript compiler API ts-jest
+      # requires, so every test suite fails to run. Adopting it means
+      # installing @typescript/native and aliasing @typescript/typescript6 for
+      # ts-jest - a migration, not a version bump. Until that is done
+      # deliberately, a weekly TS 7 PR would just fail CI on repeat.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      # @types/node should track the runtime the project actually supports
+      # (engines >=22, CI matrix 22 and 24), not run ahead of it.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     # A runtime dependency bump must cut a release, or a security patch can
     # land on main, auto-merge, and never reach npm. `chore` and `ci` are
     # mapped to no release in .releaserc.json, so only dev bumps use them.
