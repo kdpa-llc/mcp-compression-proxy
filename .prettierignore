@@ -1,0 +1,7 @@
+dist
+node_modules
+coverage
+*.min.js
+package-lock.json
+CHANGELOG.md
+tests/e2e-real/test-servers-dist

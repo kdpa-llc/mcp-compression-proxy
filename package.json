@@ -11,6 +11,10 @@
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"**/*.{ts,json,md}\"",
+    "format:check": "prettier --check \"**/*.{ts,json,md}\"",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
@@ -73,6 +77,7 @@
   "devDependencies": {
     "@commitlint/cli": "^20.1.0",
     "@commitlint/config-conventional": "^20.0.0",
+    "@eslint/js": "^9.39.5",
     "@jest/globals": "^29.7.0",
     "@semantic-release/changelog": "^6.0.3",
     "@semantic-release/commit-analyzer": "^13.0.1",
@@ -83,13 +88,17 @@
     "@semantic-release/release-notes-generator": "^14.1.0",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.10.2",
+    "eslint": "^9.39.5",
+    "eslint-config-prettier": "^10.1.8",
     "husky": "^9.1.7",
     "jest": "^29.7.0",
+    "prettier": "^3.9.6",
     "semantic-release": "^25.0.2",
     "ts-jest": "^29.2.5",
     "ts-node": "^10.9.2",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.67.0"
   },
   "engines": {
     "node": ">=18.0.0"
