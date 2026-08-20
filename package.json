@@ -22,6 +22,7 @@
     "migrate-config": "tsx scripts/migrate-config.ts",
     "cli:start": "node dist/cli/index.js daemon start",
     "cli:stop": "node dist/cli/index.js daemon stop",
+    "sync-version": "node scripts/sync-version.mjs",
     "prepare": "husky || true",
     "prepublishOnly": "npm run build && npm test"
   },
