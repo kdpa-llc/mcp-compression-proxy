@@ -15,6 +15,7 @@ import { writeFileSync, readFileSync } from 'fs';
 import { resolve } from 'path';
 import pino from 'pino';
 import { StatsService, type ObservedTool } from './services/stats-service.js';
+import { CompressionSampler } from './services/compression-sampler.js';
 import { SERVER_NAME, VERSION } from './version.js';
 
 /**
@@ -62,6 +63,12 @@ const server = new Server(
     },
   }
 );
+
+// Compresses via the host's own LLM when the client supports sampling.
+const compressionSampler = new CompressionSampler(logger, {
+  getClientCapabilities: () => server.getClientCapabilities(),
+  createMessage: (params) => server.createMessage(params),
+});
 
 /** A backend tool plus the metadata needed to namespace and compress it. */
 type BackendTool = ObservedTool & { inputSchema: Tool['inputSchema'] };
@@ -233,6 +240,22 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
         },
         required: ['serverName', 'toolName'],
+      },
+    },
+    {
+      name: 'mcp-compression-proxy__compress_via_sampling',
+      description: `Compress uncached tool descriptions automatically using this client's own LLM, via MCP sampling. Requires a client that supports sampling; returns an error explaining the manual alternative if it does not. No API key or extra configuration needed. ${liveStats}`,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          limit: {
+            type: 'number',
+            description: 'Maximum number of tools to compress in this call (default: 25, max: 100)',
+            minimum: 1,
+            maximum: 100,
+            default: 25,
+          },
+        },
       },
     },
     {
@@ -465,19 +488,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       inputFile?: string;
     };
 
-    // Validate that exactly one parameter is provided
-    if (!descriptions && !inputFile) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: 'Error: Must provide either descriptions array or inputFile path.',
-          },
-        ],
-        isError: true,
-      };
-    }
-
+    // Validate that exactly one parameter is provided. The "neither" case is
+    // handled by the final else below, which lets the compiler narrow
+    // `descriptions` instead of needing a non-null assertion.
     if (descriptions && inputFile) {
       return {
         content: [
@@ -490,8 +503,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
-    // Assigned by both branches below; no initializer, or the empty array is
-    // dead on every path.
+    // Assigned by every branch below; an initializer would be dead on all of
+    // them.
     let toolsToCache: Array<{
       serverName: string;
       toolName: string;
@@ -530,9 +543,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           isError: true,
         };
       }
+    } else if (descriptions) {
+      toolsToCache = descriptions;
     } else {
-      // Use descriptions parameter
-      toolsToCache = descriptions!;
+      return {
+        content: [
+          {
+            type: 'text',
+            text: 'Error: Must provide either descriptions array or inputFile path.',
+          },
+        ],
+        isError: true,
+      };
     }
 
     if (toolsToCache.length > 100) {
@@ -670,6 +692,84 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     };
   }
 
+  if (name === 'mcp-compression-proxy__compress_via_sampling') {
+    const { limit = 25 } = args as { limit?: number };
+    const actualLimit = Math.min(Math.max(limit, 1), 100);
+
+    if (!compressionSampler.isSupported()) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: 'Error: This client does not support MCP sampling, so the proxy cannot borrow its LLM.\n\nUse the manual flow instead: call mcp-compression-proxy__get_uncompressed_tools, compress the descriptions yourself, then post them back with mcp-compression-proxy__cache_compressed_tools.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const backendTools = await fetchAllBackendTools();
+    const coverageBefore = statsService.computeCoverage(backendTools);
+
+    const uncompressed = backendTools
+      .filter((tool) => !compressionCache.hasCompressed(tool.serverName, tool.toolName))
+      .slice(0, actualLimit);
+
+    if (uncompressed.length === 0) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Nothing to compress - all ${coverageBefore.totalTools} tools already have compressed descriptions.\n\n${statsService.formatCoverage(coverageBefore)}`,
+          },
+        ],
+      };
+    }
+
+    const { descriptions, batchesAttempted, batchesFailed } =
+      await compressionSampler.compress(uncompressed);
+
+    for (const entry of descriptions) {
+      const original = backendTools.find(
+        (tool) => tool.serverName === entry.serverName && tool.toolName === entry.toolName
+      )?.description;
+
+      compressionCache.saveCompressed(
+        entry.serverName,
+        entry.toolName,
+        entry.description,
+        original
+      );
+    }
+
+    if (descriptions.length > 0) {
+      try {
+        await compressionCache.saveToDisk();
+      } catch (error) {
+        logger.error({ error }, 'Failed to persist sampled compressions to disk');
+      }
+    }
+
+    const coverageAfter = statsService.computeCoverage(backendTools);
+    const failureNote =
+      batchesFailed > 0
+        ? `\n\n${batchesFailed} of ${batchesAttempted} sampling batches produced no usable result. Re-run to retry them, or fall back to the manual flow.`
+        : '';
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `Compressed ${descriptions.length} of ${uncompressed.length} tools using this client's LLM.\n\nCoverage: ${coverageBefore.compressedTools}/${coverageBefore.totalTools} (${coverageBefore.coveragePercent}%) → ${coverageAfter.compressedTools}/${coverageAfter.totalTools} (${coverageAfter.coveragePercent}%)\nEstimated tokens saved: ~${coverageAfter.estimatedTokensSaved}${failureNote}\n\n${
+            coverageAfter.uncompressedTools > 0
+              ? `Remaining: ${coverageAfter.uncompressedTools}. Call this tool again for the next batch.`
+              : 'All tools have been compressed! 🎉'
+          }`,
+        },
+      ],
+    };
+  }
+
   if (name === 'mcp-compression-proxy__stats') {
     const { serverName, detailLevel } = args as {
       serverName?: string;
@@ -800,7 +900,7 @@ function parseArgs(): { clearCache: boolean } {
  * Start the server
  */
 async function main() {
-  logger.info('Starting MCP Tool Aggregator Server');
+  logger.info('Starting MCP Compression Proxy Server');
 
   // Parse command-line arguments
   const { clearCache } = parseArgs();
@@ -874,7 +974,7 @@ async function main() {
 
   await server.connect(transport);
 
-  logger.info('MCP Tool Aggregator Server ready and connected to stdio');
+  logger.info('MCP Compression Proxy Server ready and connected to stdio');
 }
 
 main().catch((error) => {

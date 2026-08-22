@@ -29,7 +29,7 @@ describe('E2E: Complete User Journey', () => {
   let githubClient: any;
 
   beforeEach(async () => {
-    logger = getMockLogger() as unknown as Logger;
+    logger = getMockLogger();
     compressionCache = new CompressionCache(logger);
     sessionManager = new SessionManager(logger);
 

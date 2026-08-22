@@ -99,8 +99,13 @@ export interface DaemonStatusResult {
   pid: number;
   uptime: number;
   servers: ServerStatus[];
-  toolCount: number;
-  compressedCount: number;
+  /**
+   * Tools with a cached compressed description. Deliberately not the total
+   * tool count: daemon-status doubles as the liveness ping on every CLI
+   * invocation, and counting all tools would mean a listTools round-trip per
+   * connected server on every command.
+   */
+  cachedToolCount: number;
   socketPath: string;
 }
 

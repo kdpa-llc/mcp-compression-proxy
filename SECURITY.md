@@ -11,7 +11,7 @@ We release patches for security vulnerabilities for the following versions:
 
 ## Reporting a Vulnerability
 
-We take the security of MCP Tool Aggregator seriously. If you discover a security vulnerability, please follow these steps:
+We take the security of MCP Compression Proxy seriously. If you discover a security vulnerability, please follow these steps:
 
 ### How to Report
 
@@ -47,7 +47,7 @@ When reporting a vulnerability, please include:
 
 ## Security Best Practices
 
-When using MCP Tool Aggregator:
+When using MCP Compression Proxy:
 
 ### For Users
 
@@ -104,4 +104,4 @@ Security updates will be:
 
 For security concerns, please use GitHub's security features or create a private issue.
 
-Thank you for helping keep MCP Tool Aggregator secure!
+Thank you for helping keep MCP Compression Proxy secure!

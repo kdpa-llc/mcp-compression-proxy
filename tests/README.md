@@ -1,32 +1,54 @@
 # Testing Infrastructure
 
-This directory contains comprehensive test suites for the MCP Tool Aggregator project.
+This directory contains comprehensive test suites for the MCP Compression Proxy project.
 
 ## Test Summary
 
-**✅ 165 Tests Passing**
+**✅ 297 Tests Passing**
 
 | Category | Test Suites | Tests | Description |
 |----------|-------------|-------|-------------|
-| **Unit** | 7 | ~95 | Individual module testing |
-| **Integration** | 4 | ~55 | Module interaction testing |
-| **E2E** | 2 | ~15 | Complete workflow testing |
-| **Total** | **13** | **165** | Comprehensive coverage |
+| **Unit** | 18 | 262 | Individual module testing |
+| **Integration** | 5 | 22 | Module interaction testing |
+| **E2E** | 2 | 13 | Complete workflow testing |
+| **Total** | **25** | **297** | Comprehensive coverage |
 
-**Coverage: 98.6% statements, 91.8% branches, 100% functions, 98.6% lines**
+**Coverage: 93.9% statements, 85.0% branches, 94.8% functions, 93.9% lines**
+
+Two entry points are excluded from coverage in `jest.config.js` because they
+require a real process rather than a module import: `src/index.ts` (covered by
+the integration suites, which spawn it) and `src/cli/daemon.ts` /
+`src/cli/index.ts` (covered by `cli-daemon-lifecycle.test.ts`, which drives the
+built binary as a subprocess).
 
 ## Test Structure
 
 ```
 tests/
 ├── __mocks__/              # Mock implementations and test helpers
-│   └── mcp-mocks.ts        # Mock MCP clients and utilities
-├── unit/                   # Unit tests for individual modules (4 files)
-│   ├── compression-cache.test.ts
-│   ├── session-manager.test.ts
+│   ├── mcp-mocks.ts        # Mock MCP clients and utilities
+│   └── single-tool-server.js  # Minimal real MCP server for subprocess tests
+├── unit/                   # Unit tests for individual modules (18 files)
 │   ├── client-manager.test.ts
-│   └── servers-config.test.ts
-├── integration/            # Integration tests for module interactions (4 files)
+│   ├── cli-commands.test.ts
+│   ├── cli-ipc-client.test.ts
+│   ├── cli-payload-interceptor.test.ts
+│   ├── compression-cache.test.ts
+│   ├── compression-fallback.test.ts       # Uncached-tool fallback behavior
+│   ├── compression-persistence.test.ts
+│   ├── compression-sampler.test.ts        # Host-LLM compression via sampling
+│   ├── config-loader.test.ts
+│   ├── config-schema.test.ts              # Validates servers.json.example too
+│   ├── env-expansion.test.ts              # ${VAR}, ${VAR:-default}, $${VAR}
+│   ├── env-inheritance.test.ts            # What backend servers inherit
+│   ├── file-exchange.test.ts
+│   ├── ignore-patterns.test.ts
+│   ├── live-coverage.test.ts              # Coverage stats and formatting
+│   ├── session-manager.test.ts
+│   ├── stats-service.test.ts
+│   └── version.test.ts                    # Fails if version drifts
+├── integration/            # Integration tests for module interactions (5 files)
+│   ├── cli-daemon-lifecycle.test.ts          # ⭐ Drives the built mcp-cli binary
 │   ├── compression-session-integration.test.ts
 │   ├── comprehensive-nocompress.test.ts      # ⭐ Complete noCompress workflow
 │   ├── nocompress-pattern-matching.test.ts  # Pattern matching validation
@@ -65,9 +87,19 @@ Unit tests focus on individual modules in isolation:
   - Error handling for failed connections
   - Multi-server initialization
 
-- **Server Configuration** (`servers-config.test.ts`)
-  - Configuration validation
+- **Server Configuration** (`config-loader.test.ts`, `config-schema.test.ts`)
+  - Configuration loading and user/project aggregation
   - Enabled/disabled server filtering
+  - Schema validation, including `servers.json.example` itself
+
+- **Environment Handling** (`env-inheritance.test.ts`, `env-expansion.test.ts`)
+  - What backend servers inherit, and how `inheritEnv` narrows it
+  - `${VAR}`, `${VAR:-default}` and the `$${VAR}` escape
+
+- **Compression Behavior** (`compression-fallback.test.ts`, `live-coverage.test.ts`, `compression-sampler.test.ts`)
+  - Fallback for tools with no compressed description yet
+  - Coverage and token-savings computation
+  - Host-LLM compression over MCP sampling
 
 ### Integration Tests
 
@@ -134,6 +166,11 @@ See [`e2e-real/README.md`](./e2e-real/README.md) for detailed setup and usage.
 ```bash
 npm test
 ```
+
+> The integration suites spawn `dist/index.js` and `dist/cli/index.js` as real
+> subprocesses, so they need a build first. `pretest`, `pretest:integration`
+> and `pretest:e2e` run `npm run build` automatically — you do not need to
+> remember, and a fresh clone works with no extra steps.
 
 ### Watch Mode (for development)
 ```bash

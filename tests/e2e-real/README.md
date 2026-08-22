@@ -1,6 +1,6 @@
 # Real LLM E2E Tests
 
-This directory contains **true end-to-end integration tests** that validate the MCP Tool Aggregator with a **real language model**, not mocks.
+This directory contains **true end-to-end integration tests** that validate the MCP Compression Proxy with a **real language model**, not mocks.
 
 ## Overview
 
@@ -112,7 +112,7 @@ The tests provide detailed console output showing each phase:
 ✓ Ollama is running
 📥 Ensuring llama3.2:1b model is available...
 ✓ Model ready
-🔧 Starting MCP Tool Aggregator server...
+🔧 Starting MCP Compression Proxy server...
 ✓ MCP server connected
 
 📋 PHASE 1: List initial tools

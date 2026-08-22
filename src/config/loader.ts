@@ -63,21 +63,26 @@ function expandEnvVars(value: string, unresolved: Set<string>): string {
 }
 
 /**
- * Recursively expands environment variables in an object
+ * Recursively expands environment variables in an object.
+ *
+ * Generic rather than `any`: expansion only ever rewrites string leaves, so
+ * the shape is preserved. Returning `any` here silently erased
+ * ServerConfigJSON at the one call site that needs it most - the value that
+ * has just been schema-validated.
  */
-function expandEnvVarsInObject(obj: any, unresolved: Set<string>): any {
+function expandEnvVarsInObject<T>(obj: T, unresolved: Set<string>): T {
   if (typeof obj === 'string') {
-    return expandEnvVars(obj, unresolved);
+    return expandEnvVars(obj, unresolved) as T;
   }
   if (Array.isArray(obj)) {
-    return obj.map((item) => expandEnvVarsInObject(item, unresolved));
+    return obj.map((item) => expandEnvVarsInObject(item, unresolved)) as T;
   }
   if (obj !== null && typeof obj === 'object') {
-    const result: any = {};
+    const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj)) {
       result[key] = expandEnvVarsInObject(value, unresolved);
     }
-    return result;
+    return result as T;
   }
   return obj;
 }

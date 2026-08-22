@@ -54,9 +54,9 @@
 **Test Coverage:**
 - ✅ Unit: `compression-cache.test.ts` - Cache persistence
 - ✅ Integration: `compression-session-integration.test.ts` - Cache survives session deletion
-- ⚠️  E2E: **Missing comprehensive multi-session persistence test**
+- ✅ E2E: `user-journey.test.ts` - "complete user workflow across multiple sessions"
 
-**Status:** ⚠️  Partially Covered - **Needs Multi-Session E2E Test**
+**Status:** ✅ Fully Covered
 
 ---
 
@@ -66,9 +66,9 @@
 **Test Coverage:**
 - ✅ Unit: `session-manager.test.ts` - Session isolation, expansion tracking
 - ✅ Integration: `compression-session-integration.test.ts` - Multi-session isolation
-- ⚠️  E2E: **Missing realistic user journey across sessions**
+- ✅ E2E: `user-journey.test.ts` - full journey across sessions
 
-**Status:** ⚠️  Partially Covered - **Needs User Journey E2E Test**
+**Status:** ✅ Fully Covered
 
 ---
 
@@ -78,9 +78,9 @@
 **Test Coverage:**
 - ✅ Unit: `session-manager.test.ts` - CRUD operations, lifecycle
 - ✅ Integration: Session lifecycle with compression
-- ⚠️  E2E: **Missing complete session workflow test**
+- ✅ E2E: `user-journey.test.ts` - "concurrent session workflows"
 
-**Status:** ⚠️  Partially Covered - **Needs Session Workflow E2E Test**
+**Status:** ✅ Fully Covered
 
 ---
 
@@ -98,7 +98,8 @@
 **Description:** Configure which MCP servers to aggregate (enabled/disabled)
 
 **Test Coverage:**
-- ✅ Unit: `servers-config.test.ts` - Configuration validation and filtering
+- ✅ Unit: `config-loader.test.ts` - Loading, aggregation and enabled/disabled filtering
+- ✅ Unit: `config-schema.test.ts` - Schema validation of every option
 
 **Status:** ✅ Fully Covered
 
@@ -132,16 +133,19 @@
 - `create_session` - Create new session
 - `delete_session` - Delete existing session
 - `set_session` - Set active session
-- `compress_tools` - Get tools for compression
-- `save_compressed_tools` - Save compressed descriptions
+- `clear_compressed_tools_cache` - Drop all cached compressed descriptions
+- `get_uncompressed_tools` - Get tools that still need compression
+- `cache_compressed_tools` - Save compressed descriptions
+- `compress_via_sampling` - Compress using the host LLM (MCP sampling)
 - `expand_tool` - Expand tool to full description
 - `collapse_tool` - Collapse tool to compressed description
+- `stats` - Coverage, cache health, sessions, per-server counts
 
 **Test Coverage:**
 - ✅ Unit: Individual components tested
-- ⚠️  E2E: **Missing management tools integration test**
+- ✅ E2E: `user-journey.test.ts` - "management tools API workflow"
 
-**Status:** ⚠️  Partially Covered - **Needs Management Tools E2E Test**
+**Status:** ✅ Fully Covered
 
 ---
 
@@ -179,6 +183,64 @@
 
 ---
 
+### 16. **Environment Inheritance and Expansion**
+**Description:** What backend servers inherit from the proxy, and `${VAR}` expansion in `servers.json`
+
+**Test Coverage:**
+- ✅ Unit: `env-inheritance.test.ts` - ambient vars, explicit overrides, `inheritEnv` false/allowlist, per-server override, shell functions skipped
+- ✅ Unit: `env-expansion.test.ts` - substitution, unresolved-variable warning, `${VAR:-default}`, `$${VAR}` escape
+
+**Status:** ✅ Fully Covered
+
+---
+
+### 17. **Uncached Tool Fallback Behavior**
+**Description:** `compressionFallbackBehavior` - what a tool shows before it has been compressed
+
+**Test Coverage:**
+- ✅ Unit: `compression-fallback.test.ts` - both modes across cached, uncached, expanded and noCompress tools
+- ✅ Unit: `config-schema.test.ts` - validation rejects unknown values
+
+**Status:** ✅ Fully Covered
+
+---
+
+### 18. **Live Coverage Stats**
+**Description:** Coverage and token savings surfaced in management tool descriptions and responses
+
+**Test Coverage:**
+- ✅ Unit: `live-coverage.test.ts` - computation and formatting for empty, partial and fully-compressed caches
+
+**Status:** ✅ Fully Covered
+
+---
+
+### 19. **Host-LLM Compression (MCP Sampling)**
+**Description:** Compress descriptions using the client's own LLM via `sampling/createMessage`
+
+**Test Coverage:**
+- ✅ Unit: `compression-sampler.test.ts` - capability detection, batching, sequential dispatch, and reply parsing across prose-wrapped JSON, malformed JSON, hallucinated tool names and rejected batches
+
+**Status:** ✅ Fully Covered
+
+---
+
+### 20. **mcp-cli Daemon Lifecycle**
+**Description:** Background daemon for progressive tool discovery
+
+**Test Coverage:**
+- ✅ Unit: `cli-commands.test.ts`, `cli-ipc-client.test.ts`, `cli-payload-interceptor.test.ts`
+- ✅ Integration: `cli-daemon-lifecycle.test.ts` - drives the built binary as a subprocess: start exits cleanly, status, tools, idempotent start, stop with cleanup, corrupt PID file
+
+**Status:** ✅ Fully Covered
+
+The daemon entry points are excluded from `collectCoverageFrom` because they
+need a real process rather than a module import, so the subprocess test is
+their only coverage. It is deliberately not vacuous - reverting the `spawn`
+fix makes it hang and fail.
+
+---
+
 ## Test Coverage Summary
 
 | Feature | Unit | Integration | E2E | Status |
@@ -187,38 +249,35 @@
 | Tool Name Prefixing | - | - | ✅ | ✅ Complete |
 | Description Compression | ✅ | ✅ | ✅ | ✅ Complete |
 | Toggle Compressed/Full | ✅ | ✅ | ✅ | ✅ Complete |
-| Compression Persistence | ✅ | ✅ | ⚠️ | ⚠️ Needs Multi-Session E2E |
-| Session-Based Expansion | ✅ | ✅ | ⚠️ | ⚠️ Needs User Journey E2E |
-| Session Management | ✅ | ✅ | ⚠️ | ⚠️ Needs Workflow E2E |
+| Compression Persistence | ✅ | ✅ | ✅ | ✅ Complete |
+| Session-Based Expansion | ✅ | ✅ | ✅ | ✅ Complete |
+| Session Management | ✅ | ✅ | ✅ | ✅ Complete |
 | Session Auto-Expiration | ✅ | - | - | ✅ Complete |
 | Server Configuration | ✅ | - | - | ✅ Complete |
 | Error Handling | ✅ | - | ✅ | ✅ Complete |
 | Parallel Tool Listing | ✅ | - | - | ✅ Complete |
-| Management Tools | ✅ | - | ⚠️ | ⚠️ Needs API E2E |
+| Management Tools | ✅ | - | ✅ | ✅ Complete |
 | Statistics/Monitoring | ✅ | ✅ | ✅ | ✅ Complete |
 | Server Health Reporting | ✅ | - | - | ✅ Complete |
 | Tool Filtering - noCompress | - | ✅ | ✅ | ✅ Complete |
-
-## Identified Gaps
-
-### 🟡 Minor Gap: Management Tools Integration Test
-
-**Missing Test:** Integration test for management tools API workflow
-
-**Required Test Scenario:**
-1. Test `compress_tools` → returns tools for compression
-2. Test `save_compressed_tools` → saves compressed descriptions
-3. Test `create_session` → creates and returns session ID
-4. Test `expand_tool` → expands tool in session
-5. Test `collapse_tool` → collapses tool in session
-6. Test error handling for invalid inputs
-
-**Impact:** Would ensure management tools work correctly together
+| Environment Inheritance | ✅ | - | - | ✅ Complete |
+| Env Var Expansion | ✅ | - | - | ✅ Complete |
+| Uncached Fallback Behavior | ✅ | - | - | ✅ Complete |
+| Live Coverage Stats | ✅ | - | - | ✅ Complete |
+| Host-LLM Sampling | ✅ | - | - | ✅ Complete |
+| mcp-cli Daemon Lifecycle | ✅ | ✅ | - | ✅ Complete |
+| Config Schema Validation | ✅ | - | - | ✅ Complete |
 
 ---
 
+## Identified Gaps
+
+No known coverage gaps. The four gaps this document previously listed -
+multi-session persistence, user journey, session workflow and management
+tools - are all covered by `user-journey.test.ts`.
+
 ## Recommendations
 
-1. **Medium Priority:** Add management tools integration test
-2. **Low Priority:** Consider adding performance benchmarks for compression ratios
-3. **Maintenance:** Address test teardown warnings in integration tests
+1. **Low Priority:** Consider performance benchmarks for compression ratios
+2. **Maintenance:** Keep this document in step with new features; the counts
+   in `tests/README.md` are the source of truth for suite and test totals

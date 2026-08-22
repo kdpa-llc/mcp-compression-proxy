@@ -1,7 +1,7 @@
 /**
  * Real LLM Integration E2E Test
  *
- * This test validates the complete MCP Tool Aggregator workflow using a real LLM (Ollama).
+ * This test validates the complete MCP Compression Proxy workflow using a real LLM (Ollama).
  * Unlike mocked tests, this verifies that:
  * - The MCP server actually communicates via stdio correctly
  * - Tool descriptions guide real LLM behavior
@@ -51,7 +51,7 @@ describe('Real LLM E2E Integration', () => {
     }
 
     // Start MCP server
-    console.log('🔧 Starting MCP Tool Aggregator server...');
+    console.log('🔧 Starting MCP Compression Proxy server...');
     const serverPath = path.join(process.cwd(), 'dist/index.js');
 
     transport = new StdioClientTransport({
