@@ -257,7 +257,7 @@ describe('Real LLM E2E Integration', () => {
     try {
       const fileContent = await fs.readFile(filePath, 'utf-8');
       toolsToCompress = JSON.parse(fileContent);
-    } catch (error) {
+    } catch {
       console.log('   ⚠️  Skipping expansion test - failed to read tools file');
       return;
     }

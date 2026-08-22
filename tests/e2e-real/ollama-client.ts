@@ -138,7 +138,7 @@ Return ONLY a JSON array with this exact format:
 
     // Extract JSON from response (LLM might add extra text)
     // Try to find the last complete JSON array in the response
-    let jsonMatch = response.match(/\[[\s\S]*\]/);
+    const jsonMatch = response.match(/\[[\s\S]*\]/);
     if (!jsonMatch) {
       throw new Error(`Failed to extract JSON from LLM response: ${response}`);
     }

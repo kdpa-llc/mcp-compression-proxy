@@ -23,6 +23,8 @@
   "noCompressTools": [
     "filesystem__*"
   ],
+  "inheritEnv": true,
+  "compressionFallbackBehavior": "original",
   "cli": {
     "payloadThreshold": 500,
     "autoStartDaemon": true,

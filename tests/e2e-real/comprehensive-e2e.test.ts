@@ -317,7 +317,7 @@ Return a JSON array of tool names to use: `;
     console.log(`   LLM response: ${llmResponse.substring(0, 200)}...`);
 
     // Extract tool names from response - try multiple patterns
-    let jsonMatch = llmResponse.match(/\[[^\]]+\]/);
+    const jsonMatch = llmResponse.match(/\[[^\]]+\]/);
     let selectedTools: string[];
 
     // If no JSON array found, try to extract tool names from natural language
@@ -344,7 +344,7 @@ Return a JSON array of tool names to use: `;
       try {
         selectedTools = JSON.parse(jsonMatch[0]);
         console.log(`   LLM selected tools: ${selectedTools.join(', ')}`);
-      } catch (error) {
+      } catch {
         console.log('   Warning: Failed to parse JSON, using fallback');
         selectedTools = ['math__multiply', 'text__uppercase'];
       }
@@ -439,7 +439,7 @@ Return a JSON array of tool names to use: `;
     try {
       const fileContent = readFileSync(filePath, 'utf-8');
       toolsToCompress = JSON.parse(fileContent);
-    } catch (error) {
+    } catch {
       console.log('   ⚠️  Failed to read tools file');
       return;
     }
@@ -576,7 +576,7 @@ Return a JSON array of tool names to use: `;
     try {
       const fileContent = readFileSync(filePath, 'utf-8');
       toolsToCompress = JSON.parse(fileContent);
-    } catch (error) {
+    } catch {
       console.log('   ⚠️  Failed to read tools file, skipping compression test');
       return;
     }

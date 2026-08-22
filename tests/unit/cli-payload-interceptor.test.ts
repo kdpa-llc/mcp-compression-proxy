@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from '@jest/globals';
 import { interceptPayload } from '../../src/cli/payload-interceptor.js';
-import { existsSync, readFileSync, unlinkSync } from 'fs';
+import { existsSync, readFileSync, unlinkSync, statSync } from 'fs';
+import { dirname } from 'path';
 import { tmpdir } from 'os';
 
 describe('PayloadInterceptor', () => {
@@ -112,5 +113,54 @@ describe('PayloadInterceptor', () => {
     expect(match![1].startsWith(tmpdir())).toBe(true);
 
     createdFiles.push(match![1]);
+  });
+
+  describe('temp file permissions', () => {
+    const pathOf = (result: string): string => {
+      const match = result.match(/Output saved to (.*?) \(/);
+      expect(match).toBeTruthy();
+      createdFiles.push(match![1]);
+      return match![1];
+    };
+
+    it('writes payloads readable only by the owner', () => {
+      const filePath = pathOf(interceptPayload('x'.repeat(1000), 100));
+
+      // 0600 - no group or other access to whatever the backend returned.
+      expect(statSync(filePath).mode & 0o777).toBe(0o600);
+    });
+
+    it('writes into a private directory, not the shared temp root', () => {
+      const filePath = pathOf(interceptPayload('y'.repeat(1000), 100));
+      const dir = dirname(filePath);
+
+      // A predictable path in the world-writable temp root is what let another
+      // local user pre-plant a symlink at the target.
+      expect(dir).not.toBe(tmpdir());
+      expect(dir.startsWith(tmpdir())).toBe(true);
+      expect(statSync(dir).mode & 0o777).toBe(0o700);
+    });
+
+    it('does not make the path predictable from content alone', () => {
+      const content = 'z'.repeat(1000);
+      const filePath = pathOf(interceptPayload(content, 100));
+
+      // The content hash may still name the file, but the containing
+      // directory is random, so the full path cannot be guessed in advance.
+      const hash = 'mcp_output_';
+      expect(filePath).toContain(hash);
+      expect(filePath.replace(/.*mcp-output-/, '')).not.toBe(content);
+      expect(dirname(filePath)).toMatch(/mcp-output-\w+$/);
+    });
+
+    it('reuses the file when identical content is intercepted twice', () => {
+      const content = 'w'.repeat(1000);
+      const first = interceptPayload(content, 100);
+      const second = interceptPayload(content, 100);
+
+      expect(first).toBe(second);
+      const filePath = pathOf(first);
+      expect(readFileSync(filePath, 'utf-8')).toBe(content);
+    });
   });
 });

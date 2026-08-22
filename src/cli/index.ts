@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { fork } from 'child_process';
+import { spawn } from 'child_process';
 import { existsSync, readFileSync, unlinkSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -58,7 +58,11 @@ async function startDaemon(): Promise<boolean> {
     unlinkSync(READY_FILE);
   }
 
-  const child = fork(daemonScript, [], {
+  // spawn, not fork: fork opens an IPC channel to the child, and that channel
+  // keeps this process's event loop alive even after child.unref(), so
+  // `mcp-cli daemon start` printed its success message and then hung forever.
+  // The daemon never uses process.send(), so the channel was pure overhead.
+  const child = spawn(process.execPath, [daemonScript], {
     detached: true,
     stdio: 'ignore',
   });
@@ -81,33 +85,75 @@ async function startDaemon(): Promise<boolean> {
   return isDaemonRunning(SOCKET_PATH);
 }
 
+/** Remove the socket, PID and ready markers left behind by a dead daemon. */
+function cleanupDaemonFiles(): void {
+  for (const file of [PID_FILE, SOCKET_PATH, READY_FILE]) {
+    try {
+      unlinkSync(file);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 /**
- * Stop the daemon by sending SIGTERM.
+ * Stop the daemon by sending SIGTERM and waiting for it to actually exit.
  */
-function stopDaemon(): boolean {
+async function stopDaemon(): Promise<boolean> {
   if (!existsSync(PID_FILE)) {
     console.log('Daemon is not running (no PID file).');
     return false;
   }
 
-  const pid = parseInt(readFileSync(PID_FILE, 'utf-8').trim(), 10);
+  const pid = Number.parseInt(readFileSync(PID_FILE, 'utf-8').trim(), 10);
+
+  // A truncated or corrupt PID file yields NaN, and process.kill(NaN) throws
+  // ERR_INVALID_ARG_TYPE rather than ESRCH - which would escape the handler
+  // below and surface as a stack trace instead of a stale-file message.
+  if (!Number.isInteger(pid) || pid <= 0) {
+    cleanupDaemonFiles();
+    console.log('Daemon is not running (corrupt PID file cleaned up).');
+    return false;
+  }
+
+  // A PID alone is not proof this is our daemon: if it died without cleaning
+  // up, the OS may have recycled the number for an unrelated process, and
+  // signalling that would kill something we do not own. Only trust the PID
+  // when the daemon also answers on its socket.
+  if (!(await isDaemonRunning(SOCKET_PATH))) {
+    cleanupDaemonFiles();
+    console.log('Daemon was not running (stale PID file cleaned up).');
+    return false;
+  }
 
   try {
     process.kill(pid, 'SIGTERM');
-    console.log(`Daemon stopped (PID ${pid}).`);
-    return true;
   } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    if (err.code === 'ESRCH') {
-      // Process doesn't exist — clean up stale files
-      try { unlinkSync(PID_FILE); } catch { /* ignore */ }
-      try { unlinkSync(SOCKET_PATH); } catch { /* ignore */ }
-      try { unlinkSync(READY_FILE); } catch { /* ignore */ }
+    if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
+      cleanupDaemonFiles();
       console.log('Daemon was not running (stale PID file cleaned up).');
       return false;
     }
     throw error;
   }
+
+  // Shutdown disconnects every backend server first, so the process does not
+  // exit immediately. Reporting success too early lets a follow-up `daemon
+  // start` race the old daemon, which still owns the socket.
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      cleanupDaemonFiles();
+      console.log(`Daemon stopped (PID ${pid}).`);
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  console.error(`Daemon (PID ${pid}) did not exit within 10s; it may still be shutting down.`);
+  return false;
 }
 
 /**
@@ -140,10 +186,18 @@ async function readStdin(): Promise<string | null> {
   return new Promise((resolve) => {
     let data = '';
     process.stdin.setEncoding('utf-8');
+
+    // Give up after 1s rather than hanging on a pipe that never closes. The
+    // timer is unref'd and cleared so it cannot keep the CLI alive after
+    // stdin has already ended.
+    const timer = setTimeout(() => resolve(data.trim() || null), 1000);
+    timer.unref?.();
+
     process.stdin.on('data', (chunk) => { data += chunk; });
-    process.stdin.on('end', () => resolve(data.trim() || null));
-    // Timeout after 1s to not hang
-    setTimeout(() => resolve(data.trim() || null), 1000);
+    process.stdin.on('end', () => {
+      clearTimeout(timer);
+      resolve(data.trim() || null);
+    });
   });
 }
 
@@ -188,7 +242,7 @@ async function main(): Promise<void> {
       }
 
       case 'stop':
-        stopDaemon();
+        await stopDaemon();
         return;
 
       case 'status':

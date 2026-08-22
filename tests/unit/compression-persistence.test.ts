@@ -27,7 +27,7 @@ describe('CompressionPersistence', () => {
     // Clean up test directory
     try {
       await fs.rm(testCacheDir, { recursive: true, force: true });
-    } catch (error) {
+    } catch {
       // Ignore cleanup errors
     }
   });

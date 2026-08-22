@@ -10,11 +10,12 @@ import {
 import { MCPClientManager } from './mcp/client-manager.js';
 import { CompressionCache } from './services/compression-cache.js';
 import { SessionManager } from './services/session-manager.js';
-import { loadJSONServers, matchesIgnorePattern } from './config/loader.js';
+import { loadJSONServersCached, matchesIgnorePattern } from './config/loader.js';
 import { writeFileSync, readFileSync } from 'fs';
 import { resolve } from 'path';
 import pino from 'pino';
-import { StatsService } from './services/stats-service.js';
+import { StatsService, type ObservedTool } from './services/stats-service.js';
+import { SERVER_NAME, VERSION } from './version.js';
 
 /**
  * MCP Server that aggregates tools from multiple MCP servers
@@ -52,8 +53,8 @@ let currentSessionId: string | undefined;
 // Create MCP server
 const server = new Server(
   {
-    name: 'mcp-compression-proxy',
-    version: '0.1.0',
+    name: SERVER_NAME,
+    version: VERSION,
   },
   {
     capabilities: {
@@ -62,11 +63,49 @@ const server = new Server(
   }
 );
 
+/** A backend tool plus the metadata needed to namespace and compress it. */
+type BackendTool = ObservedTool & { inputSchema: Tool['inputSchema'] };
+
+/**
+ * Fetch every tool from every connected backend server, once.
+ *
+ * Callers that need both the tool list and derived counts should reuse a single
+ * snapshot rather than calling `listTools` per tool.
+ */
+async function fetchAllBackendTools(): Promise<BackendTool[]> {
+  const clients = clientManager.getConnectedClients();
+
+  const perServer = await Promise.all(
+    clients.map(async ({ name, client }): Promise<BackendTool[]> => {
+      try {
+        const result = await client.listTools();
+        return result.tools.map((tool) => ({
+          serverName: name,
+          toolName: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+        }));
+      } catch (error) {
+        logger.error({ server: name, error }, 'Failed to list tools from server');
+        return [];
+      }
+    })
+  );
+
+  return perServer.flat();
+}
+
 /**
  * List all tools from aggregated MCP servers + management tools
  */
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   logger.debug('Handling tools/list request');
+
+  // Fetch backend tools first so the management tools can advertise live
+  // coverage numbers derived from this same snapshot.
+  const backendTools = await fetchAllBackendTools();
+  const coverage = statsService.computeCoverage(backendTools);
+  const liveStats = statsService.formatCoverage(coverage);
 
   const aggregatorTools: Tool[] = [
     {
@@ -115,7 +154,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     },
     {
       name: 'mcp-compression-proxy__get_uncompressed_tools',
-      description: 'Get tools that need compression (those without cached compressed descriptions). Returns up to the specified limit of tools that need compression. After compressing these descriptions, call mcp-compression-proxy__cache_compressed_tools. Repeat this process until no uncached tools remain.',
+      description: `Get tools that need compression (those without cached compressed descriptions). Returns up to the specified limit of tools that need compression. After compressing these descriptions, call mcp-compression-proxy__cache_compressed_tools. Repeat this process until no uncached tools remain. ${liveStats}`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -135,7 +174,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     },
     {
       name: 'mcp-compression-proxy__cache_compressed_tools',
-      description: 'Save compressed tool descriptions to cache (max 100 tools per call). Provide either descriptions array or inputFile path. After caching, call mcp-compression-proxy__get_uncompressed_tools again to get the next batch if any remain uncached. Continue until all tools are compressed.',
+      description: `Save compressed tool descriptions to cache (max 100 tools per call). Provide either descriptions array or inputFile path. After caching, call mcp-compression-proxy__get_uncompressed_tools again to get the next batch if any remain uncached. Continue until all tools are compressed. ${liveStats}`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -217,48 +256,33 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     },
   ];
 
-  // Get tools from all connected MCP servers
-  const clients = clientManager.getConnectedClients();
-  logger.info({ connectedCount: clients.length, clients: clients.map(c => c.name) }, 'Connected clients for tools/list');
-  
-  const toolPromises = clients.map(async ({ name, client }) => {
-    try {
-      const result = await client.listTools();
-      return result.tools.map((tool) => {
-        // Check if tool is expanded in current session
-        const isExpanded = sessionManager.isToolExpanded(
-          currentSessionId,
-          name,
-          tool.name
-        );
+  const aggregatedTools: Tool[] = backendTools.map((tool) => {
+    // Check if tool is expanded in current session
+    const isExpanded = sessionManager.isToolExpanded(
+      currentSessionId,
+      tool.serverName,
+      tool.toolName
+    );
 
-        // Get description: compressed by default, original if expanded
-        const description = compressionCache.getDescription(
-          name,
-          tool.name,
-          tool.description,
-          isExpanded
-        );
+    // Get description: compressed by default, original if expanded
+    const description = compressionCache.getDescription(
+      tool.serverName,
+      tool.toolName,
+      tool.description,
+      isExpanded
+    );
 
-        return {
-          name: `${name}__${tool.name}`,
-          description,
-          inputSchema: tool.inputSchema,
-        };
-      });
-    } catch (error) {
-      logger.error({ server: name, error }, 'Failed to list tools from server');
-      return [];
-    }
+    return {
+      name: `${tool.serverName}__${tool.toolName}`,
+      description,
+      inputSchema: tool.inputSchema,
+    };
   });
-
-  const toolArrays = await Promise.all(toolPromises);
-  const aggregatedTools = toolArrays.flat();
 
   const allTools = [...aggregatorTools, ...aggregatedTools];
 
   // Apply exclude patterns to filter out tools
-  const config = loadJSONServers();
+  const config = loadJSONServersCached();
   const excludePatterns = config?.excludePatterns || [];
   const filteredTools = allTools.filter(tool => {
     const isExcluded = matchesIgnorePattern(tool.name, excludePatterns);
@@ -374,25 +398,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { limit = 25, outputFile } = args as { limit?: number; outputFile?: string };
     const actualLimit = Math.min(Math.max(limit, 1), 100);
 
-    const clients = clientManager.getConnectedClients();
-    const toolPromises = clients.map(async ({ name, client }) => {
-      try {
-        const result = await client.listTools();
-        return result.tools
-          .filter((tool) => !compressionCache.hasCompressed(name, tool.name))
-          .map((tool) => ({
-            serverName: name,
-            toolName: tool.name,
-            description: tool.description || '',
-          }));
-      } catch (error) {
-        return [];
-      }
-    });
+    const backendTools = await fetchAllBackendTools();
+    const coverage = statsService.computeCoverage(backendTools);
+    const liveStats = statsService.formatCoverage(coverage);
 
-    const toolArrays = await Promise.all(toolPromises);
-    const allUncompressedTools = toolArrays.flat();
-    
+    const allUncompressedTools = backendTools
+      .filter((tool) => !compressionCache.hasCompressed(tool.serverName, tool.toolName))
+      .map((tool) => ({
+        serverName: tool.serverName,
+        toolName: tool.toolName,
+        description: tool.description || '',
+      }));
+
     // Apply limit
     const toolsToCompress = allUncompressedTools.slice(0, actualLimit);
     const remaining = Math.max(0, allUncompressedTools.length - actualLimit);
@@ -409,7 +426,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: 'text',
-              text: `Found ${allUncompressedTools.length} tools without compressed descriptions.\n\nWrote ${toolsToCompress.length} tools to file: ${filePath}\n\nRemaining uncached tools: ${remaining}\n\nAfter compressing the descriptions in the file, call mcp-compression-proxy__cache_compressed_tools with inputFile parameter.${remaining > 0 ? '\n\nThen call mcp-compression-proxy__get_uncompressed_tools again to get the next batch.' : ''}`,
+              text: `Found ${allUncompressedTools.length} tools without compressed descriptions.\n\nWrote ${toolsToCompress.length} tools to file: ${filePath}\n\nRemaining uncached tools: ${remaining}\n\n${liveStats}\n\nAfter compressing the descriptions in the file, call mcp-compression-proxy__cache_compressed_tools with inputFile parameter.${remaining > 0 ? '\n\nThen call mcp-compression-proxy__get_uncompressed_tools again to get the next batch.' : ''}`,
             },
           ],
         };
@@ -432,7 +449,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       content: [
         {
           type: 'text',
-          text: `Found ${allUncompressedTools.length} tools without compressed descriptions.\n\nReturning ${toolsToCompress.length} tools for compression (limit: ${actualLimit}).\n\nRemaining uncached tools: ${remaining}\n\nTools to compress:\n\n${JSON.stringify(toolsToCompress, null, 2)}\n\nAfter compressing these descriptions, call mcp-compression-proxy__cache_compressed_tools with the results.${remaining > 0 ? '\n\nThen call mcp-compression-proxy__get_uncompressed_tools again to get the next batch.' : ''}`,
+          text: `Found ${allUncompressedTools.length} tools without compressed descriptions.\n\nReturning ${toolsToCompress.length} tools for compression (limit: ${actualLimit}).\n\nRemaining uncached tools: ${remaining}\n\n${liveStats}\n\nTools to compress:\n\n${JSON.stringify(toolsToCompress, null, 2)}\n\nAfter compressing these descriptions, call mcp-compression-proxy__cache_compressed_tools with the results.${remaining > 0 ? '\n\nThen call mcp-compression-proxy__get_uncompressed_tools again to get the next batch.' : ''}`,
         },
       ],
     };
@@ -528,48 +545,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
+    // Snapshot every backend tool once. Looking the original description up per
+    // tool would issue one listTools round-trip per entry (up to 100 per call).
+    const backendTools = await fetchAllBackendTools();
+    const originalsByKey = new Map(
+      backendTools.map((tool) => [`${tool.serverName}:${tool.toolName}`, tool.description])
+    );
+
+    const coverageBefore = statsService.computeCoverage(backendTools);
+
     let savedCount = 0;
 
     for (const desc of toolsToCache) {
       const { serverName, toolName, description: compressedDescription } = desc;
 
-      // Get original description from MCP server
-      const client = clientManager.getClient(serverName);
-      let originalDescription: string | undefined;
-
-      if (client) {
-        try {
-          const result = await client.listTools();
-          const tool = result.tools.find((t) => t.name === toolName);
-          originalDescription = tool?.description;
-        } catch (error) {
-          logger.error({ serverName, toolName, error }, 'Failed to fetch original');
-        }
-      }
-
       compressionCache.saveCompressed(
         serverName,
         toolName,
         compressedDescription,
-        originalDescription
+        originalsByKey.get(`${serverName}:${toolName}`)
       );
 
       savedCount++;
     }
 
-    // Check for remaining uncached tools
-    const clients = clientManager.getConnectedClients();
-    const remainingPromises = clients.map(async ({ name, client }) => {
-      try {
-        const result = await client.listTools();
-        return result.tools.filter((tool) => !compressionCache.hasCompressed(name, tool.name));
-      } catch (error) {
-        return [];
-      }
-    });
-
-    const remainingArrays = await Promise.all(remainingPromises);
-    const remainingTools = remainingArrays.flat().length;
+    // Recompute against the same snapshot to report before/after coverage
+    const coverageAfter = statsService.computeCoverage(backendTools);
+    const remainingTools = coverageAfter.uncompressedTools;
 
     // Persist to disk
     try {
@@ -585,7 +587,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       content: [
         {
           type: 'text',
-          text: `Cached ${savedCount} compressed tool descriptions successfully ${sourceInfo}.\n\n${remainingTools > 0 ? `Remaining tools to compress: ${remainingTools}\n\nCall mcp-compression-proxy__get_uncompressed_tools to continue with the next batch.` : 'All tools have been compressed! 🎉'}`,
+          text: `Cached ${savedCount} compressed tool descriptions successfully ${sourceInfo}.\n\nCoverage: ${coverageBefore.compressedTools}/${coverageBefore.totalTools} (${coverageBefore.coveragePercent}%) → ${coverageAfter.compressedTools}/${coverageAfter.totalTools} (${coverageAfter.coveragePercent}%)\nEstimated tokens saved: ~${coverageAfter.estimatedTokensSaved} (was ~${coverageBefore.estimatedTokensSaved})\n\n${remainingTools > 0 ? `Remaining tools to compress: ${remainingTools}\n\nCall mcp-compression-proxy__get_uncompressed_tools to continue with the next batch.` : 'All tools have been compressed! 🎉'}`,
         },
       ],
     };
@@ -698,10 +700,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   // Aggregated MCP tool call
-  // Tool name format: "serverName__toolName"
-  const parts = name.split('__');
+  // Tool name format: "serverName__toolName". Split on the first separator
+  // only - backend tools are free to have "__" in their own names.
+  const separatorIndex = name.indexOf('__');
 
-  if (parts.length !== 2) {
+  if (separatorIndex <= 0 || separatorIndex + 2 >= name.length) {
     return {
       content: [
         {
@@ -713,7 +716,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     };
   }
 
-  const [serverName, toolName] = parts;
+  const serverName = name.slice(0, separatorIndex);
+  const toolName = name.slice(separatorIndex + 2);
   const client = clientManager.getClient(serverName);
 
   if (!client) {
@@ -751,6 +755,36 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 /**
+ * Shut down backend servers and exit.
+ *
+ * Without this the proxy leaves every spawned backend MCP server running when
+ * its own client goes away, leaking a process tree per client restart.
+ */
+let shuttingDown = false;
+async function shutdown(reason: string, exitCode = 0): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+
+  logger.info({ reason }, 'Shutting down');
+
+  try {
+    await clientManager.disconnectAll();
+  } catch (error) {
+    logger.error({ error }, 'Error while disconnecting backend servers');
+  }
+
+  try {
+    await server.close();
+  } catch (error) {
+    logger.debug({ error }, 'Error while closing server transport');
+  }
+
+  sessionManager.destroy();
+
+  process.exit(exitCode);
+}
+
+/**
  * Parse command-line arguments
  */
 function parseArgs(): { clearCache: boolean } {
@@ -785,7 +819,7 @@ async function main() {
   }
 
   // Load configuration from JSON files
-  const config = loadJSONServers();
+  const config = loadJSONServersCached();
 
   // Initialize backend MCP servers BEFORE connecting to Q CLI
   // This ensures all tools are available when the MCP client queries us
@@ -793,8 +827,9 @@ async function main() {
     logger.warn('No valid configuration found. Server will start with no backend MCP servers. Please create a servers.json file to add MCP servers.');
     // Continue with empty configuration - server will only provide management tools
   } else {
-    // Configure noCompress patterns
+    // Configure noCompress patterns and uncompressed-tool fallback
     compressionCache.setNoCompressPatterns(config.noCompressPatterns);
+    compressionCache.setFallbackBehavior(config.compressionFallbackBehavior ?? 'original');
 
     // Initialize MCP clients (only enabled servers)
     const enabledServers = config.servers.filter(server => {
@@ -810,15 +845,31 @@ async function main() {
 
     // Wait for all servers to initialize or timeout before reporting ready
     try {
-      await clientManager.initializeServers(enabledServers, config.defaultTimeout);
+      await clientManager.initializeServers(
+        enabledServers,
+        config.defaultTimeout,
+        config.inheritEnv
+      );
       logger.info('Backend MCP servers initialization complete');
     } catch (error) {
       logger.error({ error }, 'Error during backend server initialization');
     }
   }
 
-  // Now connect to Q CLI - all backend servers are ready (or timed out)
+  // Now connect to the MCP client - all backend servers are ready (or timed out)
   const transport = new StdioServerTransport();
+
+  // When the client disconnects, take the backend servers down with us.
+  server.onclose = () => {
+    void shutdown('client disconnected');
+  };
+
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    process.on(signal, () => {
+      void shutdown(signal);
+    });
+  }
+
   await server.connect(transport);
 
   logger.info('MCP Tool Aggregator Server ready and connected to stdio');

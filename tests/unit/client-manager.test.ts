@@ -4,6 +4,19 @@ import type { MCPServerConfig } from '../../src/types/index.js';
 import type { Logger } from 'pino';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 
+/**
+ * A connect() that resolves after `ms`, used to simulate a slow server.
+ *
+ * The timer is unref'd: tests that expect a timeout deliberately abandon this
+ * promise, and a pending 5s timer would otherwise hold the jest worker open
+ * past the end of the suite.
+ */
+function delayedConnect(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms).unref?.();
+  });
+}
+
 // Mock the MCP SDK
 jest.mock('@modelcontextprotocol/sdk/client/index.js');
 jest.mock('@modelcontextprotocol/sdk/client/stdio.js');
@@ -402,7 +415,7 @@ describe('MCPClientManager', () => {
       const slowClient = {
         ...mockClient,
         connect: jest.fn<() => Promise<void>>().mockImplementation(
-          () => new Promise((resolve) => setTimeout(resolve, 5000)) // 5 seconds
+          () => delayedConnect(5000)
         ),
       };
 
@@ -437,7 +450,7 @@ describe('MCPClientManager', () => {
       const fastClient = {
         ...mockClient,
         connect: jest.fn<() => Promise<void>>().mockImplementation(
-          () => new Promise((resolve) => setTimeout(resolve, 100)) // 100ms
+          () => delayedConnect(100)
         ),
       };
 
@@ -539,14 +552,14 @@ describe('MCPClientManager', () => {
       const fastClient = {
         ...mockClient,
         connect: jest.fn<() => Promise<void>>().mockImplementation(
-          () => new Promise((resolve) => setTimeout(resolve, 100))
+          () => delayedConnect(100)
         ),
       };
 
       const slowClient = {
         ...mockClient,
         connect: jest.fn<() => Promise<void>>().mockImplementation(
-          () => new Promise((resolve) => setTimeout(resolve, 5000))
+          () => delayedConnect(5000)
         ),
       };
 

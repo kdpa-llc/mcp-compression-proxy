@@ -23,6 +23,7 @@
 
 [Quick Start](#-quick-start) •
 [Features](#-features) •
+[mcp-cli](#️-mcp-cli-progressive-tool-discovery) •
 [Configuration](#-configuration) •
 [FAQ](#-faq) •
 [Contributing](#-contributing)
@@ -37,6 +38,7 @@
 - [✨ Features](#-features)
 - [🚀 Quick Start](#-quick-start)
 - [🎯 Usage](#-usage)
+- [⌨️ mcp-cli (Progressive Tool Discovery)](#️-mcp-cli-progressive-tool-discovery)
 - [🔧 Configuration](#-configuration)
 - [💡 Best Practices](#-best-practices)
 - [❓ FAQ](#-faq)
@@ -75,7 +77,7 @@ Instead of connecting to multiple MCP servers separately and consuming thousands
 
 ### Prerequisites
 
-- **Node.js 18+** installed on your system
+- **Node.js 22+** installed on your system
 - An **MCP-compatible client** (Claude Desktop, Cline, Continue.dev, etc.)
 
 ### 1. Install
@@ -166,24 +168,6 @@ Create a JSON configuration file to define which MCP servers to aggregate:
 ```
 
 > **Note:** No rebuild needed! Just edit the JSON file and restart your MCP client.
-
-#### Migration from TypeScript Config (if upgrading)
-
-If you're upgrading from a previous version that used TypeScript configuration:
-
-```bash
-# Migrate to user-level config
-npm run migrate-config
-
-# Or migrate to project-level config
-npm run migrate-config ./servers.json
-```
-
-The migration script will:
-1. Read your TypeScript configuration
-2. Convert it to JSON format
-3. Save it to the specified location
-4. Warn if config already exists (prevents accidental overwrites)
 
 ### 4. Restart Your MCP Client
 
@@ -280,6 +264,63 @@ node dist/index.js --clear-cache
 
 > **💡 Tip**: After setting up, simply tell your AI: *"Compress the tool descriptions to save context"* and it will handle the rest!
 
+## ⌨️ mcp-cli (Progressive Tool Discovery)
+
+The package also installs `mcp-cli`, a second entry point for agents that
+would rather *shell out* than hold every tool definition in context. Instead
+of loading all tools up front, the agent lists or searches for what it needs
+and pulls the full schema only for the tool it is about to call.
+
+A background daemon keeps warm connections to the backend MCP servers, so
+each command is a short IPC round-trip rather than a fresh server startup.
+
+```bash
+mcp-cli tools                          # List all tools (compressed)
+mcp-cli search <query>                 # Search tools by name/description
+mcp-cli info <server>/<tool>           # Full schema for one tool
+mcp-cli call <server>/<tool> '<json>'  # Execute a tool
+mcp-cli stats                          # Compression statistics
+
+mcp-cli daemon start                   # Start the background daemon
+mcp-cli daemon status                  # Show daemon status
+mcp-cli daemon stop                    # Stop the daemon
+```
+
+The daemon starts automatically on first use. Pass `--no-auto-start` to fail
+fast instead when it is not already running.
+
+`call` also accepts its JSON argument on stdin, which avoids shell quoting
+problems with large payloads:
+
+```bash
+echo '{"path": "/tmp/notes.md"}' | mcp-cli call filesystem/read_file
+```
+
+### CLI Configuration
+
+The optional `cli` block in `servers.json` tunes daemon behavior:
+
+```json
+{
+  "cli": {
+    "payloadThreshold": 500,
+    "autoStartDaemon": true,
+    "daemonLogLevel": "info"
+  },
+  "mcpServers": []
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `payloadThreshold` | number | `500` | Tool output longer than this many characters is written to a temp file and replaced with a reference, keeping large payloads out of the agent's context |
+| `autoStartDaemon` | boolean | `true` | Start the daemon automatically when a command needs it |
+| `daemonLogLevel` | string | `"info"` | Daemon log level (`debug`, `info`, `warn`, `error`) |
+
+Daemon state lives in `~/.mcp-compression-proxy/` (socket, PID file, and
+`daemon.log`), created with `0700` permissions since the control socket
+accepts commands that execute downstream MCP tools.
+
 ## 🔧 Configuration
 
 ### Server Configuration
@@ -313,6 +354,8 @@ Create or edit your JSON configuration file at:
 | `excludeTools` | string[] | ❌ | Tool name patterns to exclude from tool list entirely (supports wildcards) |
 | `noCompressTools` | string[] | ❌ | Tool name patterns to never compress - descriptions pass through unchanged (supports wildcards) |
 | `defaultTimeout` | number | ❌ | Default timeout in seconds for all servers (default: 30). Can be overridden per-server. |
+| `inheritEnv` | boolean \| string[] | ❌ | Which of the proxy's environment variables backend servers inherit (default: `true`). Can be overridden per-server. |
+| `compressionFallbackBehavior` | `"original"` \| `"blank"` | ❌ | What to show for a tool that has not been compressed yet (default: `"original"`) |
 
 **Server Configuration:**
 | Field | Type | Required | Description |
@@ -321,6 +364,7 @@ Create or edit your JSON configuration file at:
 | `command` | string | ✅ | Command to execute |
 | `args` | string[] | ❌ | Command arguments |
 | `env` | object | ❌ | Environment variables |
+| `inheritEnv` | boolean \| string[] | ❌ | Overrides the root-level `inheritEnv` for this server |
 | `enabled` | boolean | ❌ | Enable/disable server (default: true) |
 | `timeout` | number | ❌ | Server-specific timeout in seconds (overrides `defaultTimeout`) |
 
@@ -345,6 +389,70 @@ Use `${VAR_NAME}` syntax to reference environment variables:
 ```
 
 Variables are expanded at runtime from your shell environment.
+
+Two extra forms are supported:
+
+| Syntax | Meaning |
+|--------|---------|
+| `${VAR}` | Substitutes `VAR`, or an empty string with a warning if it is not set |
+| `${VAR:-fallback}` | Substitutes `VAR`, or `fallback` when unset or empty |
+| `$${VAR}` | Escapes the expansion — produces the literal text `${VAR}` |
+
+If a `${VAR}` reference cannot be resolved, the proxy logs a warning naming
+the variable. An unset variable becomes an empty string, which downstream
+servers usually report as an authentication failure rather than a config
+error, so check the startup log first when a server rejects valid-looking
+credentials.
+
+#### What Backend Servers Inherit
+
+Backend servers inherit the proxy's full environment by default, so variables
+you exported in your shell are visible to them without being listed in `env`.
+Entries in `env` always take precedence over inherited values.
+
+Narrow this with `inheritEnv` when a server should not see unrelated secrets:
+
+```json
+{
+  "inheritEnv": ["HOME", "PATH", "LANG"],
+  "mcpServers": [
+    {
+      "name": "trusted",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "inheritEnv": true
+    },
+    {
+      "name": "untrusted",
+      "command": "some-third-party-server",
+      "inheritEnv": false,
+      "env": { "API_KEY": "${THIRD_PARTY_KEY}" }
+    }
+  ]
+}
+```
+
+| Value | Effect |
+|-------|--------|
+| `true` (default) | Pass the proxy's full environment through |
+| `false` | Pass only the stdio transport's safe defaults (`PATH`, `HOME`, `SHELL`, …) |
+| `string[]` | Pass only the named variables, plus the transport's safe defaults |
+
+#### Uncompressed Tool Descriptions
+
+Before a tool has been compressed, the proxy shows its original description.
+Set `compressionFallbackBehavior` to `"blank"` to show nothing instead, so
+uncompressed tools cost no context while you work through them:
+
+```json
+{
+  "compressionFallbackBehavior": "blank",
+  "mcpServers": []
+}
+```
+
+This affects only tools with no cached compressed description. Compressed
+tools, expanded tools, and anything matching `noCompressTools` are unchanged.
 
 #### Server Initialization and Timeouts
 
@@ -660,7 +768,7 @@ Made with ❤️ by KDPA
 [npm-types-badge]: https://img.shields.io/npm/types/mcp-compression-proxy
 [license-badge]: https://img.shields.io/badge/License-MIT-yellow.svg
 [license]: https://opensource.org/licenses/MIT
-[node-badge]: https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg
+[node-badge]: https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen.svg
 [nodejs]: https://nodejs.org/
 [mcp-badge]: https://img.shields.io/badge/MCP-Compatible-purple.svg
 [mcp-protocol]: https://modelcontextprotocol.io/
