@@ -129,7 +129,9 @@ function loadJSONConfig(filePath: string): ServerConfigJSON | null {
     return expanded;
   } catch (error) {
     if (error instanceof SyntaxError) {
-      throw new Error(`Invalid JSON in ${filePath}: ${error.message}`);
+      // Keep the parser's own error as `cause`: it carries the offset of the
+      // offending token, which is what actually locates the typo.
+      throw new Error(`Invalid JSON in ${filePath}: ${error.message}`, { cause: error });
     }
     throw error;
   }

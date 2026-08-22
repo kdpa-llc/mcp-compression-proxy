@@ -490,11 +490,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
+    // Assigned by both branches below; no initializer, or the empty array is
+    // dead on every path.
     let toolsToCache: Array<{
       serverName: string;
       toolName: string;
       description: string;
-    }> = [];
+    }>;
 
     if (inputFile) {
       // Read from file
