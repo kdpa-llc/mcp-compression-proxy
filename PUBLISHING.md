@@ -206,22 +206,49 @@ the release needs **no `NPM_TOKEN` at all**: `verify-auth` exchanges the
 GitHub Actions OIDC token for a short-lived npm token and returns before it
 ever looks for a stored credential.
 
-**There is a bootstrap order, and it cannot be skipped.** Trusted publishers
-are configured on a package's settings page on npmjs.com, and the OIDC
-exchange endpoint is package-scoped
-(`/-/npm/v1/oidc/token/exchange/package/<name>`). Neither exists until the
-package does. So for a package that has never been published:
+**This step must be done interactively, and cannot be automated.** npm
+refuses to configure a trusted publisher from a token that bypasses
+two-factor authentication:
 
-1. **Publish once manually** to claim the name — the `First-Time Publishing`
-   steps above. This is the only step that needs a personal npm login.
-2. **Configure the trusted publisher** on npmjs.com: package settings →
-   Trusted Publisher → GitHub Actions, with this repository and
-   `release.yml` as the workflow.
-3. **Optionally disallow tokens** for the package once OIDC works, which is
-   npm's recommended hardening — it removes the stored-credential risk
-   entirely.
-4. From then on, every release from `main` publishes over OIDC with
+```
+403 POST /-/package/<name>/trust
+{"error":"Granular access tokens that bypass two-factor authentication
+may not perform this action."}
+```
+
+That is deliberate: otherwise a leaked automation token could grant itself
+permanent publish rights over OIDC. Registering a trusted publisher requires
+a 2FA-authenticated session, so it has to come from a human at a terminal or
+the npmjs.com UI — not from CI, and not from a stored `NPM_TOKEN`.
+
+There is also a bootstrap order. The OIDC exchange endpoint is
+package-scoped (`/-/npm/v1/oidc/token/exchange/package/<name>`) and the
+settings page does not exist until the package does, so the first publish
+must happen before any of this.
+
+Once the package exists, from a shell logged in with `npm login`:
+
+```bash
+npm trust github mcp-compression-proxy \
+  --repository kdpa-llc/mcp-compression-proxy \
+  --file release.yml \
+  --allow-publish
+
+npm trust list mcp-compression-proxy      # confirm
+```
+
+Or npmjs.com → the package → Settings → Trusted Publisher → GitHub Actions.
+
+Then:
+
+1. **Optionally disallow tokens** for the package, which is npm's
+   recommended hardening — it removes the stored-credential risk entirely.
+2. **Revoke `NPM_TOKEN`**, or let it expire. It is no longer needed.
+3. From then on, every release from `main` publishes over OIDC with
    provenance attestation, and no secret is stored in the repository.
+
+To undo, `npm trust revoke mcp-compression-proxy --id=<id>` using an id from
+`npm trust list`.
 
 Requirements, all already satisfied by `release.yml`:
 
