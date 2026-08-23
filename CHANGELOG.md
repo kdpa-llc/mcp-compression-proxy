@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.0.1](https://github.com/kdpa-llc/mcp-compression-proxy/compare/v1.0.0...v1.0.1) (2026-08-23)
+
+### Bug Fixes
+
+* **release:** stop uploading dist as flattened GitHub release assets ([#40](https://github.com/kdpa-llc/mcp-compression-proxy/issues/40)) ([d249836](https://github.com/kdpa-llc/mcp-compression-proxy/commit/d249836fa427663cda00bc727a50dcdebbf1c151))
+
 ## 1.0.0 (2026-08-23)
 
 ### ⚠ BREAKING CHANGES
