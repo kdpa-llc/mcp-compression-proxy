@@ -80,10 +80,7 @@
     [
       "@semantic-release/github",
       {
-        "assets": [
-          { "path": "dist/**", "label": "Distribution files" },
-          { "path": "CHANGELOG.md", "label": "Changelog" }
-        ]
+        "assets": [{ "path": "CHANGELOG.md", "label": "Changelog" }]
       }
     ],
     [
