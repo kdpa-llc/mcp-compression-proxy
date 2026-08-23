@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.0.2](https://github.com/kdpa-llc/mcp-compression-proxy/compare/v1.0.1...v1.0.2) (2026-08-23)
+
+### Documentation
+
+* record that trusted publishing cannot be configured from CI ([#42](https://github.com/kdpa-llc/mcp-compression-proxy/issues/42)) ([3f0bfd6](https://github.com/kdpa-llc/mcp-compression-proxy/commit/3f0bfd6c510a1cd0f93cae3c0ad002bc7c2bd247))
+
 ## [1.0.1](https://github.com/kdpa-llc/mcp-compression-proxy/compare/v1.0.0...v1.0.1) (2026-08-23)
 
 ### Bug Fixes

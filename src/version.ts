@@ -7,4 +7,4 @@
  * constant never needs to be edited by hand.
  */
 export const SERVER_NAME = 'mcp-compression-proxy';
-export const VERSION = '1.0.1';
+export const VERSION = '1.0.2';
