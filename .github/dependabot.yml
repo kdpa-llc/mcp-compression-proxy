@@ -36,6 +36,16 @@ updates:
       # (engines >=22, CI matrix 22 and 24), not run ahead of it.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+      # Pinned to ^9 on purpose. Preset 10 requires
+      # conventional-changelog-writer@9+, but @semantic-release/release-notes-
+      # generator pins writer to ^8, and semantic-release resolves this preset
+      # by name at runtime - so a hoisted preset 10 makes generateNotes fail
+      # with "Missing helper". That broke the first 1.0.0 release after npm
+      # publish had already succeeded, and CI cannot catch it because no test
+      # exercises note generation. Revisit when release-notes-generator moves
+      # to writer 9. @commitlint/config-conventional keeps its own nested 10.x.
+      - dependency-name: "conventional-changelog-conventionalcommits"
+        update-types: ["version-update:semver-major"]
     # A runtime dependency bump must cut a release, or a security patch can
     # land on main, auto-merge, and never reach npm. `chore` and `ci` are
     # mapped to no release in .releaserc.json, so only dev bumps use them.
