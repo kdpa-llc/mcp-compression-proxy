@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.0.3](https://github.com/kdpa-llc/mcp-compression-proxy/compare/v1.0.2...v1.0.3) (2026-08-24)
+
+### Bug Fixes
+
+* **deps:** raise SDK floor, and stop Dependabot breaking releases ([#47](https://github.com/kdpa-llc/mcp-compression-proxy/issues/47)) ([78f71f0](https://github.com/kdpa-llc/mcp-compression-proxy/commit/78f71f0722f9094f9a871c946984273fc6695664)), closes [#45](https://github.com/kdpa-llc/mcp-compression-proxy/issues/45) [#45](https://github.com/kdpa-llc/mcp-compression-proxy/issues/45)
+
 ## [1.0.2](https://github.com/kdpa-llc/mcp-compression-proxy/compare/v1.0.1...v1.0.2) (2026-08-23)
 
 ### Documentation
