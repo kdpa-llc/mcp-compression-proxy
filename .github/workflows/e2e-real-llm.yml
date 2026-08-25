@@ -28,6 +28,14 @@ jobs:
         node-version: '22.x'
         cache: 'npm'
 
+    # Pin npm so every job resolves the lockfile identically. Node 22 bundles
+    # npm 10 and Node 24 bundles npm 11, and the two disagree about lockfile
+    # resolution - a desync that npm 11 installs silently makes npm 10 fail
+    # with EUSAGE. That is exactly how #26 went red on the 22.x leg while
+    # passing locally.
+    - name: Pin npm
+      run: npm install -g npm@11
+
     - name: Install dependencies
       run: npm ci
 
@@ -120,6 +128,14 @@ jobs:
       with:
         node-version: '22.x'
         cache: 'npm'
+
+    # Pin npm so every job resolves the lockfile identically. Node 22 bundles
+    # npm 10 and Node 24 bundles npm 11, and the two disagree about lockfile
+    # resolution - a desync that npm 11 installs silently makes npm 10 fail
+    # with EUSAGE. That is exactly how #26 went red on the 22.x leg while
+    # passing locally.
+    - name: Pin npm
+      run: npm install -g npm@11
 
     - name: Install dependencies
       run: npm ci
