@@ -106,6 +106,14 @@ jobs:
     - name: Run linter
       run: npm run lint
 
+    # Guards the one release step CI otherwise never exercises. semantic-release
+    # resolves the changelog preset by name at runtime, so a dependency bump can
+    # make generateNotes fail - after npm publish has already succeeded. A
+    # --dry-run cannot catch this on a PR: it exits early on a non-release
+    # branch. This calls the plugin's real generateNotes instead.
+    - name: Verify release notes can be generated
+      run: npm run check:release-notes
+
   build:
     name: Build Project
     runs-on: ubuntu-latest
