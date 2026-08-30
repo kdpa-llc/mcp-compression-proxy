@@ -17,8 +17,22 @@ export const serverConfigSchema = {
           },
           command: {
             type: 'string',
-            description: 'Command to execute',
+            description: 'Command to execute for a locally spawned (stdio) server',
             minLength: 1,
+          },
+          url: {
+            type: 'string',
+            description:
+              'Endpoint of a hosted MCP server, spoken over Streamable HTTP. Mutually exclusive with "command"; the stdio-only fields (args, env, inheritEnv) do not apply.',
+            minLength: 1,
+          },
+          headers: {
+            type: 'object',
+            description:
+              'Static HTTP headers sent with every request to "url", e.g. { "Authorization": "Bearer ${MY_TOKEN}" }. Values go through the same ${VAR} expansion as "env".',
+            additionalProperties: {
+              type: 'string',
+            },
           },
           args: {
             type: 'array',
@@ -50,9 +64,12 @@ export const serverConfigSchema = {
             type: 'number',
             description: 'Server timeout in seconds',
           },
+          // Accepted but never read. Presence of `url` is the transport
+          // discriminator; keeping `type` declared only stops configs that
+          // already carry it from failing the stricter check below.
           type: {
             type: 'string',
-            description: 'Server transport type (usually "stdio")',
+            description: 'Ignored. Kept for compatibility with existing configs.',
           },
           autoApprove: {
             type: 'array',
@@ -62,8 +79,14 @@ export const serverConfigSchema = {
             },
           },
         },
-        required: ['name', 'command'],
-        additionalProperties: true,
+        required: ['name'],
+        // Exactly one transport. `oneOf` also rejects an entry that sets both,
+        // so no extra `not` is needed to catch command+url.
+        oneOf: [{ required: ['command'] }, { required: ['url'] }],
+        // Strict: a misspelled key like "comand" used to validate happily and
+        // then the server simply never started, with nothing in the log
+        // pointing at the typo.
+        additionalProperties: false,
       },
     },
     excludeTools: {
@@ -137,10 +160,12 @@ export type CompressionFallbackBehavior = 'original' | 'blank';
 export type ServerConfigJSON = {
   mcpServers: Array<{
     name: string;
-    command: string;
+    command?: string;
     args?: string[];
     env?: Record<string, string>;
     inheritEnv?: InheritEnv;
+    url?: string;
+    headers?: Record<string, string>;
     enabled?: boolean;
     timeout?: number;
     type?: string;

@@ -1,13 +1,25 @@
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 
+/**
+ * A backend server, either spawned locally (`command`) or reached over HTTP
+ * (`url`). The two are mutually exclusive, enforced by the config schema.
+ *
+ * Flat optionals rather than a discriminated union: `initializeServers`
+ * applies defaults by spreading (`{...server, timeout: ...}`), and TypeScript
+ * cannot keep a union narrowed across that.
+ */
 export interface MCPServerConfig {
   name: string;
-  command: string;
+  command?: string;
   args?: string[];
   env?: Record<string, string>;
   /** Which of the proxy's env vars to pass through. Defaults to all. */
   inheritEnv?: boolean | string[];
+  /** Endpoint of a hosted MCP server. Mutually exclusive with `command`. */
+  url?: string;
+  /** Static headers sent with every request to `url`, e.g. Authorization. */
+  headers?: Record<string, string>;
   enabled?: boolean;
   timeout?: number; // Timeout in seconds for server initialization
 }

@@ -20,6 +20,7 @@ function delayedConnect(ms: number): Promise<void> {
 // Mock the MCP SDK
 jest.mock('@modelcontextprotocol/sdk/client/index.js');
 jest.mock('@modelcontextprotocol/sdk/client/stdio.js');
+jest.mock('@modelcontextprotocol/sdk/client/streamableHttp.js');
 
 describe('MCPClientManager', () => {
   let clientManager: MCPClientManager;
@@ -397,6 +398,103 @@ describe('MCPClientManager', () => {
       await clientManager.initializeServers(servers);
 
       expect(mockLogger.info).toHaveBeenCalled();
+    });
+  });
+
+  describe('transport selection', () => {
+    async function transportMocks() {
+      const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+      (Client as unknown as jest.Mock).mockImplementation(() => mockClient);
+
+      const { StdioClientTransport } = await import(
+        '@modelcontextprotocol/sdk/client/stdio.js'
+      );
+      const { StreamableHTTPClientTransport } = await import(
+        '@modelcontextprotocol/sdk/client/streamableHttp.js'
+      );
+
+      return {
+        stdio: StdioClientTransport as unknown as jest.Mock,
+        http: StreamableHTTPClientTransport as unknown as jest.Mock,
+      };
+    }
+
+    it('should use the HTTP transport when url is set', async () => {
+      const { stdio, http } = await transportMocks();
+
+      await clientManager.initializeServers([
+        {
+          name: 'remote',
+          url: 'https://mcp.example.com/mcp',
+          headers: { Authorization: 'Bearer test-token' },
+          enabled: true,
+        },
+      ]);
+
+      expect(stdio).not.toHaveBeenCalled();
+      expect(http).toHaveBeenCalledTimes(1);
+
+      // Compared by href rather than by object: a URL carries no own
+      // enumerable properties, so toEqual() on two of them is vacuously true.
+      const [url, options] = http.mock.calls[0] as [URL, Record<string, unknown>];
+      expect(url).toBeInstanceOf(URL);
+      expect(url.href).toBe('https://mcp.example.com/mcp');
+      expect(options).toEqual({
+        requestInit: { headers: { Authorization: 'Bearer test-token' } },
+      });
+
+      expect(clientManager.getClient('remote')).toBeDefined();
+    });
+
+    it('should omit requestInit when no headers are configured', async () => {
+      const { http } = await transportMocks();
+
+      await clientManager.initializeServers([
+        { name: 'remote', url: 'https://mcp.example.com/mcp', enabled: true },
+      ]);
+
+      const [, options] = http.mock.calls[0] as [URL, Record<string, unknown>];
+      expect(options).toEqual({ requestInit: undefined });
+    });
+
+    it('should use the stdio transport when command is set', async () => {
+      const { stdio, http } = await transportMocks();
+
+      await clientManager.initializeServers([
+        {
+          name: 'local',
+          command: 'npx',
+          args: ['-y', 'some-server'],
+          inheritEnv: ['PATH'],
+          env: { TOKEN: 'from-config' },
+          enabled: true,
+        },
+      ]);
+
+      expect(http).not.toHaveBeenCalled();
+      expect(stdio).toHaveBeenCalledTimes(1);
+
+      const [options] = stdio.mock.calls[0] as [
+        { command: string; args?: string[]; env?: Record<string, string> },
+      ];
+      expect(options.command).toBe('npx');
+      expect(options.args).toEqual(['-y', 'some-server']);
+      expect(options.env?.TOKEN).toBe('from-config');
+    });
+
+    it('should fail the server when neither command nor url is set', async () => {
+      // Unreachable through config validation, but the manager is also driven
+      // directly by the daemon and by tests.
+      const { stdio, http } = await transportMocks();
+
+      await clientManager.initializeServers([{ name: 'neither', enabled: true }]);
+
+      expect(stdio).not.toHaveBeenCalled();
+      expect(http).not.toHaveBeenCalled();
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ server: 'neither' }),
+        'Failed to connect to MCP server'
+      );
     });
   });
 

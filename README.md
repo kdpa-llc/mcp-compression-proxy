@@ -381,12 +381,49 @@ Create or edit your JSON configuration file at:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | ✅ | Unique server identifier |
-| `command` | string | ✅ | Command to execute |
-| `args` | string[] | ❌ | Command arguments |
-| `env` | object | ❌ | Environment variables |
-| `inheritEnv` | boolean \| string[] | ❌ | Overrides the root-level `inheritEnv` for this server |
+| `command` | string | ⬥ | Command to execute (local stdio server) |
+| `url` | string | ⬥ | Endpoint of a hosted MCP server (Streamable HTTP) |
+| `args` | string[] | ❌ | Command arguments (`command` servers only) |
+| `env` | object | ❌ | Environment variables (`command` servers only) |
+| `inheritEnv` | boolean \| string[] | ❌ | Overrides the root-level `inheritEnv` for this server (`command` servers only) |
+| `headers` | object | ❌ | Static HTTP headers sent with every request (`url` servers only) |
 | `enabled` | boolean | ❌ | Enable/disable server (default: true) |
 | `timeout` | number | ❌ | Server-specific timeout in seconds (overrides `defaultTimeout`) |
+
+⬥ Exactly one of `command` or `url` is required. Unknown fields are rejected,
+so a misspelled key fails at startup instead of producing a server that never
+starts.
+
+#### Remote (HTTP) Servers
+
+A server entry with `url` instead of `command` is reached over Streamable HTTP
+rather than spawned as a subprocess:
+
+```json
+{
+  "mcpServers": [
+    {
+      "name": "remote-example",
+      "url": "https://mcp.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${EXAMPLE_API_TOKEN}"
+      },
+      "enabled": true,
+      "timeout": 30
+    }
+  ]
+}
+```
+
+`headers` values go through the same `${VAR}` expansion as `env`, which is how
+credentials stay out of the config file. There is no OAuth flow — a browser
+redirect has nowhere to go in a headless proxy — so a static bearer token or
+API-key header is the supported form of authentication.
+
+`args`, `env` and `inheritEnv` configure a process the proxy spawns itself and
+have no meaning for a remote server. Setting any of them alongside `url` is
+rejected at startup rather than silently ignored, as is setting both `command`
+and `url`.
 
 #### Environment Variable Expansion
 

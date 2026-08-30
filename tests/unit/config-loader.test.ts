@@ -317,28 +317,25 @@ describe('Config Loader', () => {
       expect(result!.servers[1].enabled).toBe(false);
     });
 
-    it('should allow additional properties', async () => {
-      const configWithAdditionalProps = {
+    it('should reject unknown server properties', async () => {
+      // Deliberately reversed: this used to pass unknown keys straight through,
+      // so a misspelled "command" produced a server that never started and no
+      // diagnostic naming the typo.
+      const configWithUnknownProps = {
         mcpServers: [
           {
             name: 'test-server',
             command: 'npx',
-            customField: 'additional property should be allowed',
-            anotherField: 42,
+            customField: 'not part of the schema',
           },
         ],
       };
 
-      writeFileSync(join(testDir, 'servers.json'), JSON.stringify(configWithAdditionalProps));
+      writeFileSync(join(testDir, 'servers.json'), JSON.stringify(configWithUnknownProps));
 
       const { loadJSONServers } = await importLoader();
 
-      expect(() => loadJSONServers()).not.toThrow();
-
-      const result = loadJSONServers();
-      expect(result).not.toBeNull();
-      expect(result!.servers[0].name).toBe('test-server');
-      expect((result!.servers[0] as any).customField).toBe('additional property should be allowed');
+      expect(() => loadJSONServers()).toThrow('Invalid server configuration');
     });
 
     it('should load per-server timeout configuration', async () => {
@@ -498,6 +495,86 @@ describe('Config Loader', () => {
       expect(result!.excludePatterns).toEqual(['user__*', '*__delete*']);
       expect(result!.noCompressPatterns).toEqual(['filesystem__*', '*__verbose*']);
     });
+  });
+
+  describe('remote (HTTP) servers', () => {
+    const writeProjectConfig = (server: Record<string, unknown>): void => {
+      writeFileSync(
+        join(testDir, 'servers.json'),
+        JSON.stringify({ mcpServers: [server] })
+      );
+    };
+
+    it('should load a url-only server', async () => {
+      writeProjectConfig({
+        name: 'remote',
+        url: 'https://mcp.example.com/mcp',
+        enabled: true,
+      });
+
+      const { loadJSONServers } = await importLoader();
+      const result = loadJSONServers();
+
+      expect(result!.servers[0].url).toBe('https://mcp.example.com/mcp');
+      expect(result!.servers[0].command).toBeUndefined();
+    });
+
+    it('should expand ${VAR} in header values', async () => {
+      // No expansion code was written for headers - this asserts the generic
+      // recursion already covers them, so it stays covered if that changes.
+      process.env.REMOTE_TEST_TOKEN = 'header-secret';
+
+      writeProjectConfig({
+        name: 'remote',
+        url: 'https://mcp.example.com/mcp',
+        headers: { Authorization: 'Bearer ${REMOTE_TEST_TOKEN}' },
+      });
+
+      const { loadJSONServers } = await importLoader();
+      const result = loadJSONServers();
+
+      expect(result!.servers[0].headers?.Authorization).toBe('Bearer header-secret');
+
+      delete process.env.REMOTE_TEST_TOKEN;
+    });
+
+    it('should reject url combined with command', async () => {
+      writeProjectConfig({
+        name: 'confused',
+        command: 'npx',
+        url: 'https://mcp.example.com/mcp',
+      });
+
+      const { loadJSONServers } = await importLoader();
+
+      expect(() => loadJSONServers()).toThrow('Invalid server configuration');
+    });
+
+    it.each(['args', 'env', 'inheritEnv'])(
+      'should reject url combined with %s, naming the field',
+      async (field) => {
+        const stdioOnly: Record<string, unknown> = {
+          args: ['--flag'],
+          env: { TOKEN: 'x' },
+          inheritEnv: false,
+        };
+
+        writeProjectConfig({
+          name: 'confused',
+          url: 'https://mcp.example.com/mcp',
+          [field]: stdioOnly[field],
+        });
+
+        const { loadJSONServers } = await importLoader();
+
+        expect(() => loadJSONServers()).toThrow(
+          expect.objectContaining({
+            message: expect.stringContaining(field) as unknown as string,
+          })
+        );
+        expect(() => loadJSONServers()).toThrow('confused');
+      }
+    );
   });
 
   describe('getConfigPath', () => {

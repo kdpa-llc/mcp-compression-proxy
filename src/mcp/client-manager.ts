@@ -1,5 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type {
   MCPServerConfig,
   MCPClientConnection,
@@ -82,6 +84,35 @@ export class MCPClientManager {
   }
 
   /**
+   * Pick the transport for a server.
+   *
+   * `url` is the whole discriminator - the config schema makes `command` and
+   * `url` mutually exclusive, so there is nothing else to inspect. `buildEnv`
+   * falls away on the remote branch because there is no child process to hand
+   * an environment to; credentials travel as headers instead.
+   */
+  private buildTransport(config: MCPServerConfig): Transport {
+    if (config.url) {
+      return new StreamableHTTPClientTransport(new URL(config.url), {
+        requestInit: config.headers ? { headers: config.headers } : undefined,
+      });
+    }
+
+    const command = config.command;
+    if (!command) {
+      throw new Error(
+        `Server "${config.name}" has neither "command" nor "url" - config validation should have rejected it`
+      );
+    }
+
+    return new StdioClientTransport({
+      command,
+      args: config.args,
+      env: this.buildEnv(config),
+    });
+  }
+
+  /**
    * Initialize and connect to all configured MCP servers
    * @param servers - Server configurations to initialize
    * @param defaultTimeout - Optional default timeout in seconds (overrides class default)
@@ -138,11 +169,7 @@ export class MCPClientManager {
       'Connecting to MCP server'
     );
 
-    const transport = new StdioClientTransport({
-      command: config.command,
-      args: config.args,
-      env: this.buildEnv(config),
-    });
+    const transport = this.buildTransport(config);
 
     const client = new Client(
       {

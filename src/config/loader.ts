@@ -87,6 +87,9 @@ function expandEnvVarsInObject<T>(obj: T, unresolved: Set<string>): T {
   return obj;
 }
 
+/** Fields that only configure a process we spawn ourselves. */
+const STDIO_ONLY_FIELDS = ['args', 'env', 'inheritEnv'] as const;
+
 /**
  * Validates JSON config against schema
  */
@@ -102,7 +105,29 @@ function validateConfig(config: unknown): ServerConfigJSON {
     console.error(`[Config] Validation failed:\n${errors}`);
     throw new Error(`Invalid server configuration:\n${errors}`);
   }
-  return config as ServerConfigJSON;
+
+  const validated = config as ServerConfigJSON;
+
+  // The schema's `oneOf` only rules out `command` next to `url`; it has nothing
+  // to say about the stdio-only fields, so a remote entry carrying `args` would
+  // validate and then silently drop them. That combination is always a typo, so
+  // it throws like every other config mistake here rather than warning - a soft
+  // path would be the only one in this file.
+  for (const server of validated.mcpServers) {
+    if (!server.url) continue;
+
+    const offending = STDIO_ONLY_FIELDS.filter((field) => server[field] !== undefined);
+    if (offending.length > 0) {
+      const message =
+        `Invalid server configuration: "${server.name}" sets ${offending.join(', ')} ` +
+        `alongside "url". Those fields configure a locally spawned process and have no ` +
+        `effect on a remote server; use "headers" to send credentials instead.`;
+      console.error(`[Config] Validation failed:\n  - ${message}`);
+      throw new Error(message);
+    }
+  }
+
+  return validated;
 }
 
 /**
