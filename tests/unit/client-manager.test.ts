@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { MCPClientManager } from '../../src/mcp/client-manager.js';
 import type { MCPServerConfig } from '../../src/types/index.js';
+import type { ConfigResult } from '../../src/config/loader.js';
 import type { Logger } from 'pino';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 
@@ -904,6 +905,273 @@ describe('MCPClientManager', () => {
 
       await jest.advanceTimersByTimeAsync(120000);
       expect(constructor).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('hot-reload', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    /**
+     * A distinct Client per construction. The shared `mockClient` would make
+     * every identity assertion below pass vacuously, which is exactly what the
+     * "unchanged server keeps its connection" test needs to rule out.
+     */
+    function freshClient(): jest.Mocked<Client> {
+      return {
+        connect: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+        close: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      } as unknown as jest.Mocked<Client>;
+    }
+
+    async function clientConstructor(): Promise<jest.Mock> {
+      const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+      const constructor = Client as unknown as jest.Mock;
+      constructor.mockImplementation(() => freshClient());
+      return constructor;
+    }
+
+    function reconcileLogs(): unknown[] {
+      return (mockLogger.info as unknown as jest.Mock).mock.calls
+        .filter((call) => call[1] === 'Applying backend server configuration change')
+        .map((call) => call[0]);
+    }
+
+    const serverA: MCPServerConfig = { name: 'a', command: 'cmd-a', enabled: true };
+    const serverB: MCPServerConfig = { name: 'b', command: 'cmd-b', enabled: true };
+
+    it('should connect a server that appeared in the config', async () => {
+      const constructor = await clientConstructor();
+      await clientManager.initializeServers([serverA]);
+
+      await clientManager.reconcile([serverA, serverB]);
+
+      expect(clientManager.getClient('b')).toBeDefined();
+      expect(constructor).toHaveBeenCalledTimes(2);
+      expect(reconcileLogs()).toEqual([
+        { removed: [], changed: [], added: ['b'] },
+      ]);
+    });
+
+    it('should close a server that disappeared from the config', async () => {
+      await clientConstructor();
+      await clientManager.initializeServers([serverA, serverB]);
+      const dropped = clientManager.getClient('b');
+
+      await clientManager.reconcile([serverA]);
+
+      expect(dropped?.close).toHaveBeenCalledTimes(1);
+      expect(clientManager.getServerStatuses().map((s) => s.name)).toEqual(['a']);
+      expect(clientManager.getClient('a')).toBeDefined();
+    });
+
+    it('should replace a server whose config changed', async () => {
+      await clientConstructor();
+      await clientManager.initializeServers([serverA]);
+      const before = clientManager.getClient('a');
+
+      await clientManager.reconcile([{ ...serverA, args: ['--verbose'] }]);
+
+      const after = clientManager.getClient('a');
+      expect(before?.close).toHaveBeenCalledTimes(1);
+      expect(after).toBeDefined();
+      expect(after).not.toBe(before);
+      expect(reconcileLogs()).toEqual([
+        { removed: [], changed: ['a'], added: [] },
+      ]);
+    });
+
+    it('should leave an unchanged server on its existing connection', async () => {
+      const constructor = await clientConstructor();
+      await clientManager.initializeServers([serverA], 45);
+      const before = clientManager.getClient('a');
+
+      await clientManager.reconcile([serverA], 45);
+      // Same entry with its keys written in another order: reformatting
+      // servers.json must not bounce a healthy backend.
+      await clientManager.reconcile([{ enabled: true, command: 'cmd-a', name: 'a' }], 45);
+
+      expect(clientManager.getClient('a')).toBe(before);
+      expect(before?.close).not.toHaveBeenCalled();
+      expect(constructor).toHaveBeenCalledTimes(1);
+      expect(reconcileLogs()).toEqual([]);
+    });
+
+    it('should not let a pending reconnect resurrect a removed server', async () => {
+      const constructor = await clientConstructor();
+      await clientManager.initializeServers([serverA]);
+      const client = clientManager.getClient('a');
+
+      // The backend dies, so a retry is queued...
+      client?.onclose?.();
+      expect(jest.getTimerCount()).toBe(1);
+
+      // ...and only then does the operator delete it from servers.json.
+      await clientManager.reconcile([]);
+      expect(jest.getTimerCount()).toBe(0);
+
+      // The transport finishes tearing down after reconcile() has returned and
+      // reports the close, which must read as ours rather than as a new drop.
+      client?.onclose?.();
+      expect(jest.getTimerCount()).toBe(0);
+
+      await jest.advanceTimersByTimeAsync(120000);
+      expect(constructor).toHaveBeenCalledTimes(1);
+      expect(clientManager.getServerStatuses()).toEqual([]);
+    });
+
+    it('should keep the other servers when an added one fails to connect', async () => {
+      const constructor = await clientConstructor();
+      await clientManager.initializeServers([serverA]);
+
+      constructor.mockImplementation(() => ({
+        ...freshClient(),
+        connect: jest
+          .fn<() => Promise<void>>()
+          .mockRejectedValue(new Error('command not found')),
+      }));
+
+      await clientManager.reconcile([serverA, serverB]);
+
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ server: 'b' }),
+        'Failed to connect to MCP server'
+      );
+      expect(clientManager.getClient('a')).toBeDefined();
+      expect(clientManager.getClient('b')).toBeUndefined();
+    });
+
+    it('should drop a removed server even when its close fails', async () => {
+      const constructor = await clientConstructor();
+      constructor.mockImplementation(() => ({
+        ...freshClient(),
+        close: jest
+          .fn<() => Promise<void>>()
+          .mockRejectedValue(new Error('transport already gone')),
+      }));
+
+      await clientManager.initializeServers([serverA]);
+      await clientManager.reconcile([]);
+
+      // A backend that dies mid-teardown is the common case, not an error worth
+      // surfacing - the connection is gone either way.
+      expect(clientManager.getServerStatuses()).toEqual([]);
+      expect(mockLogger.debug).toHaveBeenCalledWith(
+        expect.objectContaining({ server: 'a' }),
+        'Error closing removed MCP server'
+      );
+    });
+
+    it('should not start a second connect while one is already in flight', async () => {
+      const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+      const constructor = Client as unknown as jest.Mock;
+
+      let release!: () => void;
+      const pending = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      constructor.mockImplementation(() => ({
+        ...freshClient(),
+        connect: jest.fn<() => Promise<void>>().mockReturnValue(pending),
+      }));
+
+      const first = clientManager.reconcile([serverA]);
+      const second = clientManager.reconcile([serverA]);
+      release();
+      await Promise.all([first, second]);
+
+      // Two clients for one name would leave the loser's transport - a real
+      // child process - running with nobody holding a handle to close it.
+      expect(constructor).toHaveBeenCalledTimes(1);
+      expect(clientManager.getClient('a')).toBeDefined();
+    });
+
+    describe('startConfigWatch', () => {
+      const loaded: ConfigResult = {
+        servers: [serverA, { name: 'off', command: 'cmd-off', enabled: false }],
+        excludePatterns: [],
+        noCompressPatterns: [],
+      };
+
+      it('should apply config changes on a tick without holding the event loop', async () => {
+        await clientConstructor();
+        const loadConfig = jest.fn<() => ConfigResult>().mockReturnValue(loaded);
+        const setIntervalSpy = jest.spyOn(globalThis, 'setInterval');
+
+        clientManager.startConfigWatch(loadConfig, 1000);
+
+        const timer = setIntervalSpy.mock.results.at(-1)?.value as NodeJS.Timeout;
+        expect(timer.hasRef()).toBe(false);
+        setIntervalSpy.mockRestore();
+
+        await jest.advanceTimersByTimeAsync(1000);
+
+        expect(loadConfig).toHaveBeenCalledTimes(1);
+        expect(clientManager.getClient('a')).toBeDefined();
+        // Disabled entries are filtered out before reconcile, exactly as at startup.
+        expect(clientManager.getServerStatuses().map((s) => s.name)).toEqual(['a']);
+      });
+
+      it('should keep watching after an unparseable config', async () => {
+        await clientConstructor();
+        const loadConfig = jest
+          .fn<() => ConfigResult>()
+          .mockImplementationOnce(() => {
+            throw new Error('Invalid JSON in servers.json');
+          })
+          .mockReturnValue(loaded);
+
+        clientManager.startConfigWatch(loadConfig, 1000);
+        await jest.advanceTimersByTimeAsync(1000);
+
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ error: expect.any(Error) }),
+          'Config reload failed, keeping the current backend servers'
+        );
+
+        // A half-saved file is a transient state, not a reason to give up.
+        await jest.advanceTimersByTimeAsync(1000);
+        expect(clientManager.getClient('a')).toBeDefined();
+      });
+
+      it('should do nothing on a tick with no config at all', async () => {
+        const constructor = await clientConstructor();
+        const loadConfig = jest.fn<() => ConfigResult>().mockReturnValue(null);
+
+        clientManager.startConfigWatch(loadConfig, 1000);
+        await jest.advanceTimersByTimeAsync(3000);
+
+        expect(loadConfig).toHaveBeenCalledTimes(3);
+        expect(constructor).not.toHaveBeenCalled();
+      });
+
+      it('should ignore a second startConfigWatch call', async () => {
+        const loadConfig = jest.fn<() => ConfigResult>().mockReturnValue(null);
+
+        clientManager.startConfigWatch(loadConfig, 1000);
+        clientManager.startConfigWatch(loadConfig, 1000);
+
+        expect(jest.getTimerCount()).toBe(1);
+        await jest.advanceTimersByTimeAsync(1000);
+        expect(loadConfig).toHaveBeenCalledTimes(1);
+      });
+
+      it('should stop the watch on disconnectAll', async () => {
+        await clientConstructor();
+        const loadConfig = jest.fn<() => ConfigResult>().mockReturnValue(loaded);
+
+        clientManager.startConfigWatch(loadConfig, 1000);
+        await clientManager.disconnectAll();
+
+        expect(jest.getTimerCount()).toBe(0);
+        await jest.advanceTimersByTimeAsync(120000);
+        expect(loadConfig).not.toHaveBeenCalled();
+      });
     });
   });
 });

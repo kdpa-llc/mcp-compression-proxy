@@ -8,7 +8,29 @@ import type {
   ServerStatus
 } from '../types/index.js';
 import type { Logger } from 'pino';
+import type { ConfigResult } from '../config/loader.js';
 import { SERVER_NAME, VERSION } from '../version.js';
+
+/**
+ * Stable serialization of a resolved server config, used to decide whether a
+ * live connection still matches what servers.json now asks for.
+ *
+ * Keys are sorted because JSON.stringify follows insertion order: an operator
+ * swapping two lines inside a server entry would otherwise read as a changed
+ * server and bounce a perfectly healthy backend. Absent and explicitly
+ * `undefined` fields collapse together for the same reason.
+ */
+function configFingerprint(config: MCPServerConfig): string {
+  return JSON.stringify(config, (_key, value: unknown) =>
+    value !== null && typeof value === 'object' && !Array.isArray(value)
+      ? Object.fromEntries(
+          Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
+            a < b ? -1 : 1
+          )
+        )
+      : value
+  );
+}
 
 /**
  * Manages connections to multiple MCP servers
@@ -17,6 +39,14 @@ export class MCPClientManager {
   private connections: Map<string, MCPClientConnection> = new Map();
   private reconnectTimers: Map<string, NodeJS.Timeout> = new Map();
   private reconnectAttempts: Map<string, number> = new Map();
+  /**
+   * Servers with a connect already in flight. A reconnect timer firing while a
+   * config reload is connecting the same name would otherwise build a second
+   * client, and the loser of the race to `connections.set()` would be an
+   * orphaned transport nobody ever closes.
+   */
+  private connecting: Set<string> = new Set();
+  private configWatchTimer?: NodeJS.Timeout;
   /**
    * Names we are about to close on purpose. The SDK fires `onclose` for a
    * deliberate `close()` exactly as it does for a crashed backend, so this is
@@ -123,6 +153,25 @@ export class MCPClientManager {
   }
 
   /**
+   * Merge the file-level defaults into one server entry.
+   *
+   * Shared with reconcile() so the resolved config stored on a connection is
+   * byte-for-byte what a later reload will compare against - two copies of
+   * this expression drifting apart would show up as an endless reconnect loop.
+   */
+  private withDefaults(
+    server: MCPServerConfig,
+    defaultTimeout?: number,
+    defaultInheritEnv?: boolean | string[]
+  ): MCPServerConfig {
+    return {
+      ...server,
+      timeout: server.timeout ?? defaultTimeout,
+      inheritEnv: server.inheritEnv ?? defaultInheritEnv,
+    };
+  }
+
+  /**
    * Initialize and connect to all configured MCP servers
    * @param servers - Server configurations to initialize
    * @param defaultTimeout - Optional default timeout in seconds (overrides class default)
@@ -136,11 +185,9 @@ export class MCPClientManager {
     this.logger.info({ count: servers.length }, 'Initializing MCP servers');
 
     // Apply defaults to servers that don't specify their own
-    const serversWithTimeout = servers.map(server => ({
-      ...server,
-      timeout: server.timeout ?? defaultTimeout,
-      inheritEnv: server.inheritEnv ?? defaultInheritEnv,
-    }));
+    const serversWithTimeout = servers.map((server) =>
+      this.withDefaults(server, defaultTimeout, defaultInheritEnv)
+    );
 
     const connectionPromises = serversWithTimeout.map(async (config) => {
       try {
@@ -166,9 +213,33 @@ export class MCPClientManager {
   }
 
   /**
-   * Connect to a single MCP server with timeout
+   * Connect to a single MCP server, at most once at a time per server name.
+   *
+   * The three callers - startup, a reconnect timer and a config reload - can
+   * overlap, and a duplicate connect is worse than a missed one: it spawns a
+   * second backend process whose transport is dropped on the floor.
    */
   private async connectToServer(config: MCPServerConfig): Promise<void> {
+    if (this.connecting.has(config.name)) {
+      this.logger.debug(
+        { server: config.name },
+        'Connect already in flight, skipping duplicate'
+      );
+      return;
+    }
+
+    this.connecting.add(config.name);
+    try {
+      await this.openConnection(config);
+    } finally {
+      this.connecting.delete(config.name);
+    }
+  }
+
+  /**
+   * Connect to a single MCP server with timeout
+   */
+  private async openConnection(config: MCPServerConfig): Promise<void> {
     // Use server-specific timeout or default (convert seconds to milliseconds)
     const timeoutMs = config.timeout
       ? config.timeout * 1000
@@ -346,6 +417,163 @@ export class MCPClientManager {
   }
 
   /**
+   * Bring the live connections in line with a freshly loaded server list.
+   *
+   * Servers that vanished or changed are torn down, servers that appeared are
+   * connected, and everything untouched keeps its existing connection - an
+   * edit to one entry must not interrupt the other backends.
+   */
+  async reconcile(
+    servers: MCPServerConfig[],
+    defaultTimeout?: number,
+    defaultInheritEnv?: boolean | string[]
+  ): Promise<void> {
+    const desired = new Map(
+      servers.map((server) => {
+        const resolved = this.withDefaults(server, defaultTimeout, defaultInheritEnv);
+        return [resolved.name, resolved];
+      })
+    );
+
+    const removed: string[] = [];
+    const changed: string[] = [];
+
+    for (const connection of this.connections.values()) {
+      const next = desired.get(connection.name);
+      if (!next) {
+        removed.push(connection.name);
+      } else if (
+        configFingerprint(next) !== configFingerprint(connection.config)
+      ) {
+        changed.push(connection.name);
+      }
+    }
+
+    const added = Array.from(desired.keys()).filter(
+      (name) => !this.connections.has(name)
+    );
+
+    // Nothing to do on the overwhelming majority of polls; returning before the
+    // log keeps a five-second timer from filling the log with noise.
+    if (removed.length === 0 && changed.length === 0 && added.length === 0) {
+      return;
+    }
+
+    this.logger.info(
+      { removed, changed, added },
+      'Applying backend server configuration change'
+    );
+
+    // Fully drained before a single connect starts. A changed server is a
+    // teardown *and* an add, and letting the two overlap would leave two
+    // MCPClientConnection generations racing to own the same name.
+    for (const name of [...removed, ...changed]) {
+      await this.teardownConnection(name);
+    }
+
+    const toConnect = new Set([...added, ...changed]);
+
+    await Promise.allSettled(
+      Array.from(desired.values())
+        .filter((config) => toConnect.has(config.name))
+        .map(async (config) => {
+          try {
+            await this.connectToServer(config);
+          } catch (error) {
+            this.logger.error(
+              { server: config.name, error },
+              'Failed to connect to MCP server'
+            );
+          }
+        })
+    );
+  }
+
+  /**
+   * Close a connection the operator has removed or replaced.
+   *
+   * Order matters: the queued retry dies first and the close is claimed as
+   * ours *before* close() runs, so handleDrop() cannot resurrect a server that
+   * was deliberately taken out of servers.json.
+   */
+  private async teardownConnection(name: string): Promise<void> {
+    const timer = this.reconnectTimers.get(name);
+    if (timer) {
+      clearTimeout(timer);
+      this.reconnectTimers.delete(name);
+    }
+    this.reconnectAttempts.delete(name);
+
+    const connection = this.connections.get(name);
+    if (!connection) {
+      return;
+    }
+
+    this.intentionalClose.add(name);
+    this.connections.delete(name);
+
+    try {
+      await connection.client.close();
+    } catch (error) {
+      this.logger.debug(
+        { server: name, error },
+        'Error closing removed MCP server'
+      );
+    }
+  }
+
+  /**
+   * Poll the config for server list changes and apply them live.
+   *
+   * Polling rather than fs.watch: watchers fire duplicate events and stop
+   * working entirely once a file is replaced by write-temp-then-rename, which
+   * is how most editors and jq-style tools save. Two stats every few seconds
+   * are cheaper than the bug reports that would follow.
+   *
+   * `loadConfig` is injected rather than imported so this stays testable
+   * without fixture files, matching the loader injection in StatsService.
+   */
+  startConfigWatch(loadConfig: () => ConfigResult, intervalMs = 5000): void {
+    // A second watcher would double the poll rate and leak the first interval.
+    if (this.configWatchTimer) {
+      return;
+    }
+
+    this.configWatchTimer = setInterval(() => {
+      let config: ConfigResult;
+
+      try {
+        config = loadConfig();
+      } catch (error) {
+        // A half-written servers.json is invalid JSON for a few milliseconds.
+        // That is an editor mid-save, not a reason to stop watching.
+        this.logger.warn(
+          { error },
+          'Config reload failed, keeping the current backend servers'
+        );
+        return;
+      }
+
+      if (!config) {
+        return;
+      }
+
+      void this.reconcile(
+        config.servers.filter((server) => server.enabled !== false),
+        config.defaultTimeout,
+        config.inheritEnv
+      ).catch((error) => {
+        this.logger.error({ error }, 'Failed to apply backend server configuration');
+      });
+    }, intervalMs);
+
+    // Housekeeping must never be what keeps the process alive.
+    this.configWatchTimer.unref?.();
+
+    this.logger.info({ intervalMs }, 'Watching configuration for server changes');
+  }
+
+  /**
    * Get a connected client by server name
    */
   getClient(serverName: string): Client | undefined {
@@ -385,6 +613,13 @@ export class MCPClientManager {
    */
   async disconnectAll(): Promise<void> {
     this.logger.info('Disconnecting from all MCP servers');
+
+    // Stop watching first: a poll landing mid-teardown would reconnect the very
+    // servers this call is closing.
+    if (this.configWatchTimer) {
+      clearInterval(this.configWatchTimer);
+      this.configWatchTimer = undefined;
+    }
 
     // Cancel queued retries and claim every close as ours *before* closing
     // anything. A timer surviving teardown would reconnect to a backend nobody

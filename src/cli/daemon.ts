@@ -9,7 +9,11 @@ import { MCPClientManager } from '../mcp/client-manager.js';
 import { CompressionCache } from '../services/compression-cache.js';
 import { SessionManager } from '../services/session-manager.js';
 import { StatsService } from '../services/stats-service.js';
-import { loadJSONServers, matchesIgnorePattern } from '../config/loader.js';
+import {
+  loadJSONServers,
+  loadJSONServersCached,
+  matchesIgnorePattern,
+} from '../config/loader.js';
 import { interceptPayload } from './payload-interceptor.js';
 import type { IPCRequest, IPCResponse, CLIConfig } from '../types/index.js';
 
@@ -100,7 +104,15 @@ async function startDaemon(): Promise<void> {
     );
 
     try {
-      await clientManager.initializeServers(enabledServers, config.defaultTimeout);
+      // inheritEnv must be passed here too: the config watch below reconciles
+      // with it, so omitting it makes every connection's stored config differ
+      // from the reconciled one on the first tick - bouncing every healthy
+      // backend ~5s after startup.
+      await clientManager.initializeServers(
+        enabledServers,
+        config.defaultTimeout,
+        config.inheritEnv
+      );
       logger.info('Backend MCP servers initialization complete');
     } catch (error) {
       logger.error({ error }, 'Error during backend server initialization');
@@ -108,6 +120,12 @@ async function startDaemon(): Promise<void> {
   } else {
     logger.warn('No configuration found. Daemon started with no backend servers.');
   }
+
+  // The daemon outlives any single CLI invocation, so it is the entry point
+  // that most needs this: editing servers.json would otherwise mean stopping a
+  // daemon that is holding warm connections. Cached loader rather than the
+  // uncached one used above - the poll is what its mtime fingerprint is for.
+  clientManager.startConfigWatch(loadJSONServersCached);
 
   // Clean up stale socket file if it exists
   if (fs.existsSync(SOCKET_PATH)) {
