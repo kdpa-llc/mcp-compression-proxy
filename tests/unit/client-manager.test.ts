@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, jest } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { MCPClientManager } from '../../src/mcp/client-manager.js';
 import type { MCPServerConfig } from '../../src/types/index.js';
 import type { Logger } from 'pino';
@@ -684,6 +684,226 @@ describe('MCPClientManager', () => {
       expect(fastStatus?.connected).toBe(true);
       expect(slowStatus?.connected).toBe(false);
       expect(slowStatus?.lastError).toContain('timeout');
+    });
+  });
+
+  describe('auto-reconnect', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+      // The backoff carries +/-20% jitter; pinning random() to the midpoint
+      // makes it exactly 1.0x so the delays can be asserted as numbers.
+      jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+      jest.spyOn(Math, 'random').mockRestore();
+    });
+
+    /** Brings one server up and hands back the mocked Client constructor. */
+    async function connectFlakyServer(): Promise<jest.Mock> {
+      const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+      const constructor = Client as unknown as jest.Mock;
+      constructor.mockImplementation(() => mockClient);
+
+      await clientManager.initializeServers([
+        { name: 'flaky', command: 'cmd', enabled: true },
+      ]);
+
+      return constructor;
+    }
+
+    function scheduledDelays(): number[] {
+      return (mockLogger.info as unknown as jest.Mock).mock.calls
+        .filter((call) => call[1] === 'Scheduling MCP server reconnect')
+        .map((call) => (call[0] as { delayMs: number }).delayMs);
+    }
+
+    it('should mark a dropped server disconnected and queue a reconnect', async () => {
+      await connectFlakyServer();
+      expect(clientManager.getClient('flaky')).toBeDefined();
+
+      // What the SDK does when a backend dies: Protocol._onclose() fires the
+      // Client's own onclose.
+      mockClient.onclose!();
+
+      expect(clientManager.getClient('flaky')).toBeUndefined();
+      expect(clientManager.getServerStatuses()[0]).toMatchObject({
+        name: 'flaky',
+        connected: false,
+      });
+      expect(scheduledDelays()).toEqual([1000]);
+    });
+
+    it('should not stack timers when a drop is reported twice', async () => {
+      await connectFlakyServer();
+
+      mockClient.onclose!();
+      mockClient.onclose!();
+
+      expect(jest.getTimerCount()).toBe(1);
+      expect(scheduledDelays()).toEqual([1000]);
+    });
+
+    it('should ignore a close from a superseded connection', async () => {
+      const constructor = await connectFlakyServer();
+      const staleOnClose = mockClient.onclose!;
+
+      const replacement = {
+        ...mockClient,
+        connect: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      };
+      constructor.mockImplementation(() => replacement);
+
+      staleOnClose();
+      await jest.advanceTimersByTimeAsync(1000);
+      expect(clientManager.getClient('flaky')).toBe(replacement);
+
+      // The dead transport finishes tearing down after the replacement is
+      // already live; that must not knock the healthy connection back down.
+      staleOnClose();
+
+      expect(clientManager.getClient('flaky')).toBe(replacement);
+      expect(jest.getTimerCount()).toBe(0);
+    });
+
+    it('should reconnect for real once the backoff elapses', async () => {
+      const constructor = await connectFlakyServer();
+      expect(constructor).toHaveBeenCalledTimes(1);
+
+      mockClient.onclose!();
+      await jest.advanceTimersByTimeAsync(1000);
+
+      expect(constructor).toHaveBeenCalledTimes(2);
+      expect(clientManager.getClient('flaky')).toBeDefined();
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        { server: 'flaky' },
+        'Reconnected to MCP server'
+      );
+    });
+
+    it('should grow the backoff on repeated failures and cap it at 30s', async () => {
+      const constructor = await connectFlakyServer();
+
+      const deadClient = {
+        ...mockClient,
+        connect: jest
+          .fn<() => Promise<void>>()
+          .mockRejectedValue(new Error('still down')),
+      };
+      constructor.mockImplementation(() => deadClient);
+
+      mockClient.onclose!();
+
+      for (let i = 0; i < 7; i++) {
+        await jest.advanceTimersByTimeAsync(30000);
+      }
+
+      expect(scheduledDelays().slice(0, 7)).toEqual([
+        1000, 2000, 4000, 8000, 16000, 30000, 30000,
+      ]);
+    });
+
+    it('should reset the backoff after a successful reconnect', async () => {
+      const constructor = await connectFlakyServer();
+
+      const deadClient = {
+        ...mockClient,
+        connect: jest
+          .fn<() => Promise<void>>()
+          .mockRejectedValue(new Error('still down')),
+      };
+      constructor.mockImplementation(() => deadClient);
+
+      mockClient.onclose!();
+      await jest.advanceTimersByTimeAsync(1000); // 1s attempt fails
+      await jest.advanceTimersByTimeAsync(2000); // 2s attempt: back to healthy
+
+      constructor.mockImplementation(() => mockClient);
+      await jest.advanceTimersByTimeAsync(4000);
+      expect(clientManager.getClient('flaky')).toBeDefined();
+
+      mockClient.onclose!();
+
+      // Not 8000: the counter is cleared when a connection comes back up.
+      expect(scheduledDelays()).toEqual([1000, 2000, 4000, 1000]);
+    });
+
+    it('should unref the reconnect timer so it cannot hold the process open', async () => {
+      await connectFlakyServer();
+
+      const setTimeoutSpy = jest.spyOn(globalThis, 'setTimeout');
+      mockClient.onclose!();
+
+      const timer = setTimeoutSpy.mock.results.at(-1)?.value as NodeJS.Timeout;
+      expect(timer.hasRef()).toBe(false);
+
+      setTimeoutSpy.mockRestore();
+    });
+
+    it('should cancel pending reconnects on disconnectAll', async () => {
+      const constructor = await connectFlakyServer();
+
+      mockClient.onclose!();
+      expect(jest.getTimerCount()).toBe(1);
+
+      await clientManager.disconnectAll();
+      expect(jest.getTimerCount()).toBe(0);
+
+      await jest.advanceTimersByTimeAsync(120000);
+      expect(constructor).toHaveBeenCalledTimes(1);
+    });
+
+    it('should not reconnect after a deliberate close', async () => {
+      const constructor = await connectFlakyServer();
+
+      await clientManager.disconnectAll();
+      // The SDK fires onclose for our own close() exactly as for a crash.
+      mockClient.onclose!();
+
+      await jest.advanceTimersByTimeAsync(120000);
+
+      expect(constructor).toHaveBeenCalledTimes(1);
+      expect(mockLogger.warn).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'MCP server connection lost'
+      );
+    });
+
+    it('should record a transport error without tearing the connection down', async () => {
+      await connectFlakyServer();
+
+      mockClient.onerror!(new Error('stream hiccup'));
+
+      // A recoverable transport error is not a drop: no retry, still usable.
+      expect(clientManager.getClient('flaky')).toBeDefined();
+      expect(jest.getTimerCount()).toBe(0);
+      expect(clientManager.getServerStatuses()[0].lastError).toBe('stream hiccup');
+    });
+
+    it('should never retry a server that failed its very first connect', async () => {
+      const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+      const constructor = Client as unknown as jest.Mock;
+
+      const brokenClient = {
+        ...mockClient,
+        connect: jest
+          .fn<() => Promise<void>>()
+          .mockRejectedValue(new Error('command not found')),
+      };
+      constructor.mockImplementation(() => brokenClient);
+
+      await clientManager.initializeServers([
+        { name: 'typo', command: 'nope', enabled: true },
+      ]);
+
+      // A permanently misconfigured server must not retry forever: no hook is
+      // wired at all until a connect has succeeded once.
+      expect(brokenClient.onclose).toBeUndefined();
+      expect(jest.getTimerCount()).toBe(0);
+
+      await jest.advanceTimersByTimeAsync(120000);
+      expect(constructor).toHaveBeenCalledTimes(1);
     });
   });
 });

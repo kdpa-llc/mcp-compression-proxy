@@ -15,8 +15,18 @@ import { SERVER_NAME, VERSION } from '../version.js';
  */
 export class MCPClientManager {
   private connections: Map<string, MCPClientConnection> = new Map();
+  private reconnectTimers: Map<string, NodeJS.Timeout> = new Map();
+  private reconnectAttempts: Map<string, number> = new Map();
+  /**
+   * Names we are about to close on purpose. The SDK fires `onclose` for a
+   * deliberate `close()` exactly as it does for a crashed backend, so this is
+   * the only way the drop handler can tell the two apart.
+   */
+  private intentionalClose: Set<string> = new Set();
   private logger: Logger;
   private readonly DEFAULT_TIMEOUT_MS = 30000; // 30 seconds default timeout
+  private readonly RECONNECT_BASE_MS = 1000;
+  private readonly RECONNECT_MAX_MS = 30000;
 
   constructor(logger: Logger) {
     this.logger = logger;
@@ -194,7 +204,34 @@ export class MCPClientManager {
         client,
         transport,
         connected: true,
+        config,
       });
+
+      // A connection that came up once is worth chasing again, so the backoff
+      // starts fresh from here. The intentional-close flag goes too: a stale
+      // one would swallow the first genuine drop of this new connection.
+      this.reconnectAttempts.delete(config.name);
+      this.intentionalClose.delete(config.name);
+
+      // Hooked only after connect() resolves: an initial failure is almost
+      // always a misconfigured command, and retrying that forever would be an
+      // unrequested behaviour change plus endless log noise.
+      //
+      // The Client's own callbacks rather than transport.onclose because
+      // Protocol.connect() captures whatever is on the transport at connect
+      // time and wraps it - assigning there afterwards is order-dependent and
+      // reaches past the class's own API.
+      client.onclose = () => this.handleDrop(config.name, client);
+      client.onerror = (error) => {
+        // Recorded, not acted on: transports report recoverable errors here
+        // too. The close that follows a fatal one is what drives the retry,
+        // and this leaves a cause behind for getServerStatuses().
+        const connection = this.connections.get(config.name);
+        if (connection?.client === client) {
+          connection.lastError = error instanceof Error ? error.message : String(error);
+        }
+        this.logger.warn({ server: config.name, error }, 'MCP server transport error');
+      };
 
       this.logger.info({ server: config.name }, 'Successfully connected to MCP server');
     } catch (error) {
@@ -217,9 +254,94 @@ export class MCPClientManager {
         transport,
         connected: false,
         lastError: errorMessage,
+        config,
       });
 
       throw error;
+    }
+  }
+
+  /**
+   * React to a backend connection going away.
+   *
+   * `client` identifies which generation closed: an old transport finishing
+   * its teardown after a reconnect already installed a replacement must not
+   * mark the live connection down.
+   */
+  private handleDrop(name: string, client: Client): void {
+    if (this.intentionalClose.delete(name)) {
+      return;
+    }
+
+    const connection = this.connections.get(name);
+    if (!connection || connection.client !== client) {
+      return;
+    }
+
+    connection.connected = false;
+    connection.lastError = connection.lastError ?? 'Connection closed';
+
+    this.logger.warn(
+      { server: name, error: connection.lastError },
+      'MCP server connection lost'
+    );
+
+    this.scheduleReconnect(connection.config);
+  }
+
+  /**
+   * Queue a reconnect with capped, jittered exponential backoff.
+   *
+   * Attempts are uncapped on purpose - a backend can be down for hours (a
+   * laptop asleep, a container being rebuilt) and should still come back
+   * without the operator restarting their whole MCP client. The jitter keeps
+   * several backends behind the same dead machine from retrying in lockstep.
+   */
+  private scheduleReconnect(config: MCPServerConfig): void {
+    const name = config.name;
+
+    // Two paths reach here - a fresh drop and a failed retry - and a second
+    // timer would double the reconnect rate while orphaning the first.
+    if (this.reconnectTimers.has(name)) {
+      return;
+    }
+
+    const attempt = this.reconnectAttempts.get(name) ?? 0;
+    this.reconnectAttempts.set(name, attempt + 1);
+
+    const capped = Math.min(
+      this.RECONNECT_BASE_MS * 2 ** attempt,
+      this.RECONNECT_MAX_MS
+    );
+    const delayMs = Math.round(capped * (0.8 + Math.random() * 0.4));
+
+    const timer = setTimeout(() => {
+      this.reconnectTimers.delete(name);
+      void this.reconnect(config);
+    }, delayMs);
+
+    // A pending retry must never be the reason the process cannot exit: a
+    // backend that stays down would otherwise pin the event loop open forever.
+    timer.unref?.();
+
+    this.reconnectTimers.set(name, timer);
+
+    this.logger.info(
+      { server: name, delayMs, attempt: attempt + 1 },
+      'Scheduling MCP server reconnect'
+    );
+  }
+
+  private async reconnect(config: MCPServerConfig): Promise<void> {
+    try {
+      await this.connectToServer(config);
+      this.logger.info({ server: config.name }, 'Reconnected to MCP server');
+    } catch (error) {
+      this.logger.warn(
+        { server: config.name, error },
+        'Reconnect attempt failed, backing off'
+      );
+      this.scheduleReconnect(config);
     }
   }
 
@@ -264,6 +386,19 @@ export class MCPClientManager {
   async disconnectAll(): Promise<void> {
     this.logger.info('Disconnecting from all MCP servers');
 
+    // Cancel queued retries and claim every close as ours *before* closing
+    // anything. A timer surviving teardown would reconnect to a backend nobody
+    // is listening to, and the resulting `onclose` would schedule yet another.
+    for (const timer of this.reconnectTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.reconnectTimers.clear();
+    this.reconnectAttempts.clear();
+
+    for (const name of this.connections.keys()) {
+      this.intentionalClose.add(name);
+    }
+
     const disconnectPromises = Array.from(this.connections.values()).map(
       async (conn) => {
         try {
@@ -279,6 +414,10 @@ export class MCPClientManager {
 
     await Promise.allSettled(disconnectPromises);
     this.connections.clear();
+    // The intentional-close flags stay: a transport can fire `onclose` a tick
+    // after close() resolves, and clearing them here would make that late
+    // callback look like a crash. Each is dropped when its server connects
+    // again, so they cannot outlive a reconnect.
 
     this.logger.info('All MCP servers disconnected');
   }

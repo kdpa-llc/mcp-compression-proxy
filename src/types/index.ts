@@ -30,6 +30,12 @@ export interface MCPClientConnection {
   transport: Transport;
   connected: boolean;
   lastError?: string;
+  /**
+   * The resolved config this connection was built from - defaults already
+   * merged in. A reconnect replays it verbatim instead of re-deriving the
+   * timeout and env policy, which would silently drift from the original.
+   */
+  config: MCPServerConfig;
 }
 
 export interface AggregatedToolsResponse {
