@@ -144,6 +144,17 @@ async function fetchAllBackendTools(): Promise<BackendTool[]> {
   return tools;
 }
 
+/**
+ * Whether a tool still needs compressing: never compressed, or compressed from
+ * a description the backend has since changed.
+ */
+function needsCompression(tool: BackendTool): boolean {
+  return (
+    !compressionCache.hasCompressed(tool.serverName, tool.toolName) ||
+    compressionCache.isStale(tool.serverName, tool.toolName, tool.description)
+  );
+}
+
 /** Tools returned per `tools/list` page when the client does not stop early. */
 const DEFAULT_TOOLS_PAGE_SIZE = 100;
 
@@ -279,6 +290,24 @@ server.setRequestHandler(ListToolsRequestSchema, async (request) => {
             description: 'File path to read compressed tools JSON. Use this OR descriptions, not both.',
           },
         },
+      },
+    },
+    {
+      name: 'mcp-compression-proxy__invalidate_tool_cache',
+      description: 'Drop one tool\'s cached compressed description so it is compressed again. Use when a compression lost something important; descriptions that merely went stale are re-queued automatically.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          serverName: {
+            type: 'string',
+            description: 'Server name (e.g., "filesystem")',
+          },
+          toolName: {
+            type: 'string',
+            description: 'Tool name (e.g., "read_file")',
+          },
+        },
+        required: ['serverName', 'toolName'],
       },
     },
     {
@@ -522,8 +551,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const coverage = statsService.computeCoverage(backendTools);
     const liveStats = statsService.formatCoverage(coverage);
 
+    // Stale entries rejoin the queue alongside never-compressed ones, so a
+    // backend that rewrites a description is picked up by the existing
+    // compress -> cache loop without the caller learning a new concept.
     const allUncompressedTools = backendTools
-      .filter((tool) => !compressionCache.hasCompressed(tool.serverName, tool.toolName))
+      .filter((tool) => needsCompression(tool))
       .map((tool) => ({
         serverName: tool.serverName,
         toolName: tool.toolName,
@@ -714,6 +746,47 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     };
   }
 
+  if (name === 'mcp-compression-proxy__invalidate_tool_cache') {
+    const { serverName, toolName } = args as { serverName: string; toolName: string };
+
+    const removed = compressionCache.invalidate(serverName, toolName);
+
+    if (!removed) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `No cached compression found for ${serverName}:${toolName}. Nothing to invalidate.`,
+          },
+        ],
+      };
+    }
+
+    try {
+      await compressionCache.saveToDisk();
+    } catch (error) {
+      logger.error({ error, serverName, toolName }, 'Failed to persist cache after invalidation');
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Invalidated ${serverName}:${toolName} in memory, but persisting the cache failed: ${error instanceof Error ? error.message : 'Unknown error'}. The entry will come back on restart.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `Invalidated the cached compression for ${serverName}:${toolName}.\n\nIt will be offered again by mcp-compression-proxy__get_uncompressed_tools.`,
+        },
+      ],
+    };
+  }
+
   if (name === 'mcp-compression-proxy__expand_tool') {
     const { serverName, toolName } = args as {
       serverName: string;
@@ -809,7 +882,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const coverageBefore = statsService.computeCoverage(backendTools);
 
     const uncompressed = backendTools
-      .filter((tool) => !compressionCache.hasCompressed(tool.serverName, tool.toolName))
+      .filter((tool) => needsCompression(tool))
       .slice(0, actualLimit);
 
     if (uncompressed.length === 0) {

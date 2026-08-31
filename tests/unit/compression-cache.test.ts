@@ -241,6 +241,63 @@ describe('CompressionCache', () => {
     });
   });
 
+  describe('isStale', () => {
+    it('reports stale when the backend description has changed', () => {
+      cache.saveCompressed('fs', 'read', 'Read a file', 'The original description');
+
+      expect(cache.isStale('fs', 'read', 'A rewritten description')).toBe(true);
+    });
+
+    it('reports fresh when the description is unchanged', () => {
+      cache.saveCompressed('fs', 'read', 'Read a file', 'The original description');
+
+      expect(cache.isStale('fs', 'read', 'The original description')).toBe(false);
+    });
+
+    it('is never stale without a cached original to compare', () => {
+      // Entries predating original-tracking have no baseline; calling them
+      // stale would queue them for recompression forever.
+      cache.saveCompressed('fs', 'read', 'Read a file');
+
+      expect(cache.isStale('fs', 'read', 'Anything at all')).toBe(false);
+    });
+
+    it('is never stale when the backend reports no description', () => {
+      cache.saveCompressed('fs', 'read', 'Read a file', 'The original description');
+
+      expect(cache.isStale('fs', 'read', undefined)).toBe(false);
+      expect(cache.isStale('fs', 'read', '')).toBe(false);
+    });
+
+    it('is not stale for a tool that was never compressed', () => {
+      expect(cache.isStale('fs', 'never_seen', 'Some description')).toBe(false);
+    });
+  });
+
+  describe('invalidate', () => {
+    it('removes a single entry and reports it did', () => {
+      cache.saveCompressed('fs', 'read', 'Read a file', 'Original');
+      cache.saveCompressed('fs', 'write', 'Write a file', 'Original');
+
+      expect(cache.invalidate('fs', 'read')).toBe(true);
+
+      expect(cache.hasCompressed('fs', 'read')).toBe(false);
+      // Siblings are untouched - this is the narrow alternative to clearAll().
+      expect(cache.hasCompressed('fs', 'write')).toBe(true);
+    });
+
+    it('reports false when there was nothing cached', () => {
+      expect(cache.invalidate('fs', 'never_seen')).toBe(false);
+    });
+
+    it('is idempotent', () => {
+      cache.saveCompressed('fs', 'read', 'Read a file', 'Original');
+
+      expect(cache.invalidate('fs', 'read')).toBe(true);
+      expect(cache.invalidate('fs', 'read')).toBe(false);
+    });
+  });
+
   describe('edge cases', () => {
     it('should handle tools with special characters in names', () => {
       const serverName = 'server-with-dash';

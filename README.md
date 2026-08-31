@@ -192,6 +192,7 @@ Restart your MCP client (e.g., Claude Desktop) to load the new configuration. Th
 | `set_session` | Set the active session |
 | `delete_session` | Delete a session |
 | `clear_compressed_tools_cache` | Clear all cached compressed tool descriptions |
+| `invalidate_tool_cache` | Drop one tool's cached compression so it is compressed again |
 | `get_uncompressed_tools` | Get tools that need compression (batch processing) |
 | `cache_compressed_tools` | Save compressed descriptions to cache (batch processing) |
 | `compress_via_sampling` | Compress automatically using the client's own LLM (requires sampling support) |
@@ -200,6 +201,28 @@ Restart your MCP client (e.g., Claude Desktop) to load the new configuration. Th
 | `stats` | Return JSON summary of coverage, cache health, sessions, and per-server tool counts |
 
 Use `stats` from your client (e.g., `mcp-compression-proxy__stats`) to sanity-check coverage. Optional inputs: `serverName` to scope to one backend and `detailLevel` (`summary` or `full`, default `summary`). The response includes coverage %, estimated token savings, cache state, active sessions, and per-server tool counts (respecting your exclude patterns).
+
+#### Stale Compressions
+
+A compression is made from the description a backend served at the time. When
+that backend updates the description — a server upgrade, say — the cached
+compression no longer describes the tool.
+
+The proxy notices: a tool whose live description no longer matches the one it
+was compressed from is counted as **stale** and offered again by
+`get_uncompressed_tools`, so the normal compress → cache loop repairs it with
+nothing extra to run. Stale counts appear in `stats` and in the `[live: ...]`
+summary on the compression tools.
+
+Tools cached before originals were recorded are never flagged, since there is
+no baseline to compare against. To redo a compression you simply dislike, use
+`invalidate_tool_cache` — that is a separate concern from staleness:
+
+```
+mcp-compression-proxy__invalidate_tool_cache
+  serverName: "filesystem"
+  toolName: "read_file"
+```
 
 #### Automatic Compression (MCP Sampling)
 
