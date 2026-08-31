@@ -324,13 +324,23 @@ mcp-cli info <server>/<tool>           # Full schema for one tool
 mcp-cli call <server>/<tool> '<json>'  # Execute a tool
 mcp-cli stats                          # Compression statistics
 
+mcp-cli doctor                         # Check config and backend health
+
 mcp-cli daemon start                   # Start the background daemon
 mcp-cli daemon status                  # Show daemon status
+mcp-cli daemon restart                 # Restart the daemon
 mcp-cli daemon stop                    # Stop the daemon
+mcp-cli daemon logs [-n N] [-f]        # Show daemon logs (default: last 50)
 ```
 
 The daemon starts automatically on first use. Pass `--no-auto-start` to fail
 fast instead when it is not already running.
+
+`mcp-cli doctor` is the first thing to reach for when something looks wrong: it
+reports which config files were found, formats a schema error readably instead
+of throwing a stack trace, lists each backend's live connection state, and
+flags servers added to `servers.json` that the running daemon has not picked
+up. It exits non-zero on any problem, so it works in a script.
 
 `call` also accepts its JSON argument on stdin, which avoids shell quoting
 problems with large payloads:

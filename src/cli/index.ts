@@ -1,7 +1,15 @@
 #!/usr/bin/env node
 
 import { spawn } from 'child_process';
-import { existsSync, readFileSync, unlinkSync } from 'fs';
+import {
+  existsSync,
+  readFileSync,
+  unlinkSync,
+  statSync,
+  openSync,
+  readSync,
+  closeSync,
+} from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
@@ -13,12 +21,15 @@ import {
   handleCall,
   handleStats,
   handleDaemonStatus,
+  handleDoctor,
+  tailLines,
 } from './commands.js';
 
 const BASE_DIR = join(homedir(), '.mcp-compression-proxy');
 const SOCKET_PATH = join(BASE_DIR, 'daemon.sock');
 const PID_FILE = join(BASE_DIR, 'daemon.pid');
 const READY_FILE = join(BASE_DIR, 'daemon.ready');
+const LOG_FILE = join(BASE_DIR, 'daemon.log');
 
 const USAGE = `
 mcp-cli — Progressive MCP tool discovery for LLMs
@@ -29,9 +40,12 @@ Usage:
   mcp-cli info <server>/<tool>         Get full schema for a tool
   mcp-cli call <server>/<tool> <json>  Execute a tool
   mcp-cli stats                        Show compression statistics
+  mcp-cli doctor                       Check config and backend health
   mcp-cli daemon start                 Start the background daemon
   mcp-cli daemon stop                  Stop the daemon
+  mcp-cli daemon restart               Restart the daemon
   mcp-cli daemon status                Show daemon status
+  mcp-cli daemon logs [-n N] [-f]      Show daemon logs (default: last 50)
   mcp-cli help                         Show this help
 
 Options:
@@ -157,6 +171,76 @@ async function stopDaemon(): Promise<boolean> {
 }
 
 /**
+ * Print the tail of the daemon log, optionally following it.
+ *
+ * Polls rather than shelling out to `tail`: spawning it drags in platform
+ * differences (BSD vs GNU flags) for something this file can do itself, and a
+ * dependency for it would be worse still.
+ */
+async function showLogs(args: string[]): Promise<void> {
+  const follow = args.includes('-f') || args.includes('--follow');
+
+  const countIndex = args.findIndex((arg) => arg === '-n' || arg === '--lines');
+  const requested = countIndex === -1 ? NaN : Number.parseInt(args[countIndex + 1] ?? '', 10);
+  const count = Number.isInteger(requested) && requested > 0 ? requested : 50;
+
+  if (!existsSync(LOG_FILE)) {
+    console.error(`No daemon log at ${LOG_FILE}.`);
+    console.error('The daemon writes it on first start: mcp-cli daemon start');
+    process.exit(1);
+  }
+
+  console.log(tailLines(readFileSync(LOG_FILE, 'utf-8'), count));
+
+  if (!follow) return;
+
+  // Track the offset rather than re-reading the file: a long-running daemon's
+  // log is appended to constantly.
+  let offset = statSync(LOG_FILE).size;
+
+  await new Promise<void>((resolve) => {
+    const timer = setInterval(() => {
+      let size: number;
+      try {
+        size = statSync(LOG_FILE).size;
+      } catch {
+        return; // rotated out from under us; pick it up on the next tick
+      }
+
+      // Truncation or rotation resets the file, so start over rather than
+      // seeking past the end and printing nothing forever.
+      if (size < offset) {
+        offset = 0;
+      }
+      if (size === offset) return;
+
+      const handle = openSync(LOG_FILE, 'r');
+      try {
+        const buffer = Buffer.alloc(size - offset);
+        readSync(handle, buffer, 0, buffer.length, offset);
+        process.stdout.write(buffer.toString('utf-8'));
+        offset = size;
+      } finally {
+        closeSync(handle);
+      }
+    }, 500);
+
+    // Housekeeping must never be the reason this process cannot exit.
+    timer.unref?.();
+
+    const stop = () => {
+      clearInterval(timer);
+      process.off('SIGINT', stop);
+      process.off('SIGTERM', stop);
+      resolve();
+    };
+
+    process.on('SIGINT', stop);
+    process.on('SIGTERM', stop);
+  });
+}
+
+/**
  * Ensure daemon is running, auto-starting if needed.
  */
 async function ensureDaemon(noAutoStart: boolean): Promise<void> {
@@ -245,12 +329,30 @@ async function main(): Promise<void> {
         await stopDaemon();
         return;
 
+      case 'restart': {
+        // stopDaemon() returning false just means nothing was running, which
+        // is a fine state to start from.
+        await stopDaemon();
+
+        const started = await startDaemon();
+        if (!started) {
+          console.error('Failed to start daemon.');
+          process.exit(1);
+        }
+        console.log('Daemon restarted.');
+        return;
+      }
+
       case 'status':
         await handleDaemonStatus(SOCKET_PATH);
         return;
 
+      case 'logs':
+        await showLogs(filteredArgs.slice(2));
+        return;
+
       default:
-        console.error('Usage: mcp-cli daemon <start|stop|status>');
+        console.error('Usage: mcp-cli daemon <start|stop|restart|status|logs>');
         process.exit(1);
     }
   }
@@ -293,6 +395,10 @@ async function main(): Promise<void> {
 
     case 'stats':
       await handleStats(SOCKET_PATH);
+      break;
+
+    case 'doctor':
+      await handleDoctor(SOCKET_PATH);
       break;
 
     default:
