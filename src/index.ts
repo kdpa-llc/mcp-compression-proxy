@@ -74,13 +74,46 @@ const compressionSampler = new CompressionSampler(logger, {
 type BackendTool = ObservedTool & { inputSchema: Tool['inputSchema'] };
 
 /**
+ * How long a backend tool snapshot stays reusable.
+ *
+ * `tools/list` runs on every client refresh and the compression tools each
+ * trigger their own fan-out, so without this a single agent turn can issue
+ * several `listTools` round-trips per backend. Short enough that a genuinely
+ * changed backend surfaces almost immediately.
+ */
+const TOOL_CACHE_TTL_MS = 3000;
+
+let toolCache: { expiresAt: number; key: string; tools: BackendTool[] } | undefined;
+
+/**
  * Fetch every tool from every connected backend server, once.
  *
  * Callers that need both the tool list and derived counts should reuse a single
  * snapshot rather than calling `listTools` per tool.
+ *
+ * Excluded tools are dropped here rather than only at the `tools/list` edge:
+ * every consumer of this snapshot - the compression tools included - must agree
+ * on which tools exist, or the proxy asks the model to spend calls compressing
+ * tools it will never advertise and reports coverage percentages that disagree
+ * with what the client actually sees.
  */
 async function fetchAllBackendTools(): Promise<BackendTool[]> {
   const clients = clientManager.getConnectedClients();
+
+  const excludePatterns = loadJSONServersCached()?.excludePatterns || [];
+
+  // Keyed on the connected set and the exclude patterns as well as the clock.
+  // Hot-reload can add or drop a backend between ticks and an edited
+  // servers.json can change what is filtered; serving either from a stale
+  // snapshot would contradict what tools/list reports.
+  const cacheKey = JSON.stringify([
+    excludePatterns,
+    clients.map(({ name }) => name).sort(),
+  ]);
+
+  if (toolCache && toolCache.expiresAt > Date.now() && toolCache.key === cacheKey) {
+    return toolCache.tools;
+  }
 
   const perServer = await Promise.all(
     clients.map(async ({ name, client }): Promise<BackendTool[]> => {
@@ -99,7 +132,16 @@ async function fetchAllBackendTools(): Promise<BackendTool[]> {
     })
   );
 
-  return perServer.flat();
+  const tools = perServer
+    .flat()
+    .filter(
+      (tool) =>
+        !matchesIgnorePattern(`${tool.serverName}__${tool.toolName}`, excludePatterns)
+    );
+
+  toolCache = { expiresAt: Date.now() + TOOL_CACHE_TTL_MS, key: cacheKey, tools };
+
+  return tools;
 }
 
 /**
