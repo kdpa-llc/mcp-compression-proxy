@@ -125,7 +125,9 @@ async function startDaemon(): Promise<void> {
   // that most needs this: editing servers.json would otherwise mean stopping a
   // daemon that is holding warm connections. Cached loader rather than the
   // uncached one used above - the poll is what its mtime fingerprint is for.
-  clientManager.startConfigWatch(loadJSONServersCached);
+  clientManager.startConfigWatch(loadJSONServersCached, undefined, (reloaded) => {
+    compressionCache.setNoCompressPatterns(reloaded.noCompressPatterns);
+  });
 
   // Clean up stale socket file if it exists
   if (fs.existsSync(SOCKET_PATH)) {

@@ -114,14 +114,26 @@ function validateConfig(config: unknown): ServerConfigJSON {
   // it throws like every other config mistake here rather than warning - a soft
   // path would be the only one in this file.
   for (const server of validated.mcpServers) {
-    if (!server.url) continue;
+    if (server.url) {
+      const offending = STDIO_ONLY_FIELDS.filter((field) => server[field] !== undefined);
+      if (offending.length > 0) {
+        const message =
+          `Invalid server configuration: "${server.name}" sets ${offending.join(', ')} ` +
+          `alongside "url". Those fields configure a locally spawned process and have no ` +
+          `effect on a remote server; use "headers" to send credentials instead.`;
+        console.error(`[Config] Validation failed:\n  - ${message}`);
+        throw new Error(message);
+      }
+      continue;
+    }
 
-    const offending = STDIO_ONLY_FIELDS.filter((field) => server[field] !== undefined);
-    if (offending.length > 0) {
+    // The mirror of the check above. Headers are an HTTP concept, so on a
+    // spawned server they would be dropped in silence - the same failure mode
+    // that rejecting unknown keys was meant to end.
+    if (server.headers !== undefined) {
       const message =
-        `Invalid server configuration: "${server.name}" sets ${offending.join(', ')} ` +
-        `alongside "url". Those fields configure a locally spawned process and have no ` +
-        `effect on a remote server; use "headers" to send credentials instead.`;
+        `Invalid server configuration: "${server.name}" sets headers alongside "command". ` +
+        `Headers are only sent to a remote server; use "env" to pass values to a spawned one.`;
       console.error(`[Config] Validation failed:\n  - ${message}`);
       throw new Error(message);
     }

@@ -21,7 +21,15 @@ import { SERVER_NAME, VERSION } from '../version.js';
  * `undefined` fields collapse together for the same reason.
  */
 function configFingerprint(config: MCPServerConfig): string {
-  return JSON.stringify(config, (_key, value: unknown) =>
+  // Only the fields that define the live connection. `enabled` is already
+  // handled by filtering before reconcile, and `timeout` is consumed once at
+  // connect time - hashing either meant deleting a redundant "enabled": true
+  // or raising a timeout closed a healthy backend and respawned its process,
+  // which is exactly the churn the key-sorting below exists to avoid.
+  const { name, command, args, env, inheritEnv, url, headers } = config;
+  const connectionFields = { name, command, args, env, inheritEnv, url, headers };
+
+  return JSON.stringify(connectionFields, (_key, value: unknown) =>
     value !== null && typeof value === 'object' && !Array.isArray(value)
       ? Object.fromEntries(
           Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
@@ -30,6 +38,24 @@ function configFingerprint(config: MCPServerConfig): string {
         )
       : value
   );
+}
+
+/**
+ * Best-effort message for something thrown.
+ *
+ * `instanceof Error` is not reliable here: `new URL()` is Node core, so on a
+ * malformed address it throws an Error built in a different realm from this
+ * module's, and the check silently fails - turning a perfectly good "Invalid
+ * URL" into "Unknown error" on the one status field the user reads to find out
+ * what went wrong.
+ */
+function describeError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+
+  const message = (error as { message?: unknown } | null | undefined)?.message;
+  if (typeof message === 'string' && message !== '') return message;
+
+  return 'Unknown error';
 }
 
 /**
@@ -55,6 +81,15 @@ export class MCPClientManager {
    * teardown.
    */
   private shuttingDown = false;
+  /**
+   * Server names the current config asks for, once anything has told us.
+   *
+   * reconcile() computes its removals from `connections`, but a server whose
+   * retry timer has already fired is inside connect() and not in that map yet,
+   * so it survives the teardown pass and re-registers itself when the connect
+   * resolves. Checking this on the way in closes that window.
+   */
+  private desiredServers?: Set<string>;
   /**
    * Names we are about to close on purpose. The SDK fires `onclose` for a
    * deliberate `close()` exactly as it does for a crashed backend, so this is
@@ -197,6 +232,8 @@ export class MCPClientManager {
       this.withDefaults(server, defaultTimeout, defaultInheritEnv)
     );
 
+    this.desiredServers = new Set(serversWithTimeout.map((server) => server.name));
+
     const connectionPromises = serversWithTimeout.map(async (config) => {
       try {
         await this.connectToServer(config);
@@ -258,8 +295,6 @@ export class MCPClientManager {
       'Connecting to MCP server'
     );
 
-    const transport = this.buildTransport(config);
-
     const client = new Client(
       {
         name: SERVER_NAME,
@@ -270,7 +305,15 @@ export class MCPClientManager {
       }
     );
 
+    // Built inside the try so a transport that cannot be constructed at all -
+    // `url` missing its scheme is schema-valid and throws here - still lands in
+    // the catch and gets recorded. Outside it, the server simply disappeared
+    // from getServerStatuses() and looked like it had never been configured.
+    let transport: Transport | undefined;
+
     try {
+      transport = this.buildTransport(config);
+
       const connectPromise = client.connect(transport);
       // If the timeout wins the race below, this promise may still reject on its
       // own later; swallow it so it doesn't surface as an unhandled rejection.
@@ -278,18 +321,28 @@ export class MCPClientManager {
 
       await this.withTimeout(connectPromise, timeoutMs);
 
-      // Teardown may have completed while this connect was in flight. Adopting
-      // it now would resurrect a backend after disconnectAll() reported every
-      // server closed, so hand it straight back instead.
-      if (this.shuttingDown) {
+      // The world may have moved while this connect was in flight: a shutdown
+      // completed, or a config reload dropped this server. Adopting the
+      // connection now would resurrect a backend nobody will ever close, so
+      // hand it straight back instead.
+      const unwanted =
+        this.shuttingDown ||
+        (this.desiredServers !== undefined && !this.desiredServers.has(config.name));
+
+      if (unwanted) {
         try {
           await client.close();
         } catch (error) {
           this.logger.debug(
             { server: config.name, error },
-            'Failed to close a connection that resolved during shutdown'
+            'Failed to close a connection that is no longer wanted'
           );
         }
+
+        this.logger.info(
+          { server: config.name, reason: this.shuttingDown ? 'shutdown' : 'removed from config' },
+          'Discarded a connection that resolved after it was no longer wanted'
+        );
         return;
       }
 
@@ -322,19 +375,21 @@ export class MCPClientManager {
         // and this leaves a cause behind for getServerStatuses().
         const connection = this.connections.get(config.name);
         if (connection?.client === client) {
-          connection.lastError = error instanceof Error ? error.message : String(error);
+          connection.lastError = describeError(error);
         }
         this.logger.warn({ server: config.name, error }, 'MCP server transport error');
       };
 
       this.logger.info({ server: config.name }, 'Successfully connected to MCP server');
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorMessage = describeError(error);
 
       // A timed-out connect leaves the spawned process running. Tear the
       // transport down so we don't orphan a child for the proxy's lifetime.
+      // Undefined when construction itself failed, in which case there is no
+      // process and nothing to close.
       try {
-        await transport.close();
+        await transport?.close();
       } catch (closeError) {
         this.logger.debug(
           { server: config.name, error: closeError },
@@ -403,11 +458,12 @@ export class MCPClientManager {
     const attempt = this.reconnectAttempts.get(name) ?? 0;
     this.reconnectAttempts.set(name, attempt + 1);
 
-    const capped = Math.min(
-      this.RECONNECT_BASE_MS * 2 ** attempt,
-      this.RECONNECT_MAX_MS
-    );
-    const delayMs = Math.round(capped * (0.8 + Math.random() * 0.4));
+    // Jitter is applied first and the cap last, so RECONNECT_MAX_MS is a real
+    // ceiling. Capping the base instead let the +20% arm push actual delays to
+    // 36s, which quietly contradicts what the constant says.
+    const backoff = this.RECONNECT_BASE_MS * 2 ** attempt;
+    const jittered = backoff * (0.8 + Math.random() * 0.4);
+    const delayMs = Math.round(Math.min(jittered, this.RECONNECT_MAX_MS));
 
     const timer = setTimeout(() => {
       this.reconnectTimers.delete(name);
@@ -457,6 +513,10 @@ export class MCPClientManager {
         return [resolved.name, resolved];
       })
     );
+
+    // Claimed before the teardown pass, so a retry that resolves partway
+    // through sees the new roster rather than the one it started under.
+    this.desiredServers = new Set(desired.keys());
 
     const removed: string[] = [];
     const changed: string[] = [];
@@ -556,7 +616,11 @@ export class MCPClientManager {
    * `loadConfig` is injected rather than imported so this stays testable
    * without fixture files, matching the loader injection in StatsService.
    */
-  startConfigWatch(loadConfig: () => ConfigResult, intervalMs = 5000): void {
+  startConfigWatch(
+    loadConfig: () => ConfigResult,
+    intervalMs = 5000,
+    onConfigLoaded?: (config: NonNullable<ConfigResult>) => void
+  ): void {
     // A second watcher would double the poll rate and leak the first interval.
     if (this.configWatchTimer) {
       return;
@@ -579,6 +643,16 @@ export class MCPClientManager {
 
       if (!config) {
         return;
+      }
+
+      // Settings that live outside this class - compression patterns, the
+      // uncompressed-tool fallback - are applied by the owner. Without this a
+      // proxy started before servers.json existed would connect the servers it
+      // later described but ignore the noCompressTools in the same file.
+      try {
+        onConfigLoaded?.(config);
+      } catch (error) {
+        this.logger.warn({ error }, 'Config reload hook failed');
       }
 
       void this.reconcile(

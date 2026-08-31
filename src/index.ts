@@ -1131,7 +1131,10 @@ async function main() {
   // Outside the branch above on purpose: the fingerprint the watch polls counts
   // a missing config file, so a user who writes their first servers.json after
   // starting the proxy gets their servers without restarting the MCP client.
-  clientManager.startConfigWatch(loadJSONServersCached);
+  clientManager.startConfigWatch(loadJSONServersCached, undefined, (reloaded) => {
+    compressionCache.setNoCompressPatterns(reloaded.noCompressPatterns);
+    compressionCache.setFallbackBehavior(reloaded.compressionFallbackBehavior ?? 'original');
+  });
 
   // Now connect to the MCP client - all backend servers are ready (or timed out)
   const transport = new StdioServerTransport();

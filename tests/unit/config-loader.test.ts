@@ -575,6 +575,37 @@ describe('Config Loader', () => {
         expect(() => loadJSONServers()).toThrow('confused');
       }
     );
+
+    it('should reject headers combined with command', async () => {
+      // The mirror of the checks above: headers are an HTTP concept, so on a
+      // spawned server they would be dropped in silence.
+      writeProjectConfig({
+        name: 'confused',
+        command: 'npx',
+        headers: { Authorization: 'Bearer x' },
+      });
+
+      const { loadJSONServers } = await importLoader();
+
+      expect(() => loadJSONServers()).toThrow(
+        expect.objectContaining({
+          message: expect.stringContaining('headers') as unknown as string,
+        })
+      );
+      expect(() => loadJSONServers()).toThrow('confused');
+    });
+
+    it('should still accept a stdio server with env and no headers', async () => {
+      writeProjectConfig({
+        name: 'plain',
+        command: 'npx',
+        env: { TOKEN: 'x' },
+      });
+
+      const { loadJSONServers } = await importLoader();
+
+      expect(() => loadJSONServers()).not.toThrow();
+    });
   });
 
   describe('getConfigPath', () => {

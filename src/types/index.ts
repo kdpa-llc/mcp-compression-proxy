@@ -27,7 +27,11 @@ export interface MCPServerConfig {
 export interface MCPClientConnection {
   name: string;
   client: Client;
-  transport: Transport;
+  /**
+   * Absent when the transport could not be built at all - a malformed `url`,
+   * say. Recording the failure still matters, so this cannot be required.
+   */
+  transport?: Transport;
   connected: boolean;
   lastError?: string;
   /**

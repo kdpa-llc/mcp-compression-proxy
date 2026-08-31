@@ -499,6 +499,35 @@ describe('MCPClientManager', () => {
     });
   });
 
+  describe('malformed remote url', () => {
+    it('records the server as failed instead of dropping it from status', async () => {
+      const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+      (Client as unknown as jest.Mock).mockImplementation(() => mockClient);
+
+      const { StreamableHTTPClientTransport } = await import(
+        '@modelcontextprotocol/sdk/client/streamableHttp.js'
+      );
+      // `new URL()` throws on a scheme-less string, which the config schema
+      // happily accepts.
+      (StreamableHTTPClientTransport as unknown as jest.Mock).mockImplementation(() => {
+        throw new TypeError('Invalid URL');
+      });
+
+      await clientManager.initializeServers([
+        { name: 'broken', url: 'mcp.example.com/mcp', enabled: true },
+      ]);
+
+      const statuses = clientManager.getServerStatuses();
+
+      // Previously this returned [] - the server vanished entirely and looked
+      // like it had never been configured.
+      expect(statuses).toHaveLength(1);
+      expect(statuses[0].name).toBe('broken');
+      expect(statuses[0].connected).toBe(false);
+      expect(statuses[0].lastError).toContain('Invalid URL');
+    });
+  });
+
   describe('timeout handling', () => {
     it('should timeout when server connection exceeds timeout', async () => {
       const servers: MCPServerConfig[] = [
@@ -884,6 +913,106 @@ describe('MCPClientManager', () => {
       expect(stalledClient.close).toHaveBeenCalled();
     });
 
+    it('should not resurrect a server removed while its reconnect was in flight', async () => {
+      const constructor = await connectFlakyServer();
+
+      // reconcile() computes removals from `connections`, and a server inside
+      // connect() is not in that map yet - so only the desired-set check on
+      // the way back in can stop this one re-registering.
+      let releaseConnect: () => void = () => {};
+      const stalledClient = {
+        ...mockClient,
+        connect: jest.fn<() => Promise<void>>().mockImplementation(
+          () => new Promise<void>((resolve) => { releaseConnect = resolve; })
+        ),
+      };
+      constructor.mockImplementation(() => stalledClient);
+
+      mockClient.onclose!();
+      await jest.advanceTimersByTimeAsync(1000); // retry fires, connect hangs
+
+      // servers.json no longer lists 'flaky'.
+      await clientManager.reconcile([]);
+
+      releaseConnect();
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(clientManager.getClient('flaky')).toBeUndefined();
+      expect(clientManager.getConnectedClients()).toEqual([]);
+      expect(stalledClient.close).toHaveBeenCalled();
+    });
+
+    it('should cap the jittered delay, not the pre-jitter base', async () => {
+      await connectFlakyServer();
+
+      // Worst-case jitter: capping the base first let this reach 36s while the
+      // constant claims 30s.
+      jest.spyOn(Math, 'random').mockReturnValue(1);
+
+      const failing = {
+        ...mockClient,
+        connect: jest.fn<() => Promise<void>>().mockRejectedValue(new Error('still down')),
+      };
+      const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+      (Client as unknown as jest.Mock).mockImplementation(() => failing);
+
+      mockClient.onclose!();
+      for (let i = 0; i < 8; i++) {
+        await jest.advanceTimersByTimeAsync(40000);
+      }
+
+      for (const delay of scheduledDelays()) {
+        expect(delay).toBeLessThanOrEqual(30000);
+      }
+      expect(Math.max(...scheduledDelays())).toBe(30000);
+    });
+
+    it('should reconnect using the resolved config, not the raw entry', async () => {
+      const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+      const constructor = Client as unknown as jest.Mock;
+      constructor.mockImplementation(() => mockClient);
+
+      // File-level default; the server entry carries no timeout of its own.
+      await clientManager.initializeServers(
+        [{ name: 'flaky', command: 'cmd', enabled: true }],
+        45
+      );
+
+      (mockLogger.info as unknown as jest.Mock).mockClear();
+
+      mockClient.onclose!();
+      await jest.advanceTimersByTimeAsync(1000);
+
+      // A reconnect that re-derived from the raw entry would fall back to the
+      // 30s class default and silently ignore defaultTimeout.
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ server: 'flaky', timeoutMs: 45000 }),
+        'Connecting to MCP server'
+      );
+    });
+
+    it('should mark an intentional close before closing, not after', async () => {
+      // The real SDK fires onclose from inside close(); the plain test double
+      // does not, which is why an earlier version of this suite stayed green
+      // when the marking was moved after the close loop.
+      const constructor = await connectFlakyServer();
+
+      const closingClient = clientManager.getClient('flaky') as unknown as {
+        onclose?: () => void;
+        close: jest.Mock;
+      };
+      (closingClient.close as unknown as jest.Mock).mockImplementation(async () => {
+        closingClient.onclose?.();
+      });
+
+      await clientManager.disconnectAll();
+      await jest.advanceTimersByTimeAsync(120000);
+
+      // One construction only: the synchronous onclose must have been read as
+      // deliberate rather than as a crash worth retrying.
+      expect(constructor).toHaveBeenCalledTimes(1);
+    });
+
     it('should not reconnect after a deliberate close', async () => {
       const constructor = await connectFlakyServer();
 
@@ -1120,6 +1249,33 @@ describe('MCPClientManager', () => {
       expect(clientManager.getClient('a')).toBeDefined();
     });
 
+    it('should not bounce a healthy backend over a cosmetic config edit', async () => {
+      await clientConstructor();
+      await clientManager.initializeServers([serverA]);
+      const original = clientManager.getClient('a');
+
+      // Neither field changes the live connection: `enabled` is handled by
+      // filtering before reconcile, and `timeout` is read once at connect.
+      await clientManager.reconcile([
+        { name: 'a', command: 'cmd-a', enabled: true, timeout: 90 },
+      ]);
+
+      expect(clientManager.getClient('a')).toBe(original);
+      expect(reconcileLogs()).toHaveLength(0);
+    });
+
+    it('should still bounce a backend whose command actually changed', async () => {
+      // Negative control for the test above.
+      await clientConstructor();
+      await clientManager.initializeServers([serverA]);
+      const original = clientManager.getClient('a');
+
+      await clientManager.reconcile([{ name: 'a', command: 'cmd-a-v2', enabled: true }]);
+
+      expect(clientManager.getClient('a')).not.toBe(original);
+      expect(reconcileLogs()).toHaveLength(1);
+    });
+
     describe('startConfigWatch', () => {
       const loaded: ConfigResult = {
         servers: [serverA, { name: 'off', command: 'cmd-off', enabled: false }],
@@ -1144,6 +1300,39 @@ describe('MCPClientManager', () => {
         expect(clientManager.getClient('a')).toBeDefined();
         // Disabled entries are filtered out before reconcile, exactly as at startup.
         expect(clientManager.getServerStatuses().map((s) => s.name)).toEqual(['a']);
+      });
+
+      it('should hand the reloaded config to the owner on every tick', async () => {
+        // Compression patterns live outside this class. Without this hook a
+        // proxy started before servers.json existed would connect the servers
+        // it later describes but ignore the noCompressTools beside them.
+        await clientConstructor();
+        const withPatterns: ConfigResult = { ...loaded, noCompressPatterns: ['a__*'] };
+        const loadConfig = jest.fn<() => ConfigResult>().mockReturnValue(withPatterns);
+        const onConfigLoaded = jest.fn();
+
+        clientManager.startConfigWatch(loadConfig, 1000, onConfigLoaded);
+        await jest.advanceTimersByTimeAsync(1000);
+
+        expect(onConfigLoaded).toHaveBeenCalledWith(withPatterns);
+      });
+
+      it('should keep reconciling when the config hook throws', async () => {
+        await clientConstructor();
+        const loadConfig = jest.fn<() => ConfigResult>().mockReturnValue(loaded);
+        const onConfigLoaded = jest.fn(() => {
+          throw new Error('hook blew up');
+        });
+
+        clientManager.startConfigWatch(loadConfig, 1000, onConfigLoaded);
+        await jest.advanceTimersByTimeAsync(1000);
+
+        // The servers still connect: a bad hook must not cost hot-reload.
+        expect(clientManager.getClient('a')).toBeDefined();
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ error: expect.any(Error) }),
+          'Config reload hook failed'
+        );
       });
 
       it('should keep watching after an unparseable config', async () => {
