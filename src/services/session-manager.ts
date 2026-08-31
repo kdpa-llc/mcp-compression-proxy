@@ -142,6 +142,12 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (!session) return false;
 
+    // Reading counts as use. This runs for every tool on every tools/list, so
+    // without it a session that is only ever read - the normal case, since
+    // expand/collapse are one-off calls - ages out mid-conversation and its
+    // expanded tools silently collapse back to compressed descriptions.
+    session.lastAccessedAt = new Date().toISOString();
+
     const toolKey = `${serverName}:${toolName}`;
     return session.expandedTools.includes(toolKey);
   }

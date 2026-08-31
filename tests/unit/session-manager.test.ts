@@ -311,6 +311,36 @@ describe('SessionManager', () => {
       expect(sessionManager.hasSession(sessionId)).toBe(true);
     });
 
+    it('should keep a session alive that is only ever read', () => {
+      const sessionId = sessionManager.createSession();
+      sessionManager.expandTool(sessionId, 'filesystem', 'read_file');
+
+      // What a tools/list refresh does: reads expansion state and nothing
+      // else. No expand/collapse call ever follows, so this read is the only
+      // thing that can keep the session from ageing out.
+      for (let i = 0; i < 4; i++) {
+        jest.advanceTimersByTime(10 * 60 * 1000);
+        sessionManager.isToolExpanded(sessionId, 'filesystem', 'read_file');
+      }
+
+      jest.advanceTimersByTime(5 * 60 * 1000); // trigger cleanup
+
+      expect(sessionManager.hasSession(sessionId)).toBe(true);
+      expect(sessionManager.isToolExpanded(sessionId, 'filesystem', 'read_file')).toBe(true);
+    });
+
+    it('should still expire a session nothing touches', () => {
+      // Negative control for the test above: proves the survival there comes
+      // from the read refreshing the timestamp, not from expandTool alone.
+      const sessionId = sessionManager.createSession();
+      sessionManager.expandTool(sessionId, 'filesystem', 'read_file');
+
+      jest.advanceTimersByTime(31 * 60 * 1000);
+      jest.advanceTimersByTime(5 * 60 * 1000);
+
+      expect(sessionManager.hasSession(sessionId)).toBe(false);
+    });
+
     it('should cleanup multiple expired sessions', () => {
       const sessionId1 = sessionManager.createSession();
       const sessionId2 = sessionManager.createSession();
