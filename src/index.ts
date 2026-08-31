@@ -144,10 +144,43 @@ async function fetchAllBackendTools(): Promise<BackendTool[]> {
   return tools;
 }
 
+/** Tools returned per `tools/list` page when the client does not stop early. */
+const DEFAULT_TOOLS_PAGE_SIZE = 100;
+
+/**
+ * Page size, overridable so a test can force pagination without standing up a
+ * backend that exposes hundreds of tools. Anything unparseable or non-positive
+ * falls back rather than producing an empty page forever.
+ */
+function toolsPageSize(): number {
+  const configured = Number.parseInt(process.env.MCP_TOOLS_PAGE_SIZE ?? '', 10);
+  return Number.isInteger(configured) && configured > 0
+    ? configured
+    : DEFAULT_TOOLS_PAGE_SIZE;
+}
+
+/**
+ * Decode a pagination cursor into an offset.
+ *
+ * Cursors are opaque to the client but are just offsets here - this is a local
+ * 1:1 stdio transport, so there is nothing to tamper-proof against. Returns
+ * `undefined` for a cursor that cannot be honoured, which the caller reports
+ * rather than treating as "start over".
+ */
+function parseCursor(cursor: unknown): number | undefined {
+  if (cursor === undefined) return 0;
+  if (typeof cursor !== 'string') return undefined;
+
+  const offset = Number.parseInt(cursor, 10);
+  return Number.isInteger(offset) && offset >= 0 && String(offset) === cursor
+    ? offset
+    : undefined;
+}
+
 /**
  * List all tools from aggregated MCP servers + management tools
  */
-server.setRequestHandler(ListToolsRequestSchema, async () => {
+server.setRequestHandler(ListToolsRequestSchema, async (request) => {
   logger.debug('Handling tools/list request');
 
   // Fetch backend tools first so the management tools can advertise live
@@ -359,7 +392,29 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 
   logger.debug({ count: filteredTools.length, excluded: allTools.length - filteredTools.length }, 'Returning tools');
 
-  return { tools: filteredTools };
+  // Paginate over the post-exclude list: a cursor pointing into the unfiltered
+  // set would drift as patterns change, and would leak excluded tools at the
+  // page boundaries.
+  const offset = parseCursor(request.params?.cursor);
+
+  if (offset === undefined) {
+    return {
+      tools: [],
+      // The spec has no error channel here, so an unusable cursor returns
+      // nothing rather than silently restarting from the top - a caller
+      // looping on nextCursor would otherwise never terminate.
+      _meta: { error: `Invalid cursor: ${String(request.params?.cursor)}` },
+    };
+  }
+
+  const pageSize = toolsPageSize();
+  const page = filteredTools.slice(offset, offset + pageSize);
+  const nextOffset = offset + page.length;
+
+  return {
+    tools: page,
+    ...(nextOffset < filteredTools.length ? { nextCursor: String(nextOffset) } : {}),
+  };
 });
 
 /**
