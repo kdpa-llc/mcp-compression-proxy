@@ -855,6 +855,35 @@ describe('MCPClientManager', () => {
       expect(constructor).toHaveBeenCalledTimes(1);
     });
 
+    it('should not adopt a reconnect that resolves after disconnectAll', async () => {
+      const constructor = await connectFlakyServer();
+
+      // A retry that is already inside connect() when teardown begins:
+      // cancelling its timer is too late, so only the shutdown guard can stop
+      // it from registering a backend nobody will ever close.
+      let releaseConnect: () => void = () => {};
+      const stalledClient = {
+        ...mockClient,
+        connect: jest.fn<() => Promise<void>>().mockImplementation(
+          () => new Promise<void>((resolve) => { releaseConnect = resolve; })
+        ),
+      };
+      constructor.mockImplementation(() => stalledClient);
+
+      mockClient.onclose!();
+      await jest.advanceTimersByTimeAsync(1000); // retry fires, connect hangs
+
+      await clientManager.disconnectAll();
+
+      releaseConnect();
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(clientManager.getClient('flaky')).toBeUndefined();
+      expect(clientManager.getConnectedClients()).toEqual([]);
+      // Handed straight back rather than left running past teardown.
+      expect(stalledClient.close).toHaveBeenCalled();
+    });
+
     it('should not reconnect after a deliberate close', async () => {
       const constructor = await connectFlakyServer();
 

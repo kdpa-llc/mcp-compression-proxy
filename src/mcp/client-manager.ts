@@ -48,6 +48,14 @@ export class MCPClientManager {
   private connecting: Set<string> = new Set();
   private configWatchTimer?: NodeJS.Timeout;
   /**
+   * Set once `disconnectAll()` starts. Cancelling pending retry timers is not
+   * enough on its own: a retry that already fired is sitting in `connect()`,
+   * and when it resolves it would register a live connection into a manager
+   * everyone else considers shut down - leaving a backend process running past
+   * teardown.
+   */
+  private shuttingDown = false;
+  /**
    * Names we are about to close on purpose. The SDK fires `onclose` for a
    * deliberate `close()` exactly as it does for a crashed backend, so this is
    * the only way the drop handler can tell the two apart.
@@ -269,6 +277,21 @@ export class MCPClientManager {
       connectPromise.catch(() => {});
 
       await this.withTimeout(connectPromise, timeoutMs);
+
+      // Teardown may have completed while this connect was in flight. Adopting
+      // it now would resurrect a backend after disconnectAll() reported every
+      // server closed, so hand it straight back instead.
+      if (this.shuttingDown) {
+        try {
+          await client.close();
+        } catch (error) {
+          this.logger.debug(
+            { server: config.name, error },
+            'Failed to close a connection that resolved during shutdown'
+          );
+        }
+        return;
+      }
 
       this.connections.set(config.name, {
         name: config.name,
@@ -613,6 +636,10 @@ export class MCPClientManager {
    */
   async disconnectAll(): Promise<void> {
     this.logger.info('Disconnecting from all MCP servers');
+
+    // Claimed before anything is awaited, so a retry already inside connect()
+    // sees it the moment that connect resolves.
+    this.shuttingDown = true;
 
     // Stop watching first: a poll landing mid-teardown would reconnect the very
     // servers this call is closing.
