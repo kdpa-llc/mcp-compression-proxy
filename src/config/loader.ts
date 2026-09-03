@@ -243,6 +243,10 @@ export type ConfigResult = {
   excludePatterns: string[];
   noCompressPatterns: string[];
   defaultTimeout?: number;
+  softMaxConnectionAgeSeconds?: number;
+  hardMaxConnectionAgeSeconds?: number;
+  authErrorPatterns?: string[];
+  authRetryTools?: string[];
   cli?: {
     payloadThreshold?: number;
     autoStartDaemon?: boolean;
@@ -264,6 +268,10 @@ export function loadJSONServers(): ConfigResult {
   let aggregatedExcludePatterns: string[] = [];
   let aggregatedNoCompressPatterns: string[] = [];
   let defaultTimeout: number | undefined;
+  let softMaxConnectionAgeSeconds: number | undefined;
+  let hardMaxConnectionAgeSeconds: number | undefined;
+  let authErrorPatterns: string[] | undefined;
+  let authRetryTools: string[] | undefined;
   let cliConfig: { payloadThreshold?: number; autoStartDaemon?: boolean; daemonLogLevel?: string } | undefined;
   let inheritEnv: InheritEnv | undefined;
   let compressionFallbackBehavior: CompressionFallbackBehavior = 'original';
@@ -285,6 +293,21 @@ export function loadJSONServers(): ConfigResult {
     }
     if (userConfig.defaultTimeout) {
       defaultTimeout = userConfig.defaultTimeout;
+    }
+    const userSoftMaxAge =
+      userConfig.softMaxConnectionAgeSeconds ??
+      userConfig.maxConnectionAgeSeconds;
+    if (userSoftMaxAge !== undefined) {
+      softMaxConnectionAgeSeconds = userSoftMaxAge;
+    }
+    if (userConfig.hardMaxConnectionAgeSeconds !== undefined) {
+      hardMaxConnectionAgeSeconds = userConfig.hardMaxConnectionAgeSeconds;
+    }
+    if (userConfig.authErrorPatterns !== undefined) {
+      authErrorPatterns = [...userConfig.authErrorPatterns];
+    }
+    if (userConfig.authRetryTools !== undefined) {
+      authRetryTools = [...userConfig.authRetryTools];
     }
     if (userConfig.cli) {
       cliConfig = { ...userConfig.cli };
@@ -322,6 +345,22 @@ export function loadJSONServers(): ConfigResult {
     // Project-level settings override user-level
     if (projectConfig.defaultTimeout) {
       defaultTimeout = projectConfig.defaultTimeout;
+    }
+
+    const projectSoftMaxAge =
+      projectConfig.softMaxConnectionAgeSeconds ??
+      projectConfig.maxConnectionAgeSeconds;
+    if (projectSoftMaxAge !== undefined) {
+      softMaxConnectionAgeSeconds = projectSoftMaxAge;
+    }
+    if (projectConfig.hardMaxConnectionAgeSeconds !== undefined) {
+      hardMaxConnectionAgeSeconds = projectConfig.hardMaxConnectionAgeSeconds;
+    }
+    if (projectConfig.authErrorPatterns !== undefined) {
+      authErrorPatterns = [...projectConfig.authErrorPatterns];
+    }
+    if (projectConfig.authRetryTools !== undefined) {
+      authRetryTools = [...projectConfig.authRetryTools];
     }
 
     // Project-level CLI config overrides user-level
@@ -363,6 +402,22 @@ export function loadJSONServers(): ConfigResult {
     console.error(`[Config] Default timeout: ${defaultTimeout} seconds`);
   }
 
+  if (softMaxConnectionAgeSeconds !== undefined) {
+    console.error(`[Config] Soft max connection age: ${softMaxConnectionAgeSeconds} seconds`);
+  }
+
+  if (hardMaxConnectionAgeSeconds !== undefined) {
+    console.error(`[Config] Hard max connection age: ${hardMaxConnectionAgeSeconds} seconds`);
+  }
+
+  if (authErrorPatterns && authErrorPatterns.length > 0) {
+    console.error(`[Config] Authentication error patterns configured: ${authErrorPatterns.length}`);
+  }
+
+  if (authRetryTools && authRetryTools.length > 0) {
+    console.error(`[Config] Authentication retry-safe tools configured: ${authRetryTools.length}`);
+  }
+
   // Log environment inheritance policy when it deviates from the default
   if (inheritEnv !== undefined && inheritEnv !== true) {
     console.error(
@@ -384,6 +439,10 @@ export function loadJSONServers(): ConfigResult {
     excludePatterns: aggregatedExcludePatterns,
     noCompressPatterns: aggregatedNoCompressPatterns,
     defaultTimeout,
+    softMaxConnectionAgeSeconds,
+    hardMaxConnectionAgeSeconds,
+    authErrorPatterns,
+    authRetryTools,
     cli: cliConfig,
     inheritEnv,
     compressionFallbackBehavior,

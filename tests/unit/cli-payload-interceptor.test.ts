@@ -1,7 +1,18 @@
 import { describe, it, expect, afterEach } from '@jest/globals';
-import { interceptPayload } from '../../src/cli/payload-interceptor.js';
-import { existsSync, readFileSync, unlinkSync, statSync } from 'fs';
-import { dirname } from 'path';
+import {
+  DEFAULT_PAYLOAD_THRESHOLD,
+  PayloadStore,
+  interceptPayload,
+} from '../../src/cli/payload-interceptor.js';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  statSync,
+} from 'fs';
+import { dirname, join } from 'path';
 import { tmpdir } from 'os';
 
 describe('PayloadInterceptor', () => {
@@ -29,7 +40,7 @@ describe('PayloadInterceptor', () => {
     const output = 'x'.repeat(501);
     const result = interceptPayload(output, 500);
 
-    expect(result).toMatch(/^Output saved to .*mcp_output_.*\.txt \(501 chars\)\. Read file for full content\.$/);
+    expect(result).toMatch(/^Output saved to .*mcp_output_.*\.txt \(501 chars\)\. Payload ID: [a-f0-9]+\. Use mcp_find_output or mcp_read_output to inspect it\.$/);
 
     // Extract file path and verify file exists with correct content
     const match = result.match(/Output saved to (.*?) \(/);
@@ -41,11 +52,11 @@ describe('PayloadInterceptor', () => {
     expect(readFileSync(filePath, 'utf-8')).toBe(output);
   });
 
-  it('should use default threshold of 500 when not specified', () => {
-    const shortOutput = 'x'.repeat(500);
+  it('should use the 10K default threshold when not specified', () => {
+    const shortOutput = 'x'.repeat(DEFAULT_PAYLOAD_THRESHOLD);
     expect(interceptPayload(shortOutput)).toBe(shortOutput);
 
-    const longOutput = 'y'.repeat(501);
+    const longOutput = 'y'.repeat(DEFAULT_PAYLOAD_THRESHOLD + 1);
     const result = interceptPayload(longOutput);
     expect(result).toContain('Output saved to');
 
@@ -161,6 +172,89 @@ describe('PayloadInterceptor', () => {
       expect(first).toBe(second);
       const filePath = pathOf(first);
       expect(readFileSync(filePath, 'utf-8')).toBe(content);
+    });
+  });
+
+  describe('payload cache API', () => {
+    it('reads bounded chunks and can explicitly load the remaining payload', () => {
+      const store = new PayloadStore();
+      const captured = store.capture('0123456789', 5);
+
+      expect(captured.reference).toBeDefined();
+      expect(store.read(captured.reference!.id, { offset: 2, length: 4 })).toEqual(
+        expect.objectContaining({
+          content: '2345',
+          offset: 2,
+          nextOffset: 6,
+          eof: false,
+          totalChars: 10,
+        })
+      );
+      expect(store.read(captured.reference!.id, { offset: 6, all: true })).toEqual(
+        expect.objectContaining({
+          content: '6789',
+          nextOffset: 10,
+          eof: true,
+        })
+      );
+
+      store.destroy();
+    });
+
+    it('finds literal text with offsets, line numbers, and bounded context', () => {
+      const store = new PayloadStore();
+      const captured = store.capture('alpha\nneedle one\nbeta\nNEEDLE two\ngamma', 5);
+
+      const result = store.find(captured.reference!.id, 'needle', {
+        caseSensitive: false,
+        maxMatches: 10,
+        contextChars: 8,
+      });
+
+      expect(result.matches).toHaveLength(2);
+      expect(result.matches[0]).toEqual(expect.objectContaining({
+        line: 2,
+        match: 'needle',
+      }));
+      expect(result.matches[1]).toEqual(expect.objectContaining({
+        line: 4,
+        match: 'NEEDLE',
+      }));
+
+      store.destroy();
+    });
+
+    it('evicts the oldest payload when the configured entry limit is reached', () => {
+      const store = new PayloadStore({ maxEntries: 2 });
+      const first = store.capture('first payload', 1).reference!;
+      const second = store.capture('second payload', 1).reference!;
+      const third = store.capture('third payload', 1).reference!;
+
+      expect(() => store.read(first.id)).toThrow('not found');
+      expect(store.read(second.id).content).toBe('second payload');
+      expect(store.read(third.id).content).toBe('third payload');
+
+      store.destroy();
+    });
+
+    it('lets a new daemon generation read payloads written by the old one', () => {
+      const directory = mkdtempSync(join(tmpdir(), 'mcp-shared-payload-test-'));
+      const writer = new PayloadStore({
+        directory,
+        removeDirectoryOnDestroy: false,
+      });
+      const captured = writer.capture('shared across releases', 1).reference!;
+      writer.destroy();
+
+      const reader = new PayloadStore({
+        directory,
+        removeDirectoryOnDestroy: false,
+      });
+      expect(reader.read(captured.id, { all: true }).content).toBe(
+        'shared across releases'
+      );
+      reader.destroy();
+      rmSync(directory, { recursive: true, force: true });
     });
   });
 });

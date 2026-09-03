@@ -3,24 +3,28 @@
 import net from 'net';
 import fs from 'fs';
 import path from 'path';
-import { homedir } from 'os';
 import pino from 'pino';
 import { MCPClientManager } from '../mcp/client-manager.js';
+import { callToolWithAuthRecovery } from '../mcp/tool-call-executor.js';
 import { CompressionCache } from '../services/compression-cache.js';
 import { SessionManager } from '../services/session-manager.js';
 import { StatsService } from '../services/stats-service.js';
-import {
-  loadJSONServers,
-  loadJSONServersCached,
-  matchesIgnorePattern,
-} from '../config/loader.js';
-import { interceptPayload } from './payload-interceptor.js';
+import { loadJSONServers, loadJSONServersCached, matchesIgnorePattern } from '../config/loader.js';
+import { DEFAULT_PAYLOAD_THRESHOLD, PayloadStore } from './payload-interceptor.js';
 import type { IPCRequest, IPCResponse, CLIConfig } from '../types/index.js';
+import { runCallScript, type CallScriptStep } from '../mcp/call-script.js';
+import { getDaemonRuntimePaths } from './runtime-paths.js';
 
-const BASE_DIR = path.join(homedir(), '.mcp-compression-proxy');
-const SOCKET_PATH = path.join(BASE_DIR, 'daemon.sock');
-const PID_FILE = path.join(BASE_DIR, 'daemon.pid');
-const LOG_FILE = path.join(BASE_DIR, 'daemon.log');
+const RUNTIME_PATHS = getDaemonRuntimePaths();
+const {
+  baseDir: BASE_DIR,
+  socketPath: SOCKET_PATH,
+  pidFile: PID_FILE,
+  readyFile: READY_FILE,
+  logFile: LOG_FILE,
+  payloadDir: PAYLOAD_DIR,
+  releaseId: RELEASE_ID,
+} = RUNTIME_PATHS;
 
 export function getSocketPath(): string {
   return SOCKET_PATH;
@@ -43,6 +47,12 @@ async function startDaemon(): Promise<void> {
   // mkdirSync ignores `mode` when the directory already exists, so an
   // upgrade from a previous version still gets tightened.
   fs.chmodSync(BASE_DIR, 0o700);
+  for (const runtimePath of [SOCKET_PATH, PID_FILE, READY_FILE, LOG_FILE]) {
+    fs.mkdirSync(path.dirname(runtimePath), {
+      recursive: true,
+      mode: 0o700,
+    });
+  }
 
   const logger = pino({
     name: 'mcp-cli-daemon',
@@ -61,21 +71,20 @@ async function startDaemon(): Promise<void> {
 
   const startTime = Date.now();
 
-  logger.info({ pid: process.pid }, 'Daemon starting');
+  logger.info({ pid: process.pid, releaseId: RELEASE_ID }, 'Daemon starting');
 
   // Write PID file
   fs.writeFileSync(PID_FILE, String(process.pid), 'utf-8');
 
   // Initialize services (reusing existing components)
   const clientManager = new MCPClientManager(logger);
+  const payloadStore = new PayloadStore({
+    directory: PAYLOAD_DIR,
+    removeDirectoryOnDestroy: false,
+  });
   const compressionCache = new CompressionCache(logger);
   const sessionManager = new SessionManager(logger);
-  const statsService = new StatsService(
-    logger,
-    clientManager,
-    compressionCache,
-    sessionManager
-  );
+  const statsService = new StatsService(logger, clientManager, compressionCache, sessionManager);
 
   // Load compression cache from disk
   try {
@@ -97,7 +106,7 @@ async function startDaemon(): Promise<void> {
       cliConfig = rawConfig.cli as CLIConfig;
     }
 
-    const enabledServers = config.servers.filter(s => s.enabled !== false);
+    const enabledServers = config.servers.filter((s) => s.enabled !== false);
     logger.info(
       { total: config.servers.length, enabled: enabledServers.length },
       'Initializing backend MCP servers'
@@ -111,7 +120,13 @@ async function startDaemon(): Promise<void> {
       await clientManager.initializeServers(
         enabledServers,
         config.defaultTimeout,
-        config.inheritEnv
+        config.inheritEnv,
+        {
+          softMaxConnectionAgeSeconds: config.softMaxConnectionAgeSeconds,
+          hardMaxConnectionAgeSeconds: config.hardMaxConnectionAgeSeconds,
+          authErrorPatterns: config.authErrorPatterns,
+          authRetryTools: config.authRetryTools,
+        }
       );
       logger.info('Backend MCP servers initialization complete');
     } catch (error) {
@@ -142,19 +157,22 @@ async function startDaemon(): Promise<void> {
     try {
       switch (method) {
         case 'tools': {
-          const clients = clientManager.getConnectedClients();
+          const serverNames = clientManager.getConfiguredServerNames();
           const toolEntries: Array<{ server: string; tool: string; description: string }> = [];
 
-          for (const { name, client } of clients) {
+          for (const name of serverNames) {
             try {
-              const result = await client.listTools();
+              const result = await clientManager.withClient(name, async ({ client }) =>
+                client.listTools()
+              );
               for (const tool of result.tools) {
                 const fullName = `${name}__${tool.name}`;
                 if (matchesIgnorePattern(fullName, excludePatterns)) continue;
 
-                const desc = compressionCache.getCompressedDescription(name, tool.name)
-                  || tool.description
-                  || '';
+                const desc =
+                  compressionCache.getCompressedDescription(name, tool.name) ||
+                  tool.description ||
+                  '';
                 // Truncate to ~60 chars for compact listing
                 const shortDesc = desc.length > 60 ? desc.slice(0, 57) + '...' : desc;
                 toolEntries.push({ server: name, tool: tool.name, description: shortDesc });
@@ -169,19 +187,22 @@ async function startDaemon(): Promise<void> {
 
         case 'search': {
           const query = String(params?.query || '').toLowerCase();
-          const clients = clientManager.getConnectedClients();
+          const serverNames = clientManager.getConfiguredServerNames();
           const matches: Array<{ server: string; tool: string; description: string }> = [];
 
-          for (const { name, client } of clients) {
+          for (const name of serverNames) {
             try {
-              const result = await client.listTools();
+              const result = await clientManager.withClient(name, async ({ client }) =>
+                client.listTools()
+              );
               for (const tool of result.tools) {
                 const fullName = `${name}__${tool.name}`;
                 if (matchesIgnorePattern(fullName, excludePatterns)) continue;
 
-                const desc = compressionCache.getCompressedDescription(name, tool.name)
-                  || tool.description
-                  || '';
+                const desc =
+                  compressionCache.getCompressedDescription(name, tool.name) ||
+                  tool.description ||
+                  '';
                 const searchText = `${name}/${tool.name} ${desc}`.toLowerCase();
 
                 if (searchText.includes(query)) {
@@ -201,16 +222,19 @@ async function startDaemon(): Promise<void> {
           const serverName = String(params?.server || '');
           const toolName = String(params?.tool || '');
 
-          const client = clientManager.getClient(serverName);
-          if (!client) {
-            return { id, error: { code: -1, message: `Server '${serverName}' not found or not connected` } };
-          }
-
           try {
-            const result = await client.listTools();
-            const tool = result.tools.find(t => t.name === toolName);
+            const result = await clientManager.withClient(serverName, async ({ client }) =>
+              client.listTools()
+            );
+            const tool = result.tools.find((t) => t.name === toolName);
             if (!tool) {
-              return { id, error: { code: -1, message: `Tool '${toolName}' not found on server '${serverName}'` } };
+              return {
+                id,
+                error: {
+                  code: -1,
+                  message: `Tool '${toolName}' not found on server '${serverName}'`,
+                },
+              };
             }
 
             return {
@@ -232,33 +256,94 @@ async function startDaemon(): Promise<void> {
           const serverName = String(params?.server || '');
           const toolName = String(params?.tool || '');
           const args = (params?.arguments || {}) as Record<string, unknown>;
-          const threshold = cliConfig.payloadThreshold ?? 500;
-
-          const client = clientManager.getClient(serverName);
-          if (!client) {
-            return { id, error: { code: -1, message: `Server '${serverName}' not found or not connected` } };
-          }
+          const threshold = cliConfig.payloadThreshold ?? DEFAULT_PAYLOAD_THRESHOLD;
 
           try {
-            const result = await client.callTool({ name: toolName, arguments: args });
+            const result = await callToolWithAuthRecovery(
+              clientManager,
+              logger,
+              serverName,
+              toolName,
+              args
+            );
             const content = result.content as Array<{ type: string; text?: string }>;
 
             // Extract text content
             // flatMap rather than filter+map: filter does not narrow the
             // element type, which is why this needed a non-null assertion.
-            const textParts = content.flatMap((c) =>
-              c.type === 'text' && c.text ? [c.text] : []
-            );
+            const textParts = content.flatMap((c) => (c.type === 'text' && c.text ? [c.text] : []));
             const fullOutput = textParts.join('\n');
 
             // Apply payload interception
-            const output = interceptPayload(fullOutput, threshold);
+            const captured = payloadStore.capture(fullOutput, threshold);
 
-            return { id, result: { output, isError: result.isError } };
+            return {
+              id,
+              result: {
+                output: captured.output,
+                isError: result.isError,
+                payload: captured.reference,
+              },
+            };
           } catch (error) {
             const msg = error instanceof Error ? error.message : 'Unknown error';
             return { id, error: { code: -1, message: msg } };
           }
+        }
+
+        case 'payload-read': {
+          const payloadId = String(params?.id || '');
+          const result = payloadStore.read(payloadId, {
+            offset: params?.offset as number | undefined,
+            length: params?.length as number | undefined,
+            all: params?.all as boolean | undefined,
+          });
+          return { id, result };
+        }
+
+        case 'payload-find': {
+          const payloadId = String(params?.id || '');
+          const query = String(params?.query || '');
+          const result = payloadStore.find(payloadId, query, {
+            caseSensitive: params?.caseSensitive as boolean | undefined,
+            maxMatches: params?.maxMatches as number | undefined,
+            contextChars: params?.contextChars as number | undefined,
+          });
+          return { id, result };
+        }
+
+        case 'script': {
+          const steps = params?.steps;
+          if (!Array.isArray(steps)) {
+            return {
+              id,
+              error: { code: -1, message: 'Script steps must be an array' },
+            };
+          }
+          const threshold = cliConfig.payloadThreshold ?? DEFAULT_PAYLOAD_THRESHOLD;
+          const result = await runCallScript(
+            steps as CallScriptStep[],
+            async (serverName, toolName, args) => {
+              const callResult = await callToolWithAuthRecovery(
+                clientManager,
+                logger,
+                serverName,
+                toolName,
+                args
+              );
+              const content = callResult.content as Array<{
+                type: string;
+                text?: string;
+              }>;
+              const output = content
+                .flatMap((item) => (item.type === 'text' && item.text ? [item.text] : []))
+                .join('\n');
+              return { output, isError: callResult.isError };
+            },
+            payloadStore,
+            threshold
+          );
+          return { id, result };
         }
 
         case 'stats': {
@@ -271,7 +356,7 @@ async function startDaemon(): Promise<void> {
 
         case 'daemon-status': {
           const statuses = clientManager.getServerStatuses();
-          const connectedCount = statuses.filter(s => s.connected).length;
+          const connectedCount = statuses.filter((s) => s.connected).length;
           const cacheMetrics = compressionCache.getCacheMetrics();
 
           return {
@@ -279,6 +364,7 @@ async function startDaemon(): Promise<void> {
             result: {
               running: true,
               pid: process.pid,
+              releaseId: RELEASE_ID,
               uptime: Math.floor((Date.now() - startTime) / 1000),
               servers: statuses,
               cachedToolCount: cacheMetrics.totalCached,
@@ -323,7 +409,10 @@ async function startDaemon(): Promise<void> {
             .catch((error) => {
               const errResponse: IPCResponse = {
                 id: request.id,
-                error: { code: -1, message: error instanceof Error ? error.message : 'Unknown error' },
+                error: {
+                  code: -1,
+                  message: error instanceof Error ? error.message : 'Unknown error',
+                },
               };
               socket.write(JSON.stringify(errResponse) + '\n');
             });
@@ -358,7 +447,11 @@ async function startDaemon(): Promise<void> {
       `Failed to listen on the daemon socket.${hint}`
     );
 
-    try { fs.unlinkSync(PID_FILE); } catch { /* ignore */ }
+    try {
+      fs.unlinkSync(PID_FILE);
+    } catch {
+      /* ignore */
+    }
     process.exit(1);
   });
 
@@ -366,8 +459,7 @@ async function startDaemon(): Promise<void> {
     logger.info({ socketPath: SOCKET_PATH, pid: process.pid }, 'Daemon listening');
 
     // Signal readiness by writing a ready marker
-    const readyFile = path.join(BASE_DIR, 'daemon.ready');
-    fs.writeFileSync(readyFile, String(Date.now()), 'utf-8');
+    fs.writeFileSync(READY_FILE, String(Date.now()), 'utf-8');
   });
 
   // Graceful shutdown
@@ -375,19 +467,35 @@ async function startDaemon(): Promise<void> {
     logger.info('Daemon shutting down');
 
     server.close();
-    clientManager.disconnectAll().then(() => {
-      sessionManager.destroy();
+    clientManager
+      .disconnectAll()
+      .then(() => {
+        sessionManager.destroy();
+        payloadStore.destroy();
 
-      // Clean up files
-      try { fs.unlinkSync(SOCKET_PATH); } catch { /* ignore */ }
-      try { fs.unlinkSync(PID_FILE); } catch { /* ignore */ }
-      try { fs.unlinkSync(path.join(BASE_DIR, 'daemon.ready')); } catch { /* ignore */ }
+        // Clean up files
+        try {
+          fs.unlinkSync(SOCKET_PATH);
+        } catch {
+          /* ignore */
+        }
+        try {
+          fs.unlinkSync(PID_FILE);
+        } catch {
+          /* ignore */
+        }
+        try {
+          fs.unlinkSync(READY_FILE);
+        } catch {
+          /* ignore */
+        }
 
-      logger.info('Daemon stopped');
-      process.exit(0);
-    }).catch(() => {
-      process.exit(1);
-    });
+        logger.info('Daemon stopped');
+        process.exit(0);
+      })
+      .catch(() => {
+        process.exit(1);
+      });
   }
 
   process.on('SIGTERM', shutdown);

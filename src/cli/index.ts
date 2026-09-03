@@ -14,11 +14,15 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
 import { isDaemonRunning } from './ipc-client.js';
+import { isManagedRouterConfigured, managedRouterUnavailableMessage } from './runtime-mode.js';
 import {
   handleTools,
   handleSearch,
   handleInfo,
   handleCall,
+  handlePayloadRead,
+  handlePayloadFind,
+  handleScript,
   handleStats,
   handleDaemonStatus,
   handleDoctor,
@@ -39,6 +43,10 @@ Usage:
   mcp-cli search <query>               Search tools by name/description
   mcp-cli info <server>/<tool>         Get full schema for a tool
   mcp-cli call <server>/<tool> <json>  Execute a tool
+  mcp-cli output read <id> [offset] [length|all]
+                                        Read cached large output
+  mcp-cli output find <id> <query>      Find text in cached large output
+  mcp-cli script <json>                 Run a declarative MCP call chain
   mcp-cli stats                        Show compression statistics
   mcp-cli doctor                       Check config and backend health
   mcp-cli daemon start                 Start the background daemon
@@ -57,6 +65,12 @@ Options:
  * Forks the daemon.ts module with detached: true.
  */
 async function startDaemon(): Promise<boolean> {
+  if (isManagedRouterConfigured(BASE_DIR)) {
+    console.error(
+      'Error: This installation uses the managed MCP router. Refusing to start a legacy daemon on the stable socket.'
+    );
+    return false;
+  }
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = dirname(__filename);
   const daemonScript = join(__dirname, 'daemon.js');
@@ -92,7 +106,7 @@ async function startDaemon(): Promise<boolean> {
     if (existsSync(READY_FILE)) {
       return true;
     }
-    await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }
 
   // Fallback: check if socket is reachable
@@ -247,6 +261,11 @@ async function ensureDaemon(noAutoStart: boolean): Promise<void> {
   const running = await isDaemonRunning(SOCKET_PATH);
   if (running) return;
 
+  if (isManagedRouterConfigured(BASE_DIR)) {
+    console.error(`Error: ${managedRouterUnavailableMessage()}`);
+    process.exit(1);
+  }
+
   if (noAutoStart) {
     console.error('Error: Daemon is not running. Start it with: mcp-cli daemon start');
     process.exit(1);
@@ -277,7 +296,9 @@ async function readStdin(): Promise<string | null> {
     const timer = setTimeout(() => resolve(data.trim() || null), 1000);
     timer.unref?.();
 
-    process.stdin.on('data', (chunk) => { data += chunk; });
+    process.stdin.on('data', (chunk) => {
+      data += chunk;
+    });
     process.stdin.on('end', () => {
       clearTimeout(timer);
       resolve(data.trim() || null);
@@ -288,7 +309,7 @@ async function readStdin(): Promise<string | null> {
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const noAutoStart = args.includes('--no-auto-start');
-  const filteredArgs = args.filter(a => a !== '--no-auto-start');
+  const filteredArgs = args.filter((a) => a !== '--no-auto-start');
 
   const command = filteredArgs[0];
 
@@ -311,10 +332,18 @@ async function main(): Promise<void> {
         const started = await startDaemon();
         if (started) {
           // Get connection info
-          const response = await (await import('./ipc-client.js')).sendRequest(SOCKET_PATH, 'daemon-status');
+          const response = await (
+            await import('./ipc-client.js')
+          ).sendRequest(SOCKET_PATH, 'daemon-status');
           if (!response.error) {
-            const status = response.result as { pid: number; connectedServers: number; totalServers: number };
-            console.log(`Daemon started (PID ${status.pid}). Connected to ${status.connectedServers}/${status.totalServers} servers.`);
+            const status = response.result as {
+              pid: number;
+              connectedServers: number;
+              totalServers: number;
+            };
+            console.log(
+              `Daemon started (PID ${status.pid}). Connected to ${status.connectedServers}/${status.totalServers} servers.`
+            );
           } else {
             console.log('Daemon started.');
           }
@@ -379,7 +408,7 @@ async function main(): Promise<void> {
 
     case 'call': {
       if (!filteredArgs[1]) {
-        console.error('Usage: mcp-cli call <server>/<tool> \'<json_payload>\'');
+        console.error("Usage: mcp-cli call <server>/<tool> '<json_payload>'");
         process.exit(1);
       }
       // Payload from args or stdin
@@ -390,6 +419,51 @@ async function main(): Promise<void> {
       }
       if (!payload) payload = '{}';
       await handleCall(SOCKET_PATH, filteredArgs[1], payload);
+      break;
+    }
+
+    case 'output': {
+      const action = filteredArgs[1];
+      const id = filteredArgs[2];
+      if (!id || (action !== 'read' && action !== 'find')) {
+        console.error('Usage: mcp-cli output <read|find> <payload-id> ...');
+        process.exit(1);
+      }
+
+      if (action === 'find') {
+        const query = filteredArgs.slice(3).join(' ');
+        if (!query) {
+          console.error('Usage: mcp-cli output find <payload-id> <query>');
+          process.exit(1);
+        }
+        await handlePayloadFind(SOCKET_PATH, id, query);
+        break;
+      }
+
+      const offset =
+        filteredArgs[3] === undefined ? undefined : Number.parseInt(filteredArgs[3], 10);
+      const lengthArg = filteredArgs[4];
+      const all = lengthArg === 'all';
+      const length = lengthArg && !all ? Number.parseInt(lengthArg, 10) : undefined;
+      await handlePayloadRead(SOCKET_PATH, id, {
+        offset: Number.isFinite(offset) ? offset : undefined,
+        length: Number.isFinite(length) ? length : undefined,
+        all,
+      });
+      break;
+    }
+
+    case 'script': {
+      let payload = filteredArgs[1] || '';
+      if (!payload) {
+        const stdinData = await readStdin();
+        if (stdinData) payload = stdinData;
+      }
+      if (!payload) {
+        console.error('Usage: mcp-cli script <json>');
+        process.exit(1);
+      }
+      await handleScript(SOCKET_PATH, payload);
       break;
     }
 

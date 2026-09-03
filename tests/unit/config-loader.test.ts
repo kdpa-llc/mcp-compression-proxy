@@ -476,6 +476,52 @@ describe('Config Loader', () => {
       expect(result!.servers).toHaveLength(2); // Both servers present
     });
 
+    it('loads lifecycle defaults and lets project configuration override them', async () => {
+      const userConfig = {
+        softMaxConnectionAgeSeconds: 7200,
+        hardMaxConnectionAgeSeconds: 43_200,
+        authErrorPatterns: ['user auth'],
+        authRetryTools: ['UserRead'],
+        mcpServers: [{ name: 'user-server', command: 'npx' }],
+      };
+      const projectConfig = {
+        softMaxConnectionAgeSeconds: 3600,
+        hardMaxConnectionAgeSeconds: 28_800,
+        authErrorPatterns: ['project auth'],
+        authRetryTools: ['InternalSearch'],
+        mcpServers: [{ name: 'project-server', command: 'npx' }],
+      };
+
+      mkdirSync(join(testDir, '.mcp-compression-proxy'), { recursive: true });
+      writeFileSync(
+        join(testDir, '.mcp-compression-proxy', 'servers.json'),
+        JSON.stringify(userConfig)
+      );
+      writeFileSync(join(testDir, 'servers.json'), JSON.stringify(projectConfig));
+
+      const { loadJSONServers } = await importLoader();
+      const result = loadJSONServers();
+
+      expect(result).toEqual(expect.objectContaining({
+        softMaxConnectionAgeSeconds: 3600,
+        hardMaxConnectionAgeSeconds: 28_800,
+        authErrorPatterns: ['project auth'],
+        authRetryTools: ['InternalSearch'],
+      }));
+    });
+
+    it('uses maxConnectionAgeSeconds as a legacy soft-age alias', async () => {
+      writeFileSync(join(testDir, 'servers.json'), JSON.stringify({
+        maxConnectionAgeSeconds: 1800,
+        mcpServers: [{ name: 'legacy-server', command: 'npx' }],
+      }));
+
+      const { loadJSONServers } = await importLoader();
+      const result = loadJSONServers();
+
+      expect(result?.softMaxConnectionAgeSeconds).toBe(1800);
+    });
+
     it('should handle empty environment variable substitution', async () => {
       const config = {
         mcpServers: [

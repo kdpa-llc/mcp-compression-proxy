@@ -2,7 +2,9 @@
 
 # 🗜️ MCP Compression Proxy
 
-**Aggregate tools from multiple MCP servers with intelligent LLM-based description compression**
+**One managed entry point for your MCP stack**
+
+MCP servers give agents useful tools, but a growing MCP setup adds process sprawl, large tool schemas, stale credentials, oversized results, and upgrade work. MCP Compression Proxy puts those servers behind one endpoint and handles the routine operations in one place.
 
 [![npm version][npm-version-badge]][npm-package]
 [![npm downloads][npm-downloads-badge]][npm-package]
@@ -22,7 +24,8 @@
 [![PRs Welcome][prs-badge]][contributing]
 
 [Quick Start](#-quick-start) •
-[Features](#-features) •
+[Why Use It](#why-use-it) •
+[Capabilities](#-capabilities) •
 [mcp-cli](#️-mcp-cli-progressive-tool-discovery) •
 [Configuration](#-configuration) •
 [FAQ](#-faq) •
@@ -35,7 +38,8 @@
 ## 📑 Table of Contents
 
 - [What is MCP Compression Proxy?](#what-is-mcp-compression-proxy)
-- [✨ Features](#-features)
+- [Why use it?](#why-use-it)
+- [✨ Capabilities](#-capabilities)
 - [🚀 Quick Start](#-quick-start)
 - [🎯 Usage](#-usage)
 - [⌨️ mcp-cli (Progressive Tool Discovery)](#️-mcp-cli-progressive-tool-discovery)
@@ -50,28 +54,50 @@
 
 ## What is MCP Compression Proxy?
 
-A **Model Context Protocol (MCP) server** that solves two common problems:
+MCP Compression Proxy sits between your agents and backend MCP servers. Each client connects to one stable endpoint. The proxy starts and supervises backends, namespaces their tools, controls how much tool metadata enters model context, and records lifecycle health.
 
-1. **Multi-server aggregation**: Access tools from multiple MCP servers through a single connection
-2. **Context optimization**: Reduce token consumption by 50-80% using intelligent LLM-based description compression
+You keep backend definitions in one JSON file. Agents discover and call tools through the proxy instead of loading a separate MCP process and full schema set for every server.
 
-Instead of connecting to multiple MCP servers separately and consuming thousands of tokens on verbose tool descriptions, MCP Compression Proxy aggregates all your tools and compresses their descriptions intelligently—preserving critical information while removing redundancy.
+Shared-daemon deployments can reuse one backend fleet across many agent sessions. The versioned daemon contract also supports blue/green routers that activate a new proxy release while existing requests finish on the previous release.
 
-**Perfect for:**
-- Users with many MCP servers (filesystem, GitHub, databases, etc.)
-- AI agents working with limited context windows
-- Anyone wanting to minimize token costs while maximizing tool availability
+## Why use it?
 
-## ✨ Features
+| MCP operating problem | What the proxy provides |
+|---|---|
+| Every client launches another backend fleet | A shared daemon that many clients can reuse |
+| Tool descriptions consume model context before work starts | Description compression and progressive discovery |
+| Long-lived backends retain stale credentials or state | One-hour lazy recycling, eight-hour draining, and auth-triggered replacement |
+| Tool results flood smaller context windows | A 10K spill threshold with private file storage, search, and paged reads |
+| Agents need glue code for dependent tool calls | Declarative call scripts with JSON Pointer references |
+| Upgrades interrupt terminals and active sessions | Versioned daemon sockets for blue/green router integrations |
+| Failures hide inside background processes | Per-server generations, counters, timestamps, errors, and daemon status |
 
-- **🔗 Multi-Server Aggregation** - Access tools from multiple MCP servers through one connection
-- **🤖 LLM-Based Compression** - Intelligent description compression (50-80% token reduction)
-- **💾 Persistent Storage** - Compressed descriptions saved to disk and restored on restart
-- **🎭 Session-Based Expansion** - Independent expansion state per conversation
-- **⚡ Parallel Initialization** - All servers connect in parallel with configurable timeouts
-- **🎯 Selective Expansion** - Compress all tools, expand only what you need
-- **📦 Zero Config** - Works out-of-the-box with sensible defaults
-- **🔥 Standard MCP** - Compatible with any MCP client (Claude Desktop, Cline, etc.)
+The proxy fits local agent setups, team workstations, and long-running automation hosts. Install it once, point clients at the stable endpoint, and manage backend policy from one configuration.
+
+```text
+Agent clients
+     |
+stable MCP shim
+     |
+version router
+     |
+active proxy daemon
+     |
+configured backend MCP servers
+```
+
+## ✨ Capabilities
+
+- **Multi-server aggregation:** Expose tools from many MCP servers through one connection and consistent names.
+- **Progressive discovery:** Search compact tool summaries and fetch a full schema only before a call.
+- **Description compression:** Cache shorter tool descriptions and expand selected tools per session.
+- **Managed connection generations:** Track active calls, drain old generations, and use one reconnect for concurrent callers.
+- **Authentication recovery:** Detect configured authentication failures, replace the affected backend, and retry tools marked read-only.
+- **Large-output control:** Store results above 10K in owner-only files, then search or read them in bounded pages.
+- **Declarative scripts:** Run up to 20 sequential tool calls and pass prior JSON values with RFC 6901 pointers.
+- **Operational status:** Report release identity, connection age, active calls, recycle counts, authentication resets, failures, and last success.
+- **Versioned daemon runtime:** Run candidate and active releases on separate sockets while a stable router controls cutover.
+- **Standard MCP transport:** Work with MCP clients that support stdio servers.
 
 ## 🚀 Quick Start
 
@@ -167,7 +193,7 @@ Create a JSON configuration file to define which MCP servers to aggregate:
 }
 ```
 
-> **Note:** No rebuild needed! Just edit the JSON file and restart your MCP client.
+> **Note:** Server configuration changes do not require a rebuild. Standalone mode reloads them on restart; a managed router can activate a refreshed daemon without restarting agent sessions.
 
 ### 4. Restart Your MCP Client
 
@@ -322,6 +348,9 @@ mcp-cli tools                          # List all tools (compressed)
 mcp-cli search <query>                 # Search tools by name/description
 mcp-cli info <server>/<tool>           # Full schema for one tool
 mcp-cli call <server>/<tool> '<json>'  # Execute a tool
+mcp-cli output find <id> <query>       # Search a cached large output
+mcp-cli output read <id> 0 all         # Load a cached output deliberately
+mcp-cli script '<json>'                 # Run a declarative call chain
 mcp-cli stats                          # Compression statistics
 
 mcp-cli doctor                         # Check config and backend health
@@ -342,6 +371,8 @@ of throwing a stack trace, lists each backend's live connection state, and
 flags servers added to `servers.json` that the running daemon has not picked
 up. It exits non-zero on any problem, so it works in a script.
 
+Restricted agent sandboxes may block access to the managed router's Unix socket even when the router is healthy. Retry the same `mcp-cli` command with host or elevated execution. When `active-release.json` exists, do not run `mcp-cli daemon start`; the managed router owns the stable socket.
+
 `call` also accepts its JSON argument on stdin, which avoids shell quoting
 problems with large payloads:
 
@@ -356,7 +387,7 @@ The optional `cli` block in `servers.json` tunes daemon behavior:
 ```json
 {
   "cli": {
-    "payloadThreshold": 500,
+    "payloadThreshold": 10000,
     "autoStartDaemon": true,
     "daemonLogLevel": "info"
   },
@@ -366,13 +397,84 @@ The optional `cli` block in `servers.json` tunes daemon behavior:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `payloadThreshold` | number | `500` | Tool output longer than this many characters is written to a temp file and replaced with a reference, keeping large payloads out of the agent's context |
+| `payloadThreshold` | number | `10000` | Tool output longer than this many characters is cached in an owner-only file and replaced with a payload ID and path |
 | `autoStartDaemon` | boolean | `true` | Start the daemon automatically when a command needs it |
 | `daemonLogLevel` | string | `"info"` | Daemon log level (`debug`, `info`, `warn`, `error`) |
 
 Daemon state lives in `~/.mcp-compression-proxy/` (socket, PID file, and
 `daemon.log`), created with `0700` permissions since the control socket
 accepts commands that execute downstream MCP tools.
+
+The daemon can also run as a versioned blue/green instance. Set `MCP_DAEMON_SOCKET_PATH`, `MCP_DAEMON_PID_FILE`, `MCP_DAEMON_READY_FILE`, `MCP_DAEMON_LOG_FILE`, and `MCP_DAEMON_RELEASE_ID` before launching `dist/cli/daemon.js`. Multiple releases may then run concurrently on separate sockets. `MCP_DAEMON_BASE_DIR` remains the shared state root, and `MCP_PAYLOAD_DIR` optionally overrides the shared payload directory, so payload IDs remain readable after a release cutover.
+
+A stable router can use this contract to start a candidate release, run canaries, switch new requests with an atomic active-release pointer, drain requests pinned to the previous release, and roll back if the stable-path canary fails. Distributions can pair that flow with a reviewed update channel so agents report available releases and ask users before activation.
+
+When `active-release.json` exists, `mcp-cli` treats the installation as router-managed and refuses to start a legacy daemon on the stable socket. This prevents an isolated or sandboxed client from unlinking the router socket after a failed probe.
+
+### Connection Lifecycle
+
+Backend MCP processes use leased connection generations so stale credentials and indefinitely warm processes do not survive forever. New calls never use a draining generation, while calls already in progress are allowed to finish before that generation closes.
+
+```json
+{
+  "softMaxConnectionAgeSeconds": 3600,
+  "hardMaxConnectionAgeSeconds": 28800,
+  "mcpServers": [
+    {
+      "name": "authenticated-server",
+      "command": "authenticated-mcp",
+      "authErrorPatterns": [
+        "credentials have expired",
+        "authentication failed"
+      ],
+      "authRetryTools": [
+        "search_*",
+        "read_*"
+      ]
+    }
+  ]
+}
+```
+
+| Field | Default | Behavior |
+|-------|---------|----------|
+| `softMaxConnectionAgeSeconds` | `3600` | On the first reuse at or after this age, drain the old generation and open one replacement |
+| `hardMaxConnectionAgeSeconds` | `28800` | At this age, stop assigning new calls and close as soon as active calls finish; reopen lazily on future use |
+| `authErrorPatterns` | `[]` | Case-insensitive substrings that identify authentication failures in returned payloads or thrown errors |
+| `authRetryTools` | `[]` | Tool-name wildcard patterns explicitly safe to retry once after authentication recovery |
+
+All four fields may be set globally or per server. Per-server values override global values. Set either age to `0` to disable that policy. The legacy `maxConnectionAgeSeconds` field remains accepted as an alias for `softMaxConnectionAgeSeconds`.
+
+Authentication failures always invalidate the exact backend generation that produced them. Automatic replay occurs only for tools matching `authRetryTools`; mutating or unknown tools are not replayed because the proxy cannot prove whether the failed attempt had side effects.
+
+### Large Outputs And Call Scripts
+
+Outputs larger than `cli.payloadThreshold` are stored in a private `0700` directory as `0600` files. The result returned to the model contains a payload ID and path instead of the full content. Daemon integrations can expose `payload-read` and `payload-find` so a model can page through the content, load the remainder deliberately, or find literal text with bounded context. The default threshold and page size are 10K characters.
+
+The daemon also exposes a `script` operation for sequential MCP calls. Scripts are declarative JSON with at most 20 steps; they never execute shell or JavaScript. A later step can use a prior JSON result through an RFC 6901 JSON Pointer reference. References substitute exact values and do not transform them, so the selected field must already match the next tool's expected input:
+
+```json
+{
+  "steps": [
+    {
+      "id": "search",
+      "server": "docs",
+      "tool": "search",
+      "arguments": { "query": "topic" }
+    },
+    {
+      "id": "read",
+      "server": "docs",
+      "tool": "read",
+      "arguments": {
+        "url": { "$ref": "search#/results/0/url" }
+      }
+    }
+  ]
+}
+```
+
+Scripts stop on the first failed step by default. Set `continueOnError` on an individual step to continue. Large step results are cached before the script summary is returned, but the full raw result remains available to references in later steps.
 
 ## 🔧 Configuration
 
@@ -731,17 +833,17 @@ matching file paths. Case-sensitive by default."
 
 <details>
 <summary><strong>Q: Do I need to restart after adding servers?</strong></summary>
-<p>Yes, restart your MCP client to load the new configuration. No rebuild needed when using JSON configuration.</p>
+<p>Standalone mode needs a restart to load the new configuration. Managed router deployments can start and activate a refreshed daemon while agent sessions stay connected.</p>
 </details>
 
 <details>
 <summary><strong>Q: Can I use multiple MCP servers?</strong></summary>
-<p>Yes! That's the primary use case. Add as many as you need in your <code>servers.json</code> configuration file.</p>
+<p>Yes. Add each backend to <code>servers.json</code> and expose them through the same proxy endpoint.</p>
 </details>
 
 <details>
 <summary><strong>Q: Is compression permanent?</strong></summary>
-<p>Compressed descriptions are persisted to disk at <code>~/.mcp-compression-proxy/cache.json</code> and automatically restored on server restart. Session-based expansions are temporary and reset per session.</p>
+<p>The proxy stores compressed descriptions at <code>~/.mcp-compression-proxy/cache.json</code> and restores them on restart. Session-based expansions reset per session.</p>
 </details>
 
 <details>
@@ -751,12 +853,22 @@ matching file paths. Case-sensitive by default."
 
 <details>
 <summary><strong>Q: Works with local LLMs?</strong></summary>
-<p>Yes! Works with any MCP-compatible setup, including local models.</p>
+<p>Yes. Any MCP-compatible client can use the proxy, including clients backed by local models.</p>
 </details>
 
 <details>
 <summary><strong>Q: How do I add a new MCP server?</strong></summary>
-<p>Edit your <code>servers.json</code> configuration file (in <code>~/.mcp-compression-proxy/</code> or project root), add your server config, and restart your MCP client. No rebuild needed.</p>
+<p>Add the server to <code>servers.json</code> in <code>~/.mcp-compression-proxy/</code> or the project root. Restart standalone mode or activate a refreshed daemon through your router.</p>
+</details>
+
+<details>
+<summary><strong>Q: Can a deployment upgrade without restarting agents?</strong></summary>
+<p>Yes. Run releases on separate daemon sockets and keep a stable router in front. The router sends new requests to the activated release, keeps in-flight requests on the previous release, and retires it after drain.</p>
+</details>
+
+<details>
+<summary><strong>Q: What happens to large tool results?</strong></summary>
+<p>The proxy stores results above 10K in owner-only files and returns a payload ID. Clients can search the file or read it in 10K pages instead of placing the full result in model context.</p>
 </details>
 
 **More:** See [CONTRIBUTING.md][contributing], [SECURITY.md][security], [tests/README.md](./tests/README.md)

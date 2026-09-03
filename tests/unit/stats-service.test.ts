@@ -34,6 +34,7 @@ describe('StatsService', () => {
     mockClientManager = {
       getConnectedClients: jest.fn(),
       getServerStatuses: jest.fn(),
+      withClient: jest.fn(),
       initializeServers: jest.fn(),
       disconnectAll: jest.fn(),
       getClient: jest.fn(),
@@ -57,8 +58,16 @@ describe('StatsService', () => {
     mockClientManager.getConnectedClients.mockReturnValue([
       { name: 'serverA', client: { listTools } as any },
     ]);
+    mockClientManager.withClient.mockImplementation(async (_name, operation) =>
+      operation({
+        client: { listTools } as any,
+        generation: 1,
+        markFailure: jest.fn(),
+        invalidate: jest.fn(),
+      })
+    );
     mockClientManager.getServerStatuses.mockReturnValue([
-      { name: 'serverA', connected: true },
+      { name: 'serverA', connected: true, state: 'ready' },
     ]);
 
     // One compressed tool with original
@@ -142,6 +151,7 @@ describe('StatsService', () => {
     mockClientManager.getServerStatuses.mockReturnValue([
       { name: 'offline', connected: false, lastError: 'Connection failed' } as any,
     ]);
+    mockClientManager.withClient.mockRejectedValue(new Error('Connection failed'));
 
     const service = new StatsService(
       mockLogger,

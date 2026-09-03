@@ -3,13 +3,68 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type {
-  MCPServerConfig,
+  ConnectionLifecycleDefaults,
   MCPClientConnection,
-  ServerStatus
+  MCPServerConfig,
+  ServerStatus,
 } from '../types/index.js';
 import type { Logger } from 'pino';
 import type { ConfigResult } from '../config/loader.js';
 import { SERVER_NAME, VERSION } from '../version.js';
+
+export const DEFAULT_SOFT_MAX_CONNECTION_AGE_SECONDS = 3600;
+export const DEFAULT_HARD_MAX_CONNECTION_AGE_SECONDS = 28_800;
+
+type ManagedConnectionState = 'ready' | 'draining' | 'closed';
+
+type ResolvedServerConfig = MCPServerConfig & {
+  softMaxConnectionAgeSeconds: number;
+  hardMaxConnectionAgeSeconds: number;
+  authErrorPatterns: string[];
+  authRetryTools: string[];
+};
+
+interface ManagedConnection extends MCPClientConnection {
+  config: ResolvedServerConfig;
+  state: ManagedConnectionState;
+  generation: number;
+  connectedAt: number;
+  lastUsedAt: number;
+  activeCalls: number;
+  intentionalClose: boolean;
+  hardExpiryTimer?: ReturnType<typeof setTimeout>;
+  closePromise?: Promise<void>;
+}
+
+interface ServerSlot {
+  config: ResolvedServerConfig;
+  current?: ManagedConnection;
+  draining: Set<ManagedConnection>;
+  connectPromise?: Promise<ManagedConnection>;
+  nextGeneration: number;
+  lastAttemptAt?: number;
+  lastSuccessAt?: number;
+  lastUsedAt?: number;
+  lastError?: string;
+  consecutiveFailures: number;
+  recycleCount: number;
+  authInvalidations: number;
+  reconnectAttempt: number;
+  reconnectTimer?: ReturnType<typeof setTimeout>;
+  disposed: boolean;
+}
+
+export interface ManagedClientContext {
+  client: Client;
+  generation: number;
+  /** Record a failed operation without recycling an otherwise healthy backend. */
+  markFailure(reason: string): void;
+  /**
+   * Stop routing new work to this exact generation. Active calls finish before
+   * the backend closes, and the next acquisition starts a replacement.
+   */
+  invalidate(reason: string): void;
+}
 
 /**
  * Stable serialization of a resolved server config, used to decide whether a
@@ -26,15 +81,39 @@ function configFingerprint(config: MCPServerConfig): string {
   // connect time - hashing either meant deleting a redundant "enabled": true
   // or raising a timeout closed a healthy backend and respawned its process,
   // which is exactly the churn the key-sorting below exists to avoid.
-  const { name, command, args, env, inheritEnv, url, headers } = config;
-  const connectionFields = { name, command, args, env, inheritEnv, url, headers };
+  const {
+    name,
+    command,
+    args,
+    env,
+    inheritEnv,
+    url,
+    headers,
+    softMaxConnectionAgeSeconds,
+    hardMaxConnectionAgeSeconds,
+    maxConnectionAgeSeconds,
+    authErrorPatterns,
+    authRetryTools,
+  } = config;
+  const connectionFields = {
+    name,
+    command,
+    args,
+    env,
+    inheritEnv,
+    url,
+    headers,
+    softMaxConnectionAgeSeconds,
+    hardMaxConnectionAgeSeconds,
+    maxConnectionAgeSeconds,
+    authErrorPatterns,
+    authRetryTools,
+  };
 
   return JSON.stringify(connectionFields, (_key, value: unknown) =>
     value !== null && typeof value === 'object' && !Array.isArray(value)
       ? Object.fromEntries(
-          Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
-            a < b ? -1 : 1
-          )
+          Object.entries(value as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : 1))
         )
       : value
   );
@@ -59,47 +138,20 @@ function describeError(error: unknown): string {
 }
 
 /**
- * Manages connections to multiple MCP servers
+ * Manages backend MCP processes as leased connection generations.
+ *
+ * READY connections may be leased by concurrent callers. Soft-expired
+ * connections are replaced on the next acquisition. Hard-expired connections
+ * enter DRAINING immediately and close after their final lease is released.
  */
 export class MCPClientManager {
-  private connections: Map<string, MCPClientConnection> = new Map();
-  private reconnectTimers: Map<string, NodeJS.Timeout> = new Map();
-  private reconnectAttempts: Map<string, number> = new Map();
-  /**
-   * Servers with a connect already in flight. A reconnect timer firing while a
-   * config reload is connecting the same name would otherwise build a second
-   * client, and the loser of the race to `connections.set()` would be an
-   * orphaned transport nobody ever closes.
-   */
-  private connecting: Set<string> = new Set();
-  private configWatchTimer?: NodeJS.Timeout;
-  /**
-   * Set once `disconnectAll()` starts. Cancelling pending retry timers is not
-   * enough on its own: a retry that already fired is sitting in `connect()`,
-   * and when it resolves it would register a live connection into a manager
-   * everyone else considers shut down - leaving a backend process running past
-   * teardown.
-   */
+  private readonly slots = new Map<string, ServerSlot>();
+  private readonly logger: Logger;
+  private readonly DEFAULT_TIMEOUT_MS = 30_000;
+  private readonly RECONNECT_BASE_MS = 1_000;
+  private readonly RECONNECT_MAX_MS = 30_000;
+  private configWatchTimer?: ReturnType<typeof setInterval>;
   private shuttingDown = false;
-  /**
-   * Server names the current config asks for, once anything has told us.
-   *
-   * reconcile() computes its removals from `connections`, but a server whose
-   * retry timer has already fired is inside connect() and not in that map yet,
-   * so it survives the teardown pass and re-registers itself when the connect
-   * resolves. Checking this on the way in closes that window.
-   */
-  private desiredServers?: Set<string>;
-  /**
-   * Names we are about to close on purpose. The SDK fires `onclose` for a
-   * deliberate `close()` exactly as it does for a crashed backend, so this is
-   * the only way the drop handler can tell the two apart.
-   */
-  private intentionalClose: Set<string> = new Set();
-  private logger: Logger;
-  private readonly DEFAULT_TIMEOUT_MS = 30000; // 30 seconds default timeout
-  private readonly RECONNECT_BASE_MS = 1000;
-  private readonly RECONNECT_MAX_MS = 30000;
 
   constructor(logger: Logger) {
     this.logger = logger;
@@ -111,10 +163,7 @@ export class MCPClientManager {
    * The timer is always cleared - leaving it pending keeps the Node event loop
    * alive for the full duration even after a fast connection succeeds.
    */
-  private async withTimeout<T>(
-    promise: Promise<T>,
-    timeoutMs: number
-  ): Promise<T> {
+  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     try {
@@ -138,15 +187,11 @@ export class MCPClientManager {
    *
    * The stdio transport only inherits a small allowlist of "safe" variables
    * (PATH, HOME, ...), so anything else the user exported - API tokens, base
-   * URLs - never reaches the child unless it is passed explicitly. By default
-   * we forward the proxy's full environment, matching what users expect from a
-   * process they launched themselves. `inheritEnv` narrows that when a server
-   * should not see unrelated secrets.
+   * URLs - never reaches the child unless it is passed explicitly.
    */
   private buildEnv(config: MCPServerConfig): Record<string, string> | undefined {
     const inherit = config.inheritEnv ?? true;
 
-    // `false` defers entirely to the transport's safe defaults.
     if (inherit === false) {
       return config.env;
     }
@@ -156,14 +201,36 @@ export class MCPClientManager {
 
     for (const name of names) {
       const value = process.env[name];
-      if (value === undefined) continue;
-      // Skip exported shell functions, which are a known injection vector.
-      if (value.startsWith('()')) continue;
+      if (value === undefined || value.startsWith('()')) continue;
       inherited[name] = value;
     }
 
-    // Explicit `env` entries always win over inherited ones.
     return { ...inherited, ...config.env };
+  }
+
+  private resolveConfig(
+    server: MCPServerConfig,
+    defaultTimeout: number | undefined,
+    defaultInheritEnv: boolean | string[] | undefined,
+    defaults: ConnectionLifecycleDefaults
+  ): ResolvedServerConfig {
+    return {
+      ...server,
+      timeout: server.timeout ?? defaultTimeout,
+      inheritEnv: server.inheritEnv ?? defaultInheritEnv,
+      softMaxConnectionAgeSeconds:
+        server.softMaxConnectionAgeSeconds ??
+        server.maxConnectionAgeSeconds ??
+        defaults.softMaxConnectionAgeSeconds ??
+        defaults.maxConnectionAgeSeconds ??
+        DEFAULT_SOFT_MAX_CONNECTION_AGE_SECONDS,
+      hardMaxConnectionAgeSeconds:
+        server.hardMaxConnectionAgeSeconds ??
+        defaults.hardMaxConnectionAgeSeconds ??
+        DEFAULT_HARD_MAX_CONNECTION_AGE_SECONDS,
+      authErrorPatterns: [...(server.authErrorPatterns ?? defaults.authErrorPatterns ?? [])],
+      authRetryTools: [...(server.authRetryTools ?? defaults.authRetryTools ?? [])],
+    };
   }
 
   /**
@@ -196,59 +263,50 @@ export class MCPClientManager {
   }
 
   /**
-   * Merge the file-level defaults into one server entry.
-   *
-   * Shared with reconcile() so the resolved config stored on a connection is
-   * byte-for-byte what a later reload will compare against - two copies of
-   * this expression drifting apart would show up as an endless reconnect loop.
-   */
-  private withDefaults(
-    server: MCPServerConfig,
-    defaultTimeout?: number,
-    defaultInheritEnv?: boolean | string[]
-  ): MCPServerConfig {
-    return {
-      ...server,
-      timeout: server.timeout ?? defaultTimeout,
-      inheritEnv: server.inheritEnv ?? defaultInheritEnv,
-    };
-  }
-
-  /**
-   * Initialize and connect to all configured MCP servers
-   * @param servers - Server configurations to initialize
-   * @param defaultTimeout - Optional default timeout in seconds (overrides class default)
-   * @param defaultInheritEnv - Optional default env inheritance policy (overridden per-server)
+   * Initialize all configured slots and eagerly start their first generation.
+   * A failed initial connection remains configured and is retried lazily later.
    */
   async initializeServers(
     servers: MCPServerConfig[],
     defaultTimeout?: number,
-    defaultInheritEnv?: boolean | string[]
+    defaultInheritEnv?: boolean | string[],
+    lifecycleDefaults: ConnectionLifecycleDefaults = {}
   ): Promise<void> {
     this.logger.info({ count: servers.length }, 'Initializing MCP servers');
 
-    // Apply defaults to servers that don't specify their own
-    const serversWithTimeout = servers.map((server) =>
-      this.withDefaults(server, defaultTimeout, defaultInheritEnv)
-    );
-
-    this.desiredServers = new Set(serversWithTimeout.map((server) => server.name));
-
-    const connectionPromises = serversWithTimeout.map(async (config) => {
-      try {
-        await this.connectToServer(config);
-      } catch (error) {
-        this.logger.error(
-          { server: config.name, error },
-          'Failed to connect to MCP server'
-        );
-      }
+    const slots = servers.map((server) => {
+      const config = this.resolveConfig(
+        server,
+        defaultTimeout,
+        defaultInheritEnv,
+        lifecycleDefaults
+      );
+      const slot: ServerSlot = {
+        config,
+        draining: new Set(),
+        nextGeneration: 0,
+        consecutiveFailures: 0,
+        recycleCount: 0,
+        authInvalidations: 0,
+        reconnectAttempt: 0,
+        disposed: false,
+      };
+      this.slots.set(config.name, slot);
+      return slot;
     });
 
-    await Promise.allSettled(connectionPromises);
+    await Promise.allSettled(
+      slots.map(async (slot) => {
+        try {
+          await this.ensureConnection(slot);
+        } catch (error) {
+          this.logger.error({ server: slot.config.name, error }, 'Failed to connect to MCP server');
+        }
+      })
+    );
 
-    const connectedCount = Array.from(this.connections.values()).filter(
-      (c) => c.connected
+    const connectedCount = Array.from(this.slots.values()).filter(
+      (slot) => slot.current?.state === 'ready'
     ).length;
 
     this.logger.info(
@@ -257,41 +315,18 @@ export class MCPClientManager {
     );
   }
 
-  /**
-   * Connect to a single MCP server, at most once at a time per server name.
-   *
-   * The three callers - startup, a reconnect timer and a config reload - can
-   * overlap, and a duplicate connect is worse than a missed one: it spawns a
-   * second backend process whose transport is dropped on the floor.
-   */
-  private async connectToServer(config: MCPServerConfig): Promise<void> {
-    if (this.connecting.has(config.name)) {
-      this.logger.debug(
-        { server: config.name },
-        'Connect already in flight, skipping duplicate'
-      );
-      return;
-    }
+  private async createConnection(slot: ServerSlot): Promise<ManagedConnection> {
+    const { config } = slot;
+    const timeoutMs = config.timeout ? config.timeout * 1000 : this.DEFAULT_TIMEOUT_MS;
 
-    this.connecting.add(config.name);
-    try {
-      await this.openConnection(config);
-    } finally {
-      this.connecting.delete(config.name);
-    }
-  }
-
-  /**
-   * Connect to a single MCP server with timeout
-   */
-  private async openConnection(config: MCPServerConfig): Promise<void> {
-    // Use server-specific timeout or default (convert seconds to milliseconds)
-    const timeoutMs = config.timeout
-      ? config.timeout * 1000
-      : this.DEFAULT_TIMEOUT_MS;
-
+    slot.lastAttemptAt = Date.now();
     this.logger.info(
-      { server: config.name, timeoutMs },
+      {
+        server: config.name,
+        timeoutMs,
+        softMaxConnectionAgeSeconds: config.softMaxConnectionAgeSeconds,
+        hardMaxConnectionAgeSeconds: config.hardMaxConnectionAgeSeconds,
+      },
       'Connecting to MCP server'
     );
 
@@ -315,19 +350,14 @@ export class MCPClientManager {
       transport = this.buildTransport(config);
 
       const connectPromise = client.connect(transport);
-      // If the timeout wins the race below, this promise may still reject on its
-      // own later; swallow it so it doesn't surface as an unhandled rejection.
       connectPromise.catch(() => {});
-
       await this.withTimeout(connectPromise, timeoutMs);
 
       // The world may have moved while this connect was in flight: a shutdown
       // completed, or a config reload dropped this server. Adopting the
       // connection now would resurrect a backend nobody will ever close, so
       // hand it straight back instead.
-      const unwanted =
-        this.shuttingDown ||
-        (this.desiredServers !== undefined && !this.desiredServers.has(config.name));
+      const unwanted = this.shuttingDown || slot.disposed || this.slots.get(config.name) !== slot;
 
       if (unwanted) {
         try {
@@ -343,22 +373,24 @@ export class MCPClientManager {
           { server: config.name, reason: this.shuttingDown ? 'shutdown' : 'removed from config' },
           'Discarded a connection that resolved after it was no longer wanted'
         );
-        return;
+        transport = undefined;
+        throw new Error(`Server '${config.name}' is no longer configured`);
       }
 
-      this.connections.set(config.name, {
+      const now = Date.now();
+      const connection: ManagedConnection = {
         name: config.name,
         client,
         transport,
         connected: true,
         config,
-      });
-
-      // A connection that came up once is worth chasing again, so the backoff
-      // starts fresh from here. The intentional-close flag goes too: a stale
-      // one would swallow the first genuine drop of this new connection.
-      this.reconnectAttempts.delete(config.name);
-      this.intentionalClose.delete(config.name);
+        state: 'ready',
+        generation: ++slot.nextGeneration,
+        connectedAt: now,
+        lastUsedAt: now,
+        activeCalls: 0,
+        intentionalClose: false,
+      };
 
       // Hooked only after connect() resolves: an initial failure is almost
       // always a misconfigured command, and retrying that forever would be an
@@ -368,19 +400,24 @@ export class MCPClientManager {
       // Protocol.connect() captures whatever is on the transport at connect
       // time and wraps it - assigning there afterwards is order-dependent and
       // reaches past the class's own API.
-      client.onclose = () => this.handleDrop(config.name, client);
+      client.onclose = () => this.handleDrop(slot, connection);
       client.onerror = (error) => {
         // Recorded, not acted on: transports report recoverable errors here
         // too. The close that follows a fatal one is what drives the retry,
         // and this leaves a cause behind for getServerStatuses().
-        const connection = this.connections.get(config.name);
-        if (connection?.client === client) {
-          connection.lastError = describeError(error);
+        if (slot.current === connection && connection.state === 'ready') {
+          slot.lastError = describeError(error);
         }
         this.logger.warn({ server: config.name, error }, 'MCP server transport error');
       };
 
-      this.logger.info({ server: config.name }, 'Successfully connected to MCP server');
+      slot.reconnectAttempt = 0;
+      this.scheduleHardExpiry(slot, connection);
+      this.logger.info(
+        { server: config.name, generation: connection.generation },
+        'Successfully connected to MCP server'
+      );
+      return connection;
     } catch (error) {
       const errorMessage = describeError(error);
 
@@ -397,15 +434,7 @@ export class MCPClientManager {
         );
       }
 
-      this.connections.set(config.name, {
-        name: config.name,
-        client,
-        transport,
-        connected: false,
-        lastError: errorMessage,
-        config,
-      });
-
+      this.recordFailure(slot, errorMessage);
       throw error;
     }
   }
@@ -413,29 +442,35 @@ export class MCPClientManager {
   /**
    * React to a backend connection going away.
    *
-   * `client` identifies which generation closed: an old transport finishing
+   * `connection` identifies which generation closed: an old transport finishing
    * its teardown after a reconnect already installed a replacement must not
    * mark the live connection down.
    */
-  private handleDrop(name: string, client: Client): void {
-    if (this.intentionalClose.delete(name)) {
+  private handleDrop(slot: ServerSlot, connection: ManagedConnection): void {
+    const name = slot.config.name;
+    if (
+      connection.intentionalClose ||
+      this.shuttingDown ||
+      slot.disposed ||
+      this.slots.get(name) !== slot ||
+      slot.current !== connection ||
+      connection.state !== 'ready'
+    ) {
       return;
     }
 
-    const connection = this.connections.get(name);
-    if (!connection || connection.client !== client) {
-      return;
+    if (connection.hardExpiryTimer) {
+      clearTimeout(connection.hardExpiryTimer);
+      connection.hardExpiryTimer = undefined;
     }
-
+    connection.state = 'closed';
     connection.connected = false;
-    connection.lastError = connection.lastError ?? 'Connection closed';
+    slot.current = undefined;
+    this.recordFailure(slot, slot.lastError ?? 'Connection closed');
 
-    this.logger.warn(
-      { server: name, error: connection.lastError },
-      'MCP server connection lost'
-    );
+    this.logger.warn({ server: name, error: slot.lastError }, 'MCP server connection lost');
 
-    this.scheduleReconnect(connection.config);
+    this.scheduleReconnect(slot);
   }
 
   /**
@@ -446,17 +481,22 @@ export class MCPClientManager {
    * without the operator restarting their whole MCP client. The jitter keeps
    * several backends behind the same dead machine from retrying in lockstep.
    */
-  private scheduleReconnect(config: MCPServerConfig): void {
-    const name = config.name;
+  private scheduleReconnect(slot: ServerSlot): void {
+    const name = slot.config.name;
 
     // Two paths reach here - a fresh drop and a failed retry - and a second
     // timer would double the reconnect rate while orphaning the first.
-    if (this.reconnectTimers.has(name)) {
+    if (
+      slot.reconnectTimer ||
+      slot.disposed ||
+      this.shuttingDown ||
+      this.slots.get(name) !== slot
+    ) {
       return;
     }
 
-    const attempt = this.reconnectAttempts.get(name) ?? 0;
-    this.reconnectAttempts.set(name, attempt + 1);
+    const attempt = slot.reconnectAttempt;
+    slot.reconnectAttempt += 1;
 
     // Jitter is applied first and the cap last, so RECONNECT_MAX_MS is a real
     // ceiling. Capping the base instead let the +20% arm push actual delays to
@@ -466,15 +506,15 @@ export class MCPClientManager {
     const delayMs = Math.round(Math.min(jittered, this.RECONNECT_MAX_MS));
 
     const timer = setTimeout(() => {
-      this.reconnectTimers.delete(name);
-      void this.reconnect(config);
+      slot.reconnectTimer = undefined;
+      void this.reconnect(slot);
     }, delayMs);
 
     // A pending retry must never be the reason the process cannot exit: a
     // backend that stays down would otherwise pin the event loop open forever.
     timer.unref?.();
 
-    this.reconnectTimers.set(name, timer);
+    slot.reconnectTimer = timer;
 
     this.logger.info(
       { server: name, delayMs, attempt: attempt + 1 },
@@ -482,16 +522,18 @@ export class MCPClientManager {
     );
   }
 
-  private async reconnect(config: MCPServerConfig): Promise<void> {
+  private async reconnect(slot: ServerSlot): Promise<void> {
+    const name = slot.config.name;
+    if (slot.disposed || this.shuttingDown || this.slots.get(name) !== slot) {
+      return;
+    }
+
     try {
-      await this.connectToServer(config);
-      this.logger.info({ server: config.name }, 'Reconnected to MCP server');
+      await this.ensureConnection(slot);
+      this.logger.info({ server: name }, 'Reconnected to MCP server');
     } catch (error) {
-      this.logger.warn(
-        { server: config.name, error },
-        'Reconnect attempt failed, backing off'
-      );
-      this.scheduleReconnect(config);
+      this.logger.warn({ server: name, error }, 'Reconnect attempt failed, backing off');
+      this.scheduleReconnect(slot);
     }
   }
 
@@ -505,36 +547,34 @@ export class MCPClientManager {
   async reconcile(
     servers: MCPServerConfig[],
     defaultTimeout?: number,
-    defaultInheritEnv?: boolean | string[]
+    defaultInheritEnv?: boolean | string[],
+    lifecycleDefaults: ConnectionLifecycleDefaults = {}
   ): Promise<void> {
     const desired = new Map(
       servers.map((server) => {
-        const resolved = this.withDefaults(server, defaultTimeout, defaultInheritEnv);
+        const resolved = this.resolveConfig(
+          server,
+          defaultTimeout,
+          defaultInheritEnv,
+          lifecycleDefaults
+        );
         return [resolved.name, resolved];
       })
     );
 
-    // Claimed before the teardown pass, so a retry that resolves partway
-    // through sees the new roster rather than the one it started under.
-    this.desiredServers = new Set(desired.keys());
-
     const removed: string[] = [];
     const changed: string[] = [];
 
-    for (const connection of this.connections.values()) {
-      const next = desired.get(connection.name);
+    for (const [name, slot] of this.slots) {
+      const next = desired.get(name);
       if (!next) {
-        removed.push(connection.name);
-      } else if (
-        configFingerprint(next) !== configFingerprint(connection.config)
-      ) {
-        changed.push(connection.name);
+        removed.push(name);
+      } else if (configFingerprint(next) !== configFingerprint(slot.config)) {
+        changed.push(name);
       }
     }
 
-    const added = Array.from(desired.keys()).filter(
-      (name) => !this.connections.has(name)
-    );
+    const added = Array.from(desired.keys()).filter((name) => !this.slots.has(name));
 
     // Nothing to do on the overwhelming majority of polls; returning before the
     // log keeps a five-second timer from filling the log with noise.
@@ -542,16 +582,13 @@ export class MCPClientManager {
       return;
     }
 
-    this.logger.info(
-      { removed, changed, added },
-      'Applying backend server configuration change'
-    );
+    this.logger.info({ removed, changed, added }, 'Applying backend server configuration change');
 
     // Fully drained before a single connect starts. A changed server is a
     // teardown *and* an add, and letting the two overlap would leave two
     // MCPClientConnection generations racing to own the same name.
     for (const name of [...removed, ...changed]) {
-      await this.teardownConnection(name);
+      await this.teardownSlot(name);
     }
 
     const toConnect = new Set([...added, ...changed]);
@@ -560,13 +597,21 @@ export class MCPClientManager {
       Array.from(desired.values())
         .filter((config) => toConnect.has(config.name))
         .map(async (config) => {
+          const slot: ServerSlot = {
+            config,
+            draining: new Set(),
+            nextGeneration: 0,
+            consecutiveFailures: 0,
+            recycleCount: 0,
+            authInvalidations: 0,
+            reconnectAttempt: 0,
+            disposed: false,
+          };
+          this.slots.set(config.name, slot);
           try {
-            await this.connectToServer(config);
+            await this.ensureConnection(slot);
           } catch (error) {
-            this.logger.error(
-              { server: config.name, error },
-              'Failed to connect to MCP server'
-            );
+            this.logger.error({ server: config.name, error }, 'Failed to connect to MCP server');
           }
         })
     );
@@ -579,29 +624,60 @@ export class MCPClientManager {
    * ours *before* close() runs, so handleDrop() cannot resurrect a server that
    * was deliberately taken out of servers.json.
    */
-  private async teardownConnection(name: string): Promise<void> {
-    const timer = this.reconnectTimers.get(name);
-    if (timer) {
-      clearTimeout(timer);
-      this.reconnectTimers.delete(name);
-    }
-    this.reconnectAttempts.delete(name);
-
-    const connection = this.connections.get(name);
-    if (!connection) {
+  private async teardownSlot(name: string): Promise<void> {
+    const slot = this.slots.get(name);
+    if (!slot) {
       return;
     }
 
-    this.intentionalClose.add(name);
-    this.connections.delete(name);
+    this.slots.delete(name);
+    slot.disposed = true;
+    if (slot.reconnectTimer) {
+      clearTimeout(slot.reconnectTimer);
+      slot.reconnectTimer = undefined;
+    }
 
-    try {
-      await connection.client.close();
-    } catch (error) {
-      this.logger.debug(
-        { server: name, error },
-        'Error closing removed MCP server'
-      );
+    const connections = new Set(slot.draining);
+    if (slot.current) {
+      connections.add(slot.current);
+      slot.current = undefined;
+    }
+
+    await Promise.allSettled(
+      Array.from(connections).map(async (connection) => {
+        connection.intentionalClose = true;
+        connection.connected = false;
+        connection.state = 'closed';
+        if (connection.hardExpiryTimer) {
+          clearTimeout(connection.hardExpiryTimer);
+          connection.hardExpiryTimer = undefined;
+        }
+        try {
+          await connection.client.close();
+        } catch (error) {
+          this.logger.debug({ server: name, error }, 'Error closing removed MCP server');
+        } finally {
+          slot.draining.delete(connection);
+        }
+      })
+    );
+  }
+
+  private lifecycleDefaultsFromConfig(
+    config: NonNullable<ConfigResult>
+  ): ConnectionLifecycleDefaults {
+    return {
+      softMaxConnectionAgeSeconds: config.softMaxConnectionAgeSeconds,
+      hardMaxConnectionAgeSeconds: config.hardMaxConnectionAgeSeconds,
+      authErrorPatterns: config.authErrorPatterns,
+      authRetryTools: config.authRetryTools,
+    };
+  }
+
+  private cancelReconnect(slot: ServerSlot): void {
+    if (slot.reconnectTimer) {
+      clearTimeout(slot.reconnectTimer);
+      slot.reconnectTimer = undefined;
     }
   }
 
@@ -634,10 +710,7 @@ export class MCPClientManager {
       } catch (error) {
         // A half-written servers.json is invalid JSON for a few milliseconds.
         // That is an editor mid-save, not a reason to stop watching.
-        this.logger.warn(
-          { error },
-          'Config reload failed, keeping the current backend servers'
-        );
+        this.logger.warn({ error }, 'Config reload failed, keeping the current backend servers');
         return;
       }
 
@@ -658,7 +731,8 @@ export class MCPClientManager {
       void this.reconcile(
         config.servers.filter((server) => server.enabled !== false),
         config.defaultTimeout,
-        config.inheritEnv
+        config.inheritEnv,
+        this.lifecycleDefaultsFromConfig(config)
       ).catch((error) => {
         this.logger.error({ error }, 'Failed to apply backend server configuration');
       });
@@ -671,90 +745,350 @@ export class MCPClientManager {
   }
 
   /**
-   * Get a connected client by server name
+   * Single-flight connection creation. Concurrent callers share this promise.
+   */
+  private async ensureConnection(slot: ServerSlot): Promise<ManagedConnection> {
+    if (this.shuttingDown) {
+      throw new Error('MCP client manager is shutting down');
+    }
+
+    if (slot.current?.state === 'ready') {
+      return slot.current;
+    }
+
+    if (slot.connectPromise) {
+      return slot.connectPromise;
+    }
+
+    const connectPromise = this.createConnection(slot).then(async (connection) => {
+      if (this.shuttingDown || slot.disposed || this.slots.get(slot.config.name) !== slot) {
+        connection.intentionalClose = true;
+        await this.closeConnection(slot, connection);
+        throw new Error('MCP client manager no longer wants this connection');
+      }
+      slot.current = connection;
+      return connection;
+    });
+    slot.connectPromise = connectPromise;
+
+    try {
+      return await connectPromise;
+    } finally {
+      if (slot.connectPromise === connectPromise) {
+        slot.connectPromise = undefined;
+      }
+    }
+  }
+
+  private scheduleHardExpiry(slot: ServerSlot, connection: ManagedConnection): void {
+    const hardAgeSeconds = connection.config.hardMaxConnectionAgeSeconds;
+    if (hardAgeSeconds <= 0) return;
+
+    connection.hardExpiryTimer = setTimeout(() => {
+      this.beginDrain(slot, connection, 'hard-max-age');
+    }, hardAgeSeconds * 1000);
+    connection.hardExpiryTimer.unref?.();
+  }
+
+  private isSoftExpired(connection: ManagedConnection): boolean {
+    const softAgeSeconds = connection.config.softMaxConnectionAgeSeconds;
+    return softAgeSeconds > 0 && Date.now() - connection.connectedAt >= softAgeSeconds * 1000;
+  }
+
+  private beginDrain(slot: ServerSlot, connection: ManagedConnection, reason: string): void {
+    if (connection.state !== 'ready') return;
+
+    connection.state = 'draining';
+    if (connection.hardExpiryTimer) {
+      clearTimeout(connection.hardExpiryTimer);
+      connection.hardExpiryTimer = undefined;
+    }
+    if (slot.current === connection) {
+      slot.current = undefined;
+    }
+    slot.draining.add(connection);
+
+    if (reason !== 'shutdown') {
+      slot.recycleCount += 1;
+    }
+    if (reason === 'auth-error') {
+      slot.authInvalidations += 1;
+    }
+
+    this.logger.info(
+      {
+        server: slot.config.name,
+        generation: connection.generation,
+        reason,
+        ageMs: Date.now() - connection.connectedAt,
+        activeCalls: connection.activeCalls,
+      },
+      'Draining MCP connection'
+    );
+
+    if (connection.activeCalls === 0) {
+      void this.closeConnection(slot, connection);
+    }
+  }
+
+  private async closeConnection(slot: ServerSlot, connection: ManagedConnection): Promise<void> {
+    if (connection.closePromise) {
+      return connection.closePromise;
+    }
+
+    if (connection.hardExpiryTimer) {
+      clearTimeout(connection.hardExpiryTimer);
+      connection.hardExpiryTimer = undefined;
+    }
+    connection.intentionalClose = true;
+    connection.state = 'closed';
+    connection.connected = false;
+
+    connection.closePromise = (async () => {
+      try {
+        await connection.client.close();
+      } catch (error) {
+        this.recordFailure(slot, error);
+        this.logger.error(
+          {
+            server: slot.config.name,
+            generation: connection.generation,
+            error,
+          },
+          'Failed to close MCP client; closing transport directly'
+        );
+        try {
+          await connection.transport?.close();
+        } catch (transportError) {
+          this.logger.error(
+            {
+              server: slot.config.name,
+              generation: connection.generation,
+              error: transportError,
+            },
+            'Failed to close MCP transport'
+          );
+        }
+      } finally {
+        slot.draining.delete(connection);
+        if (slot.current === connection) {
+          slot.current = undefined;
+        }
+      }
+    })();
+
+    return connection.closePromise;
+  }
+
+  private async acquireConnection(
+    serverName: string
+  ): Promise<{ slot: ServerSlot; connection: ManagedConnection }> {
+    const slot = this.slots.get(serverName);
+    if (!slot) {
+      throw new Error(`Server '${serverName}' is not configured`);
+    }
+
+    let connection = slot.current;
+    if (connection?.state === 'ready' && this.isSoftExpired(connection)) {
+      this.beginDrain(slot, connection, 'soft-max-age');
+      connection = undefined;
+    }
+
+    if (!connection || connection.state !== 'ready') {
+      connection = await this.ensureConnection(slot);
+    }
+
+    if (connection.state !== 'ready') {
+      return this.acquireConnection(serverName);
+    }
+
+    connection.activeCalls += 1;
+    connection.lastUsedAt = Date.now();
+    slot.lastUsedAt = connection.lastUsedAt;
+    return { slot, connection };
+  }
+
+  private async releaseConnection(slot: ServerSlot, connection: ManagedConnection): Promise<void> {
+    connection.activeCalls = Math.max(0, connection.activeCalls - 1);
+    connection.lastUsedAt = Date.now();
+    slot.lastUsedAt = connection.lastUsedAt;
+
+    if (connection.state === 'draining' && connection.activeCalls === 0) {
+      await this.closeConnection(slot, connection);
+    }
+  }
+
+  private recordSuccess(slot: ServerSlot): void {
+    slot.lastSuccessAt = Date.now();
+    slot.lastError = undefined;
+    slot.consecutiveFailures = 0;
+  }
+
+  private recordFailure(slot: ServerSlot, error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    slot.lastError = message;
+    slot.consecutiveFailures += 1;
+
+    if (
+      slot.consecutiveFailures === 3 ||
+      (slot.consecutiveFailures > 3 && slot.consecutiveFailures % 5 === 0)
+    ) {
+      this.logger.warn(
+        {
+          server: slot.config.name,
+          consecutiveFailures: slot.consecutiveFailures,
+          lastSuccessAt: slot.lastSuccessAt,
+          error: message,
+        },
+        'MCP server has repeated failures'
+      );
+    }
+  }
+
+  /**
+   * Execute work under a lease. Invalidating the context drains this exact
+   * generation, so concurrent recovery cannot accidentally close a newer one.
+   */
+  async withClient<T>(
+    serverName: string,
+    operation: (context: ManagedClientContext) => Promise<T>
+  ): Promise<T> {
+    const { slot, connection } = await this.acquireConnection(serverName);
+    slot.lastAttemptAt = Date.now();
+    let failureReason: string | undefined;
+
+    try {
+      const result = await operation({
+        client: connection.client,
+        generation: connection.generation,
+        markFailure: (reason: string) => {
+          failureReason ??= reason;
+        },
+        invalidate: (reason: string) => {
+          failureReason ??= reason;
+          this.beginDrain(slot, connection, reason);
+        },
+      });
+
+      if (failureReason) {
+        this.recordFailure(slot, failureReason);
+      } else {
+        this.recordSuccess(slot);
+      }
+      return result;
+    } catch (error) {
+      this.recordFailure(slot, error);
+      throw error;
+    } finally {
+      await this.releaseConnection(slot, connection);
+    }
+  }
+
+  getConfiguredServerNames(): string[] {
+    return Array.from(this.slots.keys());
+  }
+
+  getAuthRecoveryPolicy(serverName: string): {
+    authErrorPatterns: string[];
+    authRetryTools: string[];
+  } {
+    const slot = this.slots.get(serverName);
+    return {
+      authErrorPatterns: [...(slot?.config.authErrorPatterns ?? [])],
+      authRetryTools: [...(slot?.config.authRetryTools ?? [])],
+    };
+  }
+
+  /**
+   * Compatibility accessors. Production operations should use withClient so
+   * lifecycle age, active leases, and health are tracked.
    */
   getClient(serverName: string): Client | undefined {
-    const connection = this.connections.get(serverName);
-    return connection?.connected ? connection.client : undefined;
+    const connection = this.slots.get(serverName)?.current;
+    return connection?.state === 'ready' ? connection.client : undefined;
   }
 
-  /**
-   * Get all connected clients
-   */
   getConnectedClients(): Array<{ name: string; client: Client }> {
-    return Array.from(this.connections.values())
-      .filter((conn) => conn.connected)
-      .map((conn) => ({ name: conn.name, client: conn.client }));
+    return Array.from(this.slots.entries()).flatMap(([name, slot]) =>
+      slot.current?.state === 'ready' ? [{ name, client: slot.current.client }] : []
+    );
   }
 
-  /**
-   * Get status of all servers
-   */
   getServerStatuses(): ServerStatus[] {
-    return Array.from(this.connections.values()).map((conn) => ({
-      name: conn.name,
-      connected: conn.connected,
-      lastError: conn.lastError,
-    }));
+    const now = Date.now();
+
+    return Array.from(this.slots.entries()).map(([name, slot]) => {
+      const current = slot.current?.state === 'ready' ? slot.current : undefined;
+      const activeCalls =
+        (current?.activeCalls ?? 0) +
+        Array.from(slot.draining).reduce((total, connection) => total + connection.activeCalls, 0);
+      const state = current
+        ? 'ready'
+        : slot.connectPromise
+          ? 'starting'
+          : slot.draining.size > 0
+            ? 'draining'
+            : slot.lastError && slot.consecutiveFailures > 0
+              ? 'failed'
+              : 'closed';
+
+      return {
+        name,
+        connected: current !== undefined,
+        state,
+        lastError: slot.lastError,
+        activeCalls,
+        drainingConnections: slot.draining.size,
+        generation: current?.generation ?? (slot.nextGeneration || undefined),
+        connectedAt: current?.connectedAt,
+        lastUsedAt: slot.lastUsedAt,
+        lastAttemptAt: slot.lastAttemptAt,
+        lastSuccessAt: slot.lastSuccessAt,
+        connectionAgeSeconds: current ? Math.floor((now - current.connectedAt) / 1000) : undefined,
+        softMaxConnectionAgeSeconds: slot.config.softMaxConnectionAgeSeconds,
+        hardMaxConnectionAgeSeconds: slot.config.hardMaxConnectionAgeSeconds,
+        recycleCount: slot.recycleCount,
+        authInvalidations: slot.authInvalidations,
+        consecutiveFailures: slot.consecutiveFailures,
+      };
+    });
   }
 
-  /**
-   * Check if at least one server is connected
-   */
   hasConnectedServers(): boolean {
-    return Array.from(this.connections.values()).some((conn) => conn.connected);
+    return Array.from(this.slots.values()).some((slot) => slot.current?.state === 'ready');
   }
 
-  /**
-   * Disconnect from all servers
-   */
   async disconnectAll(): Promise<void> {
     this.logger.info('Disconnecting from all MCP servers');
-
-    // Claimed before anything is awaited, so a retry already inside connect()
-    // sees it the moment that connect resolves.
     this.shuttingDown = true;
 
-    // Stop watching first: a poll landing mid-teardown would reconnect the very
-    // servers this call is closing.
     if (this.configWatchTimer) {
       clearInterval(this.configWatchTimer);
       this.configWatchTimer = undefined;
     }
 
-    // Cancel queued retries and claim every close as ours *before* closing
-    // anything. A timer surviving teardown would reconnect to a backend nobody
-    // is listening to, and the resulting `onclose` would schedule yet another.
-    for (const timer of this.reconnectTimers.values()) {
-      clearTimeout(timer);
-    }
-    this.reconnectTimers.clear();
-    this.reconnectAttempts.clear();
+    const disconnectPromises: Promise<void>[] = [];
+    const slots = Array.from(this.slots.values());
+    this.slots.clear();
 
-    for (const name of this.connections.keys()) {
-      this.intentionalClose.add(name);
-    }
-
-    const disconnectPromises = Array.from(this.connections.values()).map(
-      async (conn) => {
-        try {
-          await conn.client.close();
-        } catch (error) {
-          this.logger.error(
-            { server: conn.name, error },
-            'Error disconnecting from server'
-          );
-        }
+    for (const slot of slots) {
+      slot.disposed = true;
+      this.cancelReconnect(slot);
+      const connections = new Set<ManagedConnection>(slot.draining);
+      if (slot.current) {
+        connections.add(slot.current);
+        slot.current = undefined;
       }
-    );
+
+      for (const connection of connections) {
+        if (connection.state === 'ready') {
+          connection.state = 'draining';
+        }
+        disconnectPromises.push(this.closeConnection(slot, connection));
+      }
+    }
 
     await Promise.allSettled(disconnectPromises);
-    this.connections.clear();
-    // The intentional-close flags stay: a transport can fire `onclose` a tick
-    // after close() resolves, and clearing them here would make that late
-    // callback look like a crash. Each is dropped when its server connects
-    // again, so they cannot outlive a reconnect.
-
     this.logger.info('All MCP servers disconnected');
   }
 }

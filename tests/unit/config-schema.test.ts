@@ -119,4 +119,40 @@ describe('server config schema', () => {
       expect(validate(base)).toBe(true);
     });
   });
+
+  describe('connection lifecycle', () => {
+    it('accepts global and per-server lifecycle settings', () => {
+      expect(validate({
+        ...base,
+        softMaxConnectionAgeSeconds: 3600,
+        hardMaxConnectionAgeSeconds: 28_800,
+        authErrorPatterns: ['midway login page'],
+        authRetryTools: ['InternalSearch'],
+      })).toBe(true);
+
+      expect(validate({
+        mcpServers: [{
+          name: 'srv',
+          command: 'cmd',
+          softMaxConnectionAgeSeconds: 900,
+          hardMaxConnectionAgeSeconds: 7200,
+          authErrorPatterns: ['expired'],
+          authRetryTools: ['Read*'],
+        }],
+      })).toBe(true);
+    });
+
+    it.each([
+      { softMaxConnectionAgeSeconds: -1 },
+      { hardMaxConnectionAgeSeconds: -1 },
+      { authErrorPatterns: [1] },
+      { authRetryTools: [false] },
+    ])('rejects invalid lifecycle settings: %j', (settings) => {
+      expect(validate({ ...base, ...settings })).toBe(false);
+    });
+
+    it('accepts the legacy maxConnectionAgeSeconds alias', () => {
+      expect(validate({ ...base, maxConnectionAgeSeconds: 3600 })).toBe(true);
+    });
+  });
 });

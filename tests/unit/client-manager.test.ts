@@ -48,6 +48,10 @@ describe('MCPClientManager', () => {
     clientManager = new MCPClientManager(mockLogger);
   });
 
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   describe('initializeServers', () => {
     it('should initialize enabled servers', async () => {
       const servers: MCPServerConfig[] = [
@@ -164,6 +168,244 @@ describe('MCPClientManager', () => {
 
       const client = clientManager.getClient('failing-server');
       expect(client).toBeUndefined();
+    });
+  });
+
+  describe('managed connection lifecycle', () => {
+    it('recycles at the one-hour soft-age boundary before reuse', async () => {
+      jest.useFakeTimers({ now: new Date('2026-09-02T00:00:00Z') });
+
+      const oldClient = {
+        ...mockClient,
+        connect: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+        close: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      };
+      const newClient = {
+        ...mockClient,
+        connect: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+        close: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      };
+
+      const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+      let clientCount = 0;
+      (Client as unknown as jest.Mock).mockImplementation(() => {
+        clientCount += 1;
+        return clientCount === 1 ? oldClient : newClient;
+      });
+
+      await clientManager.initializeServers([
+        {
+          name: 'auth-server',
+          command: 'cmd',
+          softMaxConnectionAgeSeconds: 3600,
+          hardMaxConnectionAgeSeconds: 0,
+        },
+      ]);
+
+      await jest.advanceTimersByTimeAsync(3_600_000);
+
+      const usedClient = await clientManager.withClient(
+        'auth-server',
+        async ({ client }) => client
+      );
+
+      expect(usedClient).toBe(newClient);
+      expect(oldClient.close).toHaveBeenCalledTimes(1);
+      expect(Client).toHaveBeenCalledTimes(2);
+    });
+
+    it('closes an idle connection at the eight-hour hard limit and reopens lazily', async () => {
+      jest.useFakeTimers({ now: new Date('2026-09-02T00:00:00Z') });
+
+      const oldClient = {
+        ...mockClient,
+        connect: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+        close: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      };
+      const newClient = {
+        ...mockClient,
+        connect: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+        close: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      };
+
+      const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+      let clientCount = 0;
+      (Client as unknown as jest.Mock).mockImplementation(() => {
+        clientCount += 1;
+        return clientCount === 1 ? oldClient : newClient;
+      });
+
+      await clientManager.initializeServers([
+        {
+          name: 'idle-server',
+          command: 'cmd',
+          softMaxConnectionAgeSeconds: 0,
+          hardMaxConnectionAgeSeconds: 28_800,
+        },
+      ]);
+
+      await jest.advanceTimersByTimeAsync(28_800_000);
+      await Promise.resolve();
+
+      expect(oldClient.close).toHaveBeenCalledTimes(1);
+      expect(clientManager.getServerStatuses()[0].state).toBe('closed');
+
+      const usedClient = await clientManager.withClient(
+        'idle-server',
+        async ({ client }) => client
+      );
+
+      expect(usedClient).toBe(newClient);
+      expect(Client).toHaveBeenCalledTimes(2);
+    });
+
+    it('drains an active eight-hour connection and closes it after the last user releases', async () => {
+      jest.useFakeTimers({ now: new Date('2026-09-02T00:00:00Z') });
+
+      const oldClient = {
+        ...mockClient,
+        connect: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+        close: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      };
+      const newClient = {
+        ...mockClient,
+        connect: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+        close: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      };
+
+      const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+      let clientCount = 0;
+      (Client as unknown as jest.Mock).mockImplementation(() => {
+        clientCount += 1;
+        return clientCount === 1 ? oldClient : newClient;
+      });
+
+      await clientManager.initializeServers([
+        {
+          name: 'busy-server',
+          command: 'cmd',
+          softMaxConnectionAgeSeconds: 0,
+          hardMaxConnectionAgeSeconds: 28_800,
+        },
+      ]);
+
+      let finishOldCall!: () => void;
+      const oldCall = clientManager.withClient('busy-server', async ({ client }) => {
+        expect(client).toBe(oldClient);
+        await new Promise<void>((resolve) => {
+          finishOldCall = resolve;
+        });
+        return 'old-finished';
+      });
+      await Promise.resolve();
+
+      await jest.advanceTimersByTimeAsync(28_800_000);
+
+      expect(oldClient.close).not.toHaveBeenCalled();
+      expect(clientManager.getServerStatuses()[0].state).toBe('draining');
+
+      const freshClient = await clientManager.withClient(
+        'busy-server',
+        async ({ client }) => client
+      );
+      expect(freshClient).toBe(newClient);
+
+      finishOldCall();
+      await oldCall;
+      await Promise.resolve();
+
+      expect(oldClient.close).toHaveBeenCalledTimes(1);
+    });
+
+    it('uses one reconnect for concurrent calls that arrive after the soft limit', async () => {
+      jest.useFakeTimers({ now: new Date('2026-09-02T00:00:00Z') });
+
+      let finishReconnect!: () => void;
+      const oldClient = {
+        ...mockClient,
+        connect: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+        close: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      };
+      const newClient = {
+        ...mockClient,
+        connect: jest.fn<() => Promise<void>>().mockImplementation(
+          () => new Promise<void>((resolve) => {
+            finishReconnect = resolve;
+          })
+        ),
+        close: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      };
+
+      const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+      let clientCount = 0;
+      (Client as unknown as jest.Mock).mockImplementation(() => {
+        clientCount += 1;
+        return clientCount === 1 ? oldClient : newClient;
+      });
+
+      await clientManager.initializeServers([
+        {
+          name: 'shared-server',
+          command: 'cmd',
+          softMaxConnectionAgeSeconds: 3600,
+          hardMaxConnectionAgeSeconds: 0,
+        },
+      ]);
+      await jest.advanceTimersByTimeAsync(3_600_001);
+
+      const first = clientManager.withClient(
+        'shared-server',
+        async ({ client }) => client
+      );
+      const second = clientManager.withClient(
+        'shared-server',
+        async ({ client }) => client
+      );
+
+      await Promise.resolve();
+      expect(Client).toHaveBeenCalledTimes(2);
+
+      finishReconnect();
+      const [firstClient, secondClient] = await Promise.all([first, second]);
+
+      expect(firstClient).toBe(newClient);
+      expect(secondClient).toBe(newClient);
+      expect(Client).toHaveBeenCalledTimes(2);
+    });
+
+    it('reports lifecycle freshness and failures in server status', async () => {
+      jest.useFakeTimers({ now: new Date('2026-09-02T00:00:00Z') });
+
+      const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+      (Client as unknown as jest.Mock).mockImplementation(() => mockClient);
+
+      await clientManager.initializeServers([
+        {
+          name: 'status-server',
+          command: 'cmd',
+          softMaxConnectionAgeSeconds: 3600,
+          hardMaxConnectionAgeSeconds: 28_800,
+        },
+      ]);
+
+      await clientManager.withClient('status-server', async () => 'ok');
+
+      const status = clientManager.getServerStatuses()[0];
+      expect(status).toEqual(expect.objectContaining({
+        name: 'status-server',
+        connected: true,
+        state: 'ready',
+        activeCalls: 0,
+        generation: 1,
+        consecutiveFailures: 0,
+        recycleCount: 0,
+        authInvalidations: 0,
+        softMaxConnectionAgeSeconds: 3600,
+        hardMaxConnectionAgeSeconds: 28_800,
+      }));
+      expect(status.lastAttemptAt).toBe(Date.now());
+      expect(status.lastSuccessAt).toBe(Date.now());
+      expect(status.connectedAt).toBe(Date.now());
     });
   });
 
@@ -737,7 +979,12 @@ describe('MCPClientManager', () => {
       constructor.mockImplementation(() => mockClient);
 
       await clientManager.initializeServers([
-        { name: 'flaky', command: 'cmd', enabled: true },
+        {
+          name: 'flaky',
+          command: 'cmd',
+          enabled: true,
+          hardMaxConnectionAgeSeconds: 0,
+        },
       ]);
 
       return constructor;
