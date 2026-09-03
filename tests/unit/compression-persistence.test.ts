@@ -19,7 +19,12 @@ describe('CompressionPersistence', () => {
     } as unknown as Logger;
 
     // Use a temporary directory for tests
-    testCacheDir = path.join(os.tmpdir(), `mcp-test-${Date.now()}`);
+    // See the note in config-loader.test.ts: a bare `mcp-test-<ms>` collided
+    // with that suite whenever both landed in the same millisecond.
+    testCacheDir = path.join(
+      os.tmpdir(),
+      `mcp-persistence-test-${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2)}`
+    );
     persistence = new CompressionPersistence(mockLogger, testCacheDir);
   });
 
