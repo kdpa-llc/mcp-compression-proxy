@@ -156,6 +156,42 @@ export class CompressionCache {
   }
 
   /**
+   * Whether a cached compression was made from a description the backend no
+   * longer serves.
+   *
+   * Both sides must be present to say anything: entries cached before originals
+   * were recorded have no baseline (see `missingOriginals` in the metrics), and
+   * a backend that reports no description gives nothing to compare. Treating
+   * either as stale would put those tools into a recompression loop they could
+   * never exit.
+   */
+  isStale(serverName: string, toolName: string, liveOriginal?: string): boolean {
+    const entry = this.cache[this.getKey(serverName, toolName)];
+
+    if (!entry?.compressed) return false;
+    if (!entry.original || !liveOriginal) return false;
+
+    return entry.original !== liveOriginal;
+  }
+
+  /**
+   * Drop one tool's cached compression. Returns whether there was one.
+   *
+   * Persisting is left to the caller so a batch of invalidations costs a single
+   * disk write.
+   */
+  invalidate(serverName: string, toolName: string): boolean {
+    const key = this.getKey(serverName, toolName);
+
+    if (!this.cache[key]) return false;
+
+    delete this.cache[key];
+    this.logger.debug({ serverName, toolName }, 'Invalidated compressed description');
+
+    return true;
+  }
+
+  /**
    * Get original description if cached
    */
   getOriginalDescription(

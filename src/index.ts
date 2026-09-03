@@ -74,13 +74,46 @@ const compressionSampler = new CompressionSampler(logger, {
 type BackendTool = ObservedTool & { inputSchema: Tool['inputSchema'] };
 
 /**
+ * How long a backend tool snapshot stays reusable.
+ *
+ * `tools/list` runs on every client refresh and the compression tools each
+ * trigger their own fan-out, so without this a single agent turn can issue
+ * several `listTools` round-trips per backend. Short enough that a genuinely
+ * changed backend surfaces almost immediately.
+ */
+const TOOL_CACHE_TTL_MS = 3000;
+
+let toolCache: { expiresAt: number; key: string; tools: BackendTool[] } | undefined;
+
+/**
  * Fetch every tool from every connected backend server, once.
  *
  * Callers that need both the tool list and derived counts should reuse a single
  * snapshot rather than calling `listTools` per tool.
+ *
+ * Excluded tools are dropped here rather than only at the `tools/list` edge:
+ * every consumer of this snapshot - the compression tools included - must agree
+ * on which tools exist, or the proxy asks the model to spend calls compressing
+ * tools it will never advertise and reports coverage percentages that disagree
+ * with what the client actually sees.
  */
 async function fetchAllBackendTools(): Promise<BackendTool[]> {
   const clients = clientManager.getConnectedClients();
+
+  const excludePatterns = loadJSONServersCached()?.excludePatterns || [];
+
+  // Keyed on the connected set and the exclude patterns as well as the clock.
+  // Hot-reload can add or drop a backend between ticks and an edited
+  // servers.json can change what is filtered; serving either from a stale
+  // snapshot would contradict what tools/list reports.
+  const cacheKey = JSON.stringify([
+    excludePatterns,
+    clients.map(({ name }) => name).sort(),
+  ]);
+
+  if (toolCache && toolCache.expiresAt > Date.now() && toolCache.key === cacheKey) {
+    return toolCache.tools;
+  }
 
   const perServer = await Promise.all(
     clients.map(async ({ name, client }): Promise<BackendTool[]> => {
@@ -99,13 +132,66 @@ async function fetchAllBackendTools(): Promise<BackendTool[]> {
     })
   );
 
-  return perServer.flat();
+  const tools = perServer
+    .flat()
+    .filter(
+      (tool) =>
+        !matchesIgnorePattern(`${tool.serverName}__${tool.toolName}`, excludePatterns)
+    );
+
+  toolCache = { expiresAt: Date.now() + TOOL_CACHE_TTL_MS, key: cacheKey, tools };
+
+  return tools;
+}
+
+/**
+ * Whether a tool still needs compressing: never compressed, or compressed from
+ * a description the backend has since changed.
+ */
+function needsCompression(tool: BackendTool): boolean {
+  return (
+    !compressionCache.hasCompressed(tool.serverName, tool.toolName) ||
+    compressionCache.isStale(tool.serverName, tool.toolName, tool.description)
+  );
+}
+
+/** Tools returned per `tools/list` page when the client does not stop early. */
+const DEFAULT_TOOLS_PAGE_SIZE = 100;
+
+/**
+ * Page size, overridable so a test can force pagination without standing up a
+ * backend that exposes hundreds of tools. Anything unparseable or non-positive
+ * falls back rather than producing an empty page forever.
+ */
+function toolsPageSize(): number {
+  const configured = Number.parseInt(process.env.MCP_TOOLS_PAGE_SIZE ?? '', 10);
+  return Number.isInteger(configured) && configured > 0
+    ? configured
+    : DEFAULT_TOOLS_PAGE_SIZE;
+}
+
+/**
+ * Decode a pagination cursor into an offset.
+ *
+ * Cursors are opaque to the client but are just offsets here - this is a local
+ * 1:1 stdio transport, so there is nothing to tamper-proof against. Returns
+ * `undefined` for a cursor that cannot be honoured, which the caller reports
+ * rather than treating as "start over".
+ */
+function parseCursor(cursor: unknown): number | undefined {
+  if (cursor === undefined) return 0;
+  if (typeof cursor !== 'string') return undefined;
+
+  const offset = Number.parseInt(cursor, 10);
+  return Number.isInteger(offset) && offset >= 0 && String(offset) === cursor
+    ? offset
+    : undefined;
 }
 
 /**
  * List all tools from aggregated MCP servers + management tools
  */
-server.setRequestHandler(ListToolsRequestSchema, async () => {
+server.setRequestHandler(ListToolsRequestSchema, async (request) => {
   logger.debug('Handling tools/list request');
 
   // Fetch backend tools first so the management tools can advertise live
@@ -204,6 +290,24 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             description: 'File path to read compressed tools JSON. Use this OR descriptions, not both.',
           },
         },
+      },
+    },
+    {
+      name: 'mcp-compression-proxy__invalidate_tool_cache',
+      description: 'Drop one tool\'s cached compressed description so it is compressed again. Use when a compression lost something important; descriptions that merely went stale are re-queued automatically.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          serverName: {
+            type: 'string',
+            description: 'Server name (e.g., "filesystem")',
+          },
+          toolName: {
+            type: 'string',
+            description: 'Tool name (e.g., "read_file")',
+          },
+        },
+        required: ['serverName', 'toolName'],
       },
     },
     {
@@ -317,7 +421,29 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 
   logger.debug({ count: filteredTools.length, excluded: allTools.length - filteredTools.length }, 'Returning tools');
 
-  return { tools: filteredTools };
+  // Paginate over the post-exclude list: a cursor pointing into the unfiltered
+  // set would drift as patterns change, and would leak excluded tools at the
+  // page boundaries.
+  const offset = parseCursor(request.params?.cursor);
+
+  if (offset === undefined) {
+    return {
+      tools: [],
+      // The spec has no error channel here, so an unusable cursor returns
+      // nothing rather than silently restarting from the top - a caller
+      // looping on nextCursor would otherwise never terminate.
+      _meta: { error: `Invalid cursor: ${String(request.params?.cursor)}` },
+    };
+  }
+
+  const pageSize = toolsPageSize();
+  const page = filteredTools.slice(offset, offset + pageSize);
+  const nextOffset = offset + page.length;
+
+  return {
+    tools: page,
+    ...(nextOffset < filteredTools.length ? { nextCursor: String(nextOffset) } : {}),
+  };
 });
 
 /**
@@ -425,8 +551,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const coverage = statsService.computeCoverage(backendTools);
     const liveStats = statsService.formatCoverage(coverage);
 
+    // Stale entries rejoin the queue alongside never-compressed ones, so a
+    // backend that rewrites a description is picked up by the existing
+    // compress -> cache loop without the caller learning a new concept.
     const allUncompressedTools = backendTools
-      .filter((tool) => !compressionCache.hasCompressed(tool.serverName, tool.toolName))
+      .filter((tool) => needsCompression(tool))
       .map((tool) => ({
         serverName: tool.serverName,
         toolName: tool.toolName,
@@ -617,6 +746,47 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     };
   }
 
+  if (name === 'mcp-compression-proxy__invalidate_tool_cache') {
+    const { serverName, toolName } = args as { serverName: string; toolName: string };
+
+    const removed = compressionCache.invalidate(serverName, toolName);
+
+    if (!removed) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `No cached compression found for ${serverName}:${toolName}. Nothing to invalidate.`,
+          },
+        ],
+      };
+    }
+
+    try {
+      await compressionCache.saveToDisk();
+    } catch (error) {
+      logger.error({ error, serverName, toolName }, 'Failed to persist cache after invalidation');
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Invalidated ${serverName}:${toolName} in memory, but persisting the cache failed: ${error instanceof Error ? error.message : 'Unknown error'}. The entry will come back on restart.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `Invalidated the cached compression for ${serverName}:${toolName}.\n\nIt will be offered again by mcp-compression-proxy__get_uncompressed_tools.`,
+        },
+      ],
+    };
+  }
+
   if (name === 'mcp-compression-proxy__expand_tool') {
     const { serverName, toolName } = args as {
       serverName: string;
@@ -712,7 +882,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const coverageBefore = statsService.computeCoverage(backendTools);
 
     const uncompressed = backendTools
-      .filter((tool) => !compressionCache.hasCompressed(tool.serverName, tool.toolName))
+      .filter((tool) => needsCompression(tool))
       .slice(0, actualLimit);
 
     if (uncompressed.length === 0) {
@@ -957,6 +1127,14 @@ async function main() {
       logger.error({ error }, 'Error during backend server initialization');
     }
   }
+
+  // Outside the branch above on purpose: the fingerprint the watch polls counts
+  // a missing config file, so a user who writes their first servers.json after
+  // starting the proxy gets their servers without restarting the MCP client.
+  clientManager.startConfigWatch(loadJSONServersCached, undefined, (reloaded) => {
+    compressionCache.setNoCompressPatterns(reloaded.noCompressPatterns);
+    compressionCache.setFallbackBehavior(reloaded.compressionFallbackBehavior ?? 'original');
+  });
 
   // Now connect to the MCP client - all backend servers are ready (or timed out)
   const transport = new StdioServerTransport();

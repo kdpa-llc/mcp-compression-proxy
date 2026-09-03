@@ -1,4 +1,5 @@
 import { sendRequest, isDaemonRunning } from './ipc-client.js';
+import { loadJSONServers } from '../config/loader.js';
 import type { ToolEntry, ToolInfoResult } from '../types/index.js';
 
 /**
@@ -149,6 +150,102 @@ export async function handleStats(socketPath: string): Promise<void> {
   }
 
   console.log(JSON.stringify(response.result, null, 2));
+}
+
+/**
+ * Last `count` lines of a log file's contents.
+ *
+ * Kept as a pure function so it is testable without a real log on disk - the
+ * CLI entry point is excluded from coverage collection, this file is not.
+ */
+export function tailLines(content: string, count: number): string {
+  if (!content) return '';
+
+  // A trailing newline is a terminator, not an empty final line; without this
+  // `-n 1` would return a blank.
+  const lines = content.replace(/\n$/, '').split('\n');
+
+  return lines.slice(Math.max(0, lines.length - count)).join('\n');
+}
+
+/**
+ * mcp-cli doctor — validate config and report live backend health
+ */
+export async function handleDoctor(socketPath: string): Promise<void> {
+  let healthy = true;
+
+  console.log('Configuration');
+
+  // Uncached on purpose: a doctor reports what is on disk right now.
+  // A schema error throws, and an unformatted stack trace here would bury the
+  // one thing the user came for.
+  let configuredServers: string[] = [];
+  try {
+    const config = loadJSONServers();
+
+    if (!config) {
+      console.log('  ! No servers.json found (user or project level)');
+      console.log('    The proxy will start with management tools only.');
+      healthy = false;
+    } else {
+      configuredServers = config.servers.map((server) => server.name);
+      const disabled = config.servers.filter((server) => server.enabled === false).length;
+
+      console.log(`  ✓ Loaded ${config.servers.length} server(s)${disabled ? `, ${disabled} disabled` : ''}`);
+      if (config.excludePatterns.length > 0) {
+        console.log(`    excludeTools: ${config.excludePatterns.join(', ')}`);
+      }
+      if (config.noCompressPatterns.length > 0) {
+        console.log(`    noCompressTools: ${config.noCompressPatterns.join(', ')}`);
+      }
+    }
+  } catch (error) {
+    console.log('  ✗ Invalid configuration');
+    for (const line of String(error instanceof Error ? error.message : error).split('\n')) {
+      console.log(`    ${line}`);
+    }
+    console.log('\nFix the configuration before checking backend health.');
+    process.exit(1);
+  }
+
+  console.log('\nBackends');
+
+  const response = await sendRequest(socketPath, 'daemon-status');
+
+  if (response.error) {
+    console.log(`  ✗ Daemon did not respond: ${response.error.message}`);
+    process.exit(1);
+  }
+
+  const status = response.result as {
+    pid: number;
+    servers: Array<{ name: string; connected: boolean; lastError?: string }>;
+  };
+
+  for (const server of status.servers) {
+    if (server.connected) {
+      console.log(`  ✓ ${server.name}`);
+    } else {
+      console.log(`  ✗ ${server.name}: ${server.lastError || 'not connected'}`);
+      healthy = false;
+    }
+  }
+
+  // A server in the config that the daemon has no record of predates the
+  // daemon's own startup, so its warm connections are stale.
+  const known = new Set(status.servers.map((server) => server.name));
+  const missing = configuredServers.filter((name) => !known.has(name));
+  if (missing.length > 0) {
+    console.log(`  ! Not known to the running daemon: ${missing.join(', ')}`);
+    console.log('    Restart it to pick them up: mcp-cli daemon restart');
+    healthy = false;
+  }
+
+  console.log(`\n${healthy ? 'All checks passed.' : 'Some checks failed (see above).'}`);
+
+  if (!healthy) {
+    process.exit(1);
+  }
 }
 
 /**

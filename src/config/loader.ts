@@ -87,6 +87,9 @@ function expandEnvVarsInObject<T>(obj: T, unresolved: Set<string>): T {
   return obj;
 }
 
+/** Fields that only configure a process we spawn ourselves. */
+const STDIO_ONLY_FIELDS = ['args', 'env', 'inheritEnv'] as const;
+
 /**
  * Validates JSON config against schema
  */
@@ -102,7 +105,61 @@ function validateConfig(config: unknown): ServerConfigJSON {
     console.error(`[Config] Validation failed:\n${errors}`);
     throw new Error(`Invalid server configuration:\n${errors}`);
   }
-  return config as ServerConfigJSON;
+
+  const validated = config as ServerConfigJSON;
+
+  // Derived from the schema rather than hand-listed, so a field added there
+  // cannot start warning about itself.
+  const knownServerKeys = new Set(
+    Object.keys(serverConfigSchema.properties.mcpServers.items.properties)
+  );
+
+  for (const server of validated.mcpServers) {
+    const unknown = Object.keys(server).filter((key) => !knownServerKeys.has(key));
+
+    if (unknown.length > 0) {
+      // A warning, not a throw. These are usually keys carried over from
+      // another MCP client's config format, and failing here would take every
+      // server down over a field this proxy simply does not read.
+      console.error(
+        `[Config] WARNING: server "${server.name}" has unrecognized field(s): ${unknown.join(', ')}. ` +
+          `They are ignored. Check the spelling if you expected them to take effect.`
+      );
+    }
+  }
+
+  // The schema's `oneOf` only rules out `command` next to `url`; it has nothing
+  // to say about the stdio-only fields, so a remote entry carrying `args` would
+  // validate and then silently drop them. That combination is always a typo, so
+  // it throws like every other config mistake here rather than warning - a soft
+  // path would be the only one in this file.
+  for (const server of validated.mcpServers) {
+    if (server.url) {
+      const offending = STDIO_ONLY_FIELDS.filter((field) => server[field] !== undefined);
+      if (offending.length > 0) {
+        const message =
+          `Invalid server configuration: "${server.name}" sets ${offending.join(', ')} ` +
+          `alongside "url". Those fields configure a locally spawned process and have no ` +
+          `effect on a remote server; use "headers" to send credentials instead.`;
+        console.error(`[Config] Validation failed:\n  - ${message}`);
+        throw new Error(message);
+      }
+      continue;
+    }
+
+    // The mirror of the check above. Headers are an HTTP concept, so on a
+    // spawned server they would be dropped in silence - the same failure mode
+    // that rejecting unknown keys was meant to end.
+    if (server.headers !== undefined) {
+      const message =
+        `Invalid server configuration: "${server.name}" sets headers alongside "command". ` +
+        `Headers are only sent to a remote server; use "env" to pass values to a spawned one.`;
+      console.error(`[Config] Validation failed:\n  - ${message}`);
+      throw new Error(message);
+    }
+  }
+
+  return validated;
 }
 
 /**

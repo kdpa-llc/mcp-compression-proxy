@@ -123,6 +123,42 @@ describe('StatsService live coverage', () => {
     });
   });
 
+  describe('staleness', () => {
+    it('counts a tool whose backend description has changed', () => {
+      cache.saveCompressed('a', 'one', 'short', 'x'.repeat(100));
+
+      // Same tool, but the backend now serves different text.
+      const rewritten: ObservedTool[] = [
+        { serverName: 'a', toolName: 'one', description: 'rewritten upstream' },
+        ...tools.slice(1),
+      ];
+
+      const coverage = stats.computeCoverage(rewritten);
+
+      expect(coverage.compressedTools).toBe(1);
+      expect(coverage.staleTools).toBe(1);
+    });
+
+    it('counts nothing stale while descriptions still match', () => {
+      cache.saveCompressed('a', 'one', 'short', 'x'.repeat(100));
+
+      expect(stats.computeCoverage(tools).staleTools).toBe(0);
+    });
+
+    it('surfaces stale tools in the one-line summary only when present', () => {
+      cache.saveCompressed('a', 'one', 'short', 'x'.repeat(100));
+
+      expect(stats.formatCoverage(stats.computeCoverage(tools))).not.toContain('stale');
+
+      const rewritten: ObservedTool[] = [
+        { serverName: 'a', toolName: 'one', description: 'rewritten upstream' },
+        ...tools.slice(1),
+      ];
+
+      expect(stats.formatCoverage(stats.computeCoverage(rewritten))).toContain('1 stale');
+    });
+  });
+
   describe('formatCoverage', () => {
     it('says so when there are no backend tools', () => {
       expect(stats.formatCoverage(stats.computeCoverage([]))).toBe(

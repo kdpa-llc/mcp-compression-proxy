@@ -68,6 +68,8 @@ export type LiveCoverage = {
   totalTools: number;
   compressedTools: number;
   uncompressedTools: number;
+  /** Compressed from a description the backend has since changed. */
+  staleTools: number;
   coveragePercent: number;
   originalChars: number;
   compressedChars: number;
@@ -301,6 +303,7 @@ export class StatsService {
    */
   computeCoverage(tools: ObservedTool[]): LiveCoverage {
     let compressedTools = 0;
+    let staleTools = 0;
     let originalChars = 0;
     let compressedChars = 0;
     let latestCompressedAt: string | undefined;
@@ -321,6 +324,11 @@ export class StatsService {
       if (compressed !== undefined) {
         compressedTools += 1;
         compressedChars += compressed.length;
+        // The live description is already in hand here, so staleness costs no
+        // extra listTools call - preserve that when touching this loop.
+        if (this.compressionCache.isStale(tool.serverName, tool.toolName, tool.description)) {
+          staleTools += 1;
+        }
       } else {
         // Uncompressed tools still occupy their original description.
         compressedChars += original.length;
@@ -337,6 +345,7 @@ export class StatsService {
       totalTools: tools.length,
       compressedTools,
       uncompressedTools: Math.max(tools.length - compressedTools, 0),
+      staleTools,
       coveragePercent: this.coverage(compressedTools, tools.length),
       originalChars,
       compressedChars,
@@ -358,6 +367,11 @@ export class StatsService {
       `${coverage.compressedTools}/${coverage.totalTools} compressed (${coverage.coveragePercent}%)`,
       `${coverage.uncompressedTools} remaining`,
     ];
+
+    // Only when non-zero: this string ships on every tools/list.
+    if (coverage.staleTools > 0) {
+      parts.push(`${coverage.staleTools} stale`);
+    }
 
     if (coverage.estimatedTokensSaved > 0) {
       parts.push(`~${compact(coverage.estimatedTokensSaved)} tokens saved`);

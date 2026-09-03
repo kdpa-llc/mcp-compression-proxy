@@ -44,6 +44,62 @@ describe('server config schema', () => {
     });
   });
 
+  describe('remote (HTTP) servers', () => {
+    it('accepts a url-only entry', () => {
+      expect(
+        validate({
+          mcpServers: [
+            {
+              name: 'remote',
+              url: 'https://mcp.example.com/mcp',
+              headers: { Authorization: 'Bearer ${TOKEN}' },
+              enabled: true,
+              timeout: 30,
+            },
+          ],
+        })
+      ).toBe(true);
+    });
+
+    it('rejects an entry with neither command nor url', () => {
+      expect(validate({ mcpServers: [{ name: 'nothing' }] })).toBe(false);
+    });
+
+    it('rejects command and url together', () => {
+      // `oneOf` gives this for free - exactly one branch may match.
+      expect(
+        validate({
+          mcpServers: [{ name: 'both', command: 'npx', url: 'https://example.com/mcp' }],
+        })
+      ).toBe(false);
+    });
+
+    it('rejects non-string header values', () => {
+      expect(
+        validate({
+          mcpServers: [{ name: 'remote', url: 'https://example.com/mcp', headers: { A: 1 } }],
+        })
+      ).toBe(false);
+    });
+  });
+
+  describe('unknown server fields', () => {
+    it('rejects a misspelled field instead of silently ignoring it', () => {
+      // Pre-strictness this validated, and the server just never started.
+      expect(validate({ mcpServers: [{ name: 'srv', comand: 'npx' }] })).toBe(false);
+    });
+
+    it('still accepts the legacy type and autoApprove fields', () => {
+      expect(
+        validate({
+          mcpServers: [
+            { name: 'srv', command: 'cmd', type: 'stdio', autoApprove: ['srv__read'] },
+          ],
+        })
+      ).toBe(true);
+    });
+  });
+
   describe('compressionFallbackBehavior', () => {
     it.each(['original', 'blank'])('accepts %s', (value) => {
       expect(validate({ ...base, compressionFallbackBehavior: value })).toBe(true);

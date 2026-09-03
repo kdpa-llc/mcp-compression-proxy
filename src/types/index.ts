@@ -1,13 +1,25 @@
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 
+/**
+ * A backend server, either spawned locally (`command`) or reached over HTTP
+ * (`url`). The two are mutually exclusive, enforced by the config schema.
+ *
+ * Flat optionals rather than a discriminated union: `initializeServers`
+ * applies defaults by spreading (`{...server, timeout: ...}`), and TypeScript
+ * cannot keep a union narrowed across that.
+ */
 export interface MCPServerConfig {
   name: string;
-  command: string;
+  command?: string;
   args?: string[];
   env?: Record<string, string>;
   /** Which of the proxy's env vars to pass through. Defaults to all. */
   inheritEnv?: boolean | string[];
+  /** Endpoint of a hosted MCP server. Mutually exclusive with `command`. */
+  url?: string;
+  /** Static headers sent with every request to `url`, e.g. Authorization. */
+  headers?: Record<string, string>;
   enabled?: boolean;
   timeout?: number; // Timeout in seconds for server initialization
 }
@@ -15,9 +27,19 @@ export interface MCPServerConfig {
 export interface MCPClientConnection {
   name: string;
   client: Client;
-  transport: Transport;
+  /**
+   * Absent when the transport could not be built at all - a malformed `url`,
+   * say. Recording the failure still matters, so this cannot be required.
+   */
+  transport?: Transport;
   connected: boolean;
   lastError?: string;
+  /**
+   * The resolved config this connection was built from - defaults already
+   * merged in. A reconnect replays it verbatim instead of re-deriving the
+   * timeout and env policy, which would silently drift from the original.
+   */
+  config: MCPServerConfig;
 }
 
 export interface AggregatedToolsResponse {

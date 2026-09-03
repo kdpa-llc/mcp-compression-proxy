@@ -6,6 +6,10 @@ jest.mock('../../src/cli/ipc-client.js', () => ({
   isDaemonRunning: jest.fn(),
 }));
 
+jest.mock('../../src/config/loader.js', () => ({
+  loadJSONServers: jest.fn(),
+}));
+
 import { sendRequest, isDaemonRunning } from '../../src/cli/ipc-client.js';
 import {
   handleTools,
@@ -14,10 +18,14 @@ import {
   handleCall,
   handleStats,
   handleDaemonStatus,
+  handleDoctor,
+  tailLines,
 } from '../../src/cli/commands.js';
+import { loadJSONServers } from '../../src/config/loader.js';
 
 const mockSendRequest = sendRequest as jest.MockedFunction<typeof sendRequest>;
 const mockIsDaemonRunning = isDaemonRunning as jest.MockedFunction<typeof isDaemonRunning>;
+const mockLoadConfig = loadJSONServers as jest.MockedFunction<typeof loadJSONServers>;
 const SOCKET = '/tmp/test.sock';
 
 describe('CLI commands', () => {
@@ -323,6 +331,113 @@ describe('CLI commands', () => {
       await handleDaemonStatus(SOCKET);
 
       expect(stdoutLines.some(l => l.includes('3m'))).toBe(true);
+    });
+  });
+
+  describe('tailLines', () => {
+    it('returns the last N lines', () => {
+      expect(tailLines('a\nb\nc\nd', 2)).toBe('c\nd');
+    });
+
+    it('returns everything when asked for more than exists', () => {
+      expect(tailLines('a\nb', 10)).toBe('a\nb');
+    });
+
+    it('returns exactly N when N matches the line count', () => {
+      expect(tailLines('a\nb\nc', 3)).toBe('a\nb\nc');
+    });
+
+    it('treats a trailing newline as a terminator, not a blank line', () => {
+      // Without this, `-n 1` on a normal log file returns an empty string.
+      expect(tailLines('a\nb\n', 1)).toBe('b');
+    });
+
+    it('handles empty content', () => {
+      expect(tailLines('', 5)).toBe('');
+    });
+  });
+
+  describe('handleDoctor', () => {
+    it('formats a schema error instead of throwing a stack trace', async () => {
+      mockLoadConfig.mockImplementation(() => {
+        throw new Error('Invalid server configuration:\n  - /mcpServers/0: must have required property');
+      });
+
+      await expect(handleDoctor(SOCKET)).rejects.toThrow('process.exit(1)');
+
+      expect(exitCode).toBe(1);
+      expect(stdoutLines.some(l => l.includes('Invalid configuration'))).toBe(true);
+      expect(stdoutLines.some(l => l.includes('must have required property'))).toBe(true);
+      // The backend section is pointless if the config never parsed.
+      expect(mockSendRequest).not.toHaveBeenCalled();
+    });
+
+    it('reports a missing config without claiming health', async () => {
+      mockLoadConfig.mockReturnValue(null);
+      mockSendRequest.mockResolvedValue({ id: '1', result: { pid: 1, servers: [] } });
+
+      await expect(handleDoctor(SOCKET)).rejects.toThrow('process.exit(1)');
+
+      expect(stdoutLines.some(l => l.includes('No servers.json found'))).toBe(true);
+    });
+
+    it('passes when every configured server is connected', async () => {
+      mockLoadConfig.mockReturnValue({
+        servers: [{ name: 'fs', command: 'node' }],
+        excludePatterns: [],
+        noCompressPatterns: [],
+      });
+      mockSendRequest.mockResolvedValue({
+        id: '1',
+        result: { pid: 42, servers: [{ name: 'fs', connected: true }] },
+      });
+
+      await handleDoctor(SOCKET);
+
+      expect(exitCode).toBeUndefined();
+      expect(stdoutLines.some(l => l.includes('All checks passed'))).toBe(true);
+    });
+
+    it('surfaces a failed backend and its error', async () => {
+      mockLoadConfig.mockReturnValue({
+        servers: [{ name: 'fs', command: 'node' }, { name: 'gh', command: 'node' }],
+        excludePatterns: [],
+        noCompressPatterns: [],
+      });
+      mockSendRequest.mockResolvedValue({
+        id: '1',
+        result: {
+          pid: 42,
+          servers: [
+            { name: 'fs', connected: true },
+            { name: 'gh', connected: false, lastError: 'ENOENT' },
+          ],
+        },
+      });
+
+      await expect(handleDoctor(SOCKET)).rejects.toThrow('process.exit(1)');
+
+      expect(stdoutLines.some(l => l.includes('gh: ENOENT'))).toBe(true);
+      expect(stdoutLines.some(l => l.includes('Some checks failed'))).toBe(true);
+    });
+
+    it('flags a configured server the running daemon has never seen', async () => {
+      // Added to servers.json after the daemon started: its warm connections
+      // are stale and a restart is the fix.
+      mockLoadConfig.mockReturnValue({
+        servers: [{ name: 'fs', command: 'node' }, { name: 'added-later', command: 'node' }],
+        excludePatterns: [],
+        noCompressPatterns: [],
+      });
+      mockSendRequest.mockResolvedValue({
+        id: '1',
+        result: { pid: 42, servers: [{ name: 'fs', connected: true }] },
+      });
+
+      await expect(handleDoctor(SOCKET)).rejects.toThrow('process.exit(1)');
+
+      expect(stdoutLines.some(l => l.includes('added-later'))).toBe(true);
+      expect(stdoutLines.some(l => l.includes('daemon restart'))).toBe(true);
     });
   });
 });
