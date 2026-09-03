@@ -83,10 +83,15 @@ export const serverConfigSchema = {
         // Exactly one transport. `oneOf` also rejects an entry that sets both,
         // so no extra `not` is needed to catch command+url.
         oneOf: [{ required: ['command'] }, { required: ['url'] }],
-        // Strict: a misspelled key like "comand" used to validate happily and
-        // then the server simply never started, with nothing in the log
-        // pointing at the typo.
-        additionalProperties: false,
+        // Deliberately permissive. A misspelled *required* key like "comand"
+        // is already rejected by the oneOf above - neither command nor url
+        // survives the typo - so strictness here would only add misspelled
+        // optional keys, and it would pay for that by failing the entire
+        // config, and so every server, on something like Claude Desktop's
+        // `disabled` copied in from another client. The loader warns about
+        // unrecognized keys instead, which keeps the diagnostic without
+        // turning a cosmetic field into total loss of tools.
+        additionalProperties: true,
       },
     },
     excludeTools: {

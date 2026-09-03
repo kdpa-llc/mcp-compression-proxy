@@ -317,25 +317,65 @@ describe('Config Loader', () => {
       expect(result!.servers[1].enabled).toBe(false);
     });
 
-    it('should reject unknown server properties', async () => {
-      // Deliberately reversed: this used to pass unknown keys straight through,
-      // so a misspelled "command" produced a server that never started and no
-      // diagnostic naming the typo.
+    it('should warn about unknown server properties without failing', async () => {
+      // A misspelled *required* key is already caught by the schema's oneOf, so
+      // strictness here would only cover optional ones - at the price of
+      // failing every server over a field copied from another MCP client's
+      // config format. Warn loudly, keep running.
       const configWithUnknownProps = {
         mcpServers: [
           {
             name: 'test-server',
             command: 'npx',
-            customField: 'not part of the schema',
+            disabled: true,
+            timout: 60,
           },
         ],
       };
 
       writeFileSync(join(testDir, 'servers.json'), JSON.stringify(configWithUnknownProps));
 
-      const { loadJSONServers } = await importLoader();
+      const warnings: string[] = [];
+      const spy = jest.spyOn(console, 'error').mockImplementation((msg: unknown) => {
+        warnings.push(String(msg));
+      });
 
-      expect(() => loadJSONServers()).toThrow('Invalid server configuration');
+      const { loadJSONServers } = await importLoader();
+      const result = loadJSONServers();
+
+      spy.mockRestore();
+
+      expect(result!.servers).toHaveLength(1);
+      expect(result!.servers[0].name).toBe('test-server');
+
+      const warning = warnings.find((line) => line.includes('unrecognized field'));
+      expect(warning).toBeDefined();
+      expect(warning).toContain('test-server');
+      expect(warning).toContain('disabled');
+      expect(warning).toContain('timout');
+    });
+
+    it('should not warn when every server field is recognized', async () => {
+      writeFileSync(
+        join(testDir, 'servers.json'),
+        JSON.stringify({
+          mcpServers: [
+            { name: 'clean', command: 'npx', args: ['-y'], timeout: 30, enabled: true },
+          ],
+        })
+      );
+
+      const warnings: string[] = [];
+      const spy = jest.spyOn(console, 'error').mockImplementation((msg: unknown) => {
+        warnings.push(String(msg));
+      });
+
+      const { loadJSONServers } = await importLoader();
+      loadJSONServers();
+
+      spy.mockRestore();
+
+      expect(warnings.some((line) => line.includes('unrecognized field'))).toBe(false);
     });
 
     it('should load per-server timeout configuration', async () => {

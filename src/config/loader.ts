@@ -108,6 +108,26 @@ function validateConfig(config: unknown): ServerConfigJSON {
 
   const validated = config as ServerConfigJSON;
 
+  // Derived from the schema rather than hand-listed, so a field added there
+  // cannot start warning about itself.
+  const knownServerKeys = new Set(
+    Object.keys(serverConfigSchema.properties.mcpServers.items.properties)
+  );
+
+  for (const server of validated.mcpServers) {
+    const unknown = Object.keys(server).filter((key) => !knownServerKeys.has(key));
+
+    if (unknown.length > 0) {
+      // A warning, not a throw. These are usually keys carried over from
+      // another MCP client's config format, and failing here would take every
+      // server down over a field this proxy simply does not read.
+      console.error(
+        `[Config] WARNING: server "${server.name}" has unrecognized field(s): ${unknown.join(', ')}. ` +
+          `They are ignored. Check the spelling if you expected them to take effect.`
+      );
+    }
+  }
+
   // The schema's `oneOf` only rules out `command` next to `url`; it has nothing
   // to say about the stdio-only fields, so a remote entry carrying `args` would
   // validate and then silently drop them. That combination is always a typo, so
