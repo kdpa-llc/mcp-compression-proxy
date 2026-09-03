@@ -1,5 +1,6 @@
 import type { Logger } from 'pino';
 import type { MCPClientManager } from '../mcp/client-manager.js';
+import type { ConnectionLifecycleState } from '../types/index.js';
 import type { CompressionCache } from './compression-cache.js';
 import type { SessionManager } from './session-manager.js';
 import type { ConfigResult } from '../config/loader.js';
@@ -10,6 +11,7 @@ type DetailLevel = 'summary' | 'full';
 type ServerToolStats = {
   name: string;
   connected: boolean;
+  state?: ConnectionLifecycleState;
   error?: string;
   toolsTotal: number;
   toolsCompressed: number;
@@ -122,9 +124,6 @@ export class StatsService {
     const noCompressPatterns = config.noCompressPatterns || [];
 
     const serverStatuses = this.clientManager.getServerStatuses();
-    const connectedClients = this.clientManager.getConnectedClients();
-
-    const connectedClientMap = new Map(connectedClients.map((c) => [c.name, c.client]));
 
     const targetStatuses = serverFilter
       ? serverStatuses.filter((s) => s.name === serverFilter)
@@ -137,43 +136,11 @@ export class StatsService {
     const serverStats: ServerToolStats[] = [];
 
     for (const status of targetStatuses) {
-      if (!status.connected) {
-        serverStats.push({
-          name: status.name,
-          connected: false,
-          error: status.lastError || 'Not connected',
-          toolsTotal: 0,
-          toolsCompressed: 0,
-          toolsUncompressed: 0,
-          toolsExcluded: 0,
-          coveragePercent: 0,
-          originalChars: 0,
-          compressedChars: 0,
-          estimatedTokensSaved: 0,
-        });
-        continue;
-      }
-
-      const client = connectedClientMap.get(status.name);
-      if (!client) {
-        serverStats.push({
-          name: status.name,
-          connected: false,
-          error: 'Client not available',
-          toolsTotal: 0,
-          toolsCompressed: 0,
-          toolsUncompressed: 0,
-          toolsExcluded: 0,
-          coveragePercent: 0,
-          originalChars: 0,
-          compressedChars: 0,
-          estimatedTokensSaved: 0,
-        });
-        continue;
-      }
-
       try {
-        const result = await client.listTools();
+        const result = await this.clientManager.withClient(
+          status.name,
+          async ({ client }) => client.listTools()
+        );
         const filtered = result.tools.filter(
           (tool) => !matchesIgnorePattern(`${status.name}__${tool.name}`, excludePatterns)
         );
@@ -207,6 +174,7 @@ export class StatsService {
         serverStats.push({
           name: status.name,
           connected: true,
+          state: 'ready',
           toolsTotal,
           toolsCompressed,
           toolsUncompressed,
@@ -222,7 +190,9 @@ export class StatsService {
 
         serverStats.push({
           name: status.name,
-          connected: true,
+          connected: false,
+          state: this.clientManager.getServerStatuses()
+            .find((current) => current.name === status.name)?.state,
           error: message,
           toolsTotal: 0,
           toolsCompressed: 0,
@@ -248,8 +218,8 @@ export class StatsService {
     const payload: StatsPayload = {
       summary: {
         serversConfigured: config.servers?.length || serverStatuses.length,
-        serversConnected: serverStatuses.filter((s) => s.connected).length,
-        serversWithErrors: serverStatuses.filter((s) => !s.connected || s.lastError).length,
+        serversConnected: serverStats.filter((s) => s.connected).length,
+        serversWithErrors: serverStats.filter((s) => !s.connected || s.error).length,
         toolsTotal: aggregateTotalTools,
         toolsCompressed: aggregateCompressed,
         toolsUncompressed: Math.max(aggregateTotalTools - aggregateCompressed, 0),

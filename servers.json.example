@@ -25,8 +25,10 @@
   ],
   "inheritEnv": true,
   "compressionFallbackBehavior": "original",
+  "softMaxConnectionAgeSeconds": 3600,
+  "hardMaxConnectionAgeSeconds": 28800,
   "cli": {
-    "payloadThreshold": 500,
+    "payloadThreshold": 10000,
     "autoStartDaemon": true,
     "daemonLogLevel": "info"
   }

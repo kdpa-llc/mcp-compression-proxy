@@ -51,10 +51,7 @@ export const serverConfigSchema = {
           inheritEnv: {
             description:
               "Which of the proxy's own environment variables this server inherits. true = inherit all (default), false = inherit only the transport's safe defaults (PATH, HOME, ...), or an array of variable names to inherit. Values in `env` always take precedence. Overrides the top-level `inheritEnv`.",
-            oneOf: [
-              { type: 'boolean' },
-              { type: 'array', items: { type: 'string' } },
-            ],
+            oneOf: [{ type: 'boolean' }, { type: 'array', items: { type: 'string' } }],
           },
           enabled: {
             type: 'boolean',
@@ -67,6 +64,41 @@ export const serverConfigSchema = {
           // Accepted but never read. Presence of `url` is the transport
           // discriminator; keeping `type` declared only stops configs that
           // already carry it from failing the stricter check below.
+          softMaxConnectionAgeSeconds: {
+            type: 'number',
+            description:
+              'Lazy recycle threshold in seconds. On the first use at or after this age, the old connection drains and a fresh backend is opened. 0 disables.',
+            minimum: 0,
+          },
+          hardMaxConnectionAgeSeconds: {
+            type: 'number',
+            description:
+              'Absolute connection lifetime in seconds. At this age the connection drains, closes after active calls finish, and remains closed until reused. 0 disables.',
+            minimum: 0,
+          },
+          maxConnectionAgeSeconds: {
+            type: 'number',
+            description: 'Deprecated alias for softMaxConnectionAgeSeconds.',
+            minimum: 0,
+          },
+          authErrorPatterns: {
+            type: 'array',
+            description:
+              'Case-insensitive substrings that identify authentication failures in tool results or thrown errors.',
+            items: {
+              type: 'string',
+              minLength: 1,
+            },
+          },
+          authRetryTools: {
+            type: 'array',
+            description:
+              'Tool-name wildcard patterns that are safe to retry once after an authentication failure reopens the backend.',
+            items: {
+              type: 'string',
+              minLength: 1,
+            },
+          },
           type: {
             type: 'string',
             description: 'Ignored. Kept for compatibility with existing configs.',
@@ -96,22 +128,59 @@ export const serverConfigSchema = {
     },
     excludeTools: {
       type: 'array',
-      description: 'Tool name patterns to exclude from tool list entirely (supports wildcards, case-insensitive). Examples: "server__*" (all tools from server), "*__set*" (tools with "set" in name)',
+      description:
+        'Tool name patterns to exclude from tool list entirely (supports wildcards, case-insensitive). Examples: "server__*" (all tools from server), "*__set*" (tools with "set" in name)',
       items: {
         type: 'string',
       },
     },
     noCompressTools: {
       type: 'array',
-      description: 'Tool name patterns whose original descriptions should always be shown to the LLM (supports wildcards, case-insensitive). Tools are still compressed and cached in the background for efficiency, but their original descriptions are always displayed when listing tools.',
+      description:
+        'Tool name patterns whose original descriptions should always be shown to the LLM (supports wildcards, case-insensitive). Tools are still compressed and cached in the background for efficiency, but their original descriptions are always displayed when listing tools.',
       items: {
         type: 'string',
       },
     },
     defaultTimeout: {
       type: 'number',
-      description: 'Default timeout in seconds for all servers (can be overridden per-server). Default is 30 seconds if not specified.',
+      description:
+        'Default timeout in seconds for all servers (can be overridden per-server). Default is 30 seconds if not specified.',
       minimum: 1,
+    },
+    softMaxConnectionAgeSeconds: {
+      type: 'number',
+      description:
+        'Global lazy recycle threshold in seconds. Default is 3600 (1 hour). 0 disables.',
+      minimum: 0,
+    },
+    hardMaxConnectionAgeSeconds: {
+      type: 'number',
+      description:
+        'Global absolute connection lifetime in seconds. Default is 28800 (8 hours). 0 disables.',
+      minimum: 0,
+    },
+    maxConnectionAgeSeconds: {
+      type: 'number',
+      description: 'Deprecated alias for softMaxConnectionAgeSeconds.',
+      minimum: 0,
+    },
+    authErrorPatterns: {
+      type: 'array',
+      description: 'Global case-insensitive substrings that identify authentication failures.',
+      items: {
+        type: 'string',
+        minLength: 1,
+      },
+    },
+    authRetryTools: {
+      type: 'array',
+      description:
+        'Global tool-name wildcard patterns that are safe to retry once after authentication recovery.',
+      items: {
+        type: 'string',
+        minLength: 1,
+      },
     },
     cli: {
       type: 'object',
@@ -119,9 +188,10 @@ export const serverConfigSchema = {
       properties: {
         payloadThreshold: {
           type: 'number',
-          description: 'Character threshold for redirecting large tool outputs to temp files. Default: 500.',
+          description:
+            'Character threshold for caching large tool outputs in private files. Default: 10000.',
           minimum: 0,
-          default: 500,
+          default: 10000,
         },
         autoStartDaemon: {
           type: 'boolean',
@@ -140,10 +210,7 @@ export const serverConfigSchema = {
     inheritEnv: {
       description:
         "Default environment inheritance for all servers (can be overridden per-server). true = pass the proxy's full environment to every backend server (default), false = pass only the transport's safe defaults (PATH, HOME, ...), or an array of variable names to pass through.",
-      oneOf: [
-        { type: 'boolean' },
-        { type: 'array', items: { type: 'string' } },
-      ],
+      oneOf: [{ type: 'boolean' }, { type: 'array', items: { type: 'string' } }],
     },
     compressionFallbackBehavior: {
       type: 'string',
@@ -173,12 +240,22 @@ export type ServerConfigJSON = {
     headers?: Record<string, string>;
     enabled?: boolean;
     timeout?: number;
+    softMaxConnectionAgeSeconds?: number;
+    hardMaxConnectionAgeSeconds?: number;
+    maxConnectionAgeSeconds?: number;
+    authErrorPatterns?: string[];
+    authRetryTools?: string[];
     type?: string;
     autoApprove?: string[];
   }>;
   excludeTools?: string[];
   noCompressTools?: string[];
   defaultTimeout?: number;
+  softMaxConnectionAgeSeconds?: number;
+  hardMaxConnectionAgeSeconds?: number;
+  maxConnectionAgeSeconds?: number;
+  authErrorPatterns?: string[];
+  authRetryTools?: string[];
   cli?: {
     payloadThreshold?: number;
     autoStartDaemon?: boolean;

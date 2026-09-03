@@ -1,6 +1,6 @@
 import { sendRequest, isDaemonRunning } from './ipc-client.js';
 import { loadJSONServers } from '../config/loader.js';
-import type { ToolEntry, ToolInfoResult } from '../types/index.js';
+import type { ServerStatus, ToolEntry, ToolInfoResult } from '../types/index.js';
 
 /**
  * Format tool entries as aligned plain text:
@@ -10,10 +10,10 @@ function formatToolList(tools: ToolEntry[]): string {
   if (tools.length === 0) return 'No tools found.';
 
   // Calculate column width for alignment
-  const names = tools.map(t => `${t.server}/${t.tool}`);
-  const maxLen = Math.min(Math.max(...names.map(n => n.length)), 40);
+  const names = tools.map((t) => `${t.server}/${t.tool}`);
+  const maxLen = Math.min(Math.max(...names.map((n) => n.length)), 40);
 
-  const lines = tools.map(t => {
+  const lines = tools.map((t) => {
     const name = `${t.server}/${t.tool}`;
     const padded = name.padEnd(maxLen + 4);
     return `${padded}${t.description}`;
@@ -37,7 +37,7 @@ export async function handleTools(socketPath: string): Promise<void> {
   console.log(formatToolList(result.tools));
 
   // Summary line
-  const serverCount = new Set(result.tools.map(t => t.server)).size;
+  const serverCount = new Set(result.tools.map((t) => t.server)).size;
   console.log(`\n(${result.count} tools across ${serverCount} servers)`);
 }
 
@@ -101,7 +101,7 @@ export async function handleCall(
 ): Promise<void> {
   const slashIndex = serverTool.indexOf('/');
   if (slashIndex === -1) {
-    console.error('Usage: mcp-cli call <server>/<tool> \'<json_payload>\'');
+    console.error("Usage: mcp-cli call <server>/<tool> '<json_payload>'");
     process.exit(1);
   }
 
@@ -136,6 +136,66 @@ export async function handleCall(
   }
 
   console.log(result.output);
+}
+
+export async function handlePayloadRead(
+  socketPath: string,
+  id: string,
+  options: { offset?: number; length?: number; all?: boolean } = {}
+): Promise<void> {
+  const response = await sendRequest(socketPath, 'payload-read', {
+    id,
+    ...options,
+  });
+
+  if (response.error) {
+    console.error(`Error: ${response.error.message}`);
+    process.exit(1);
+  }
+
+  console.log(JSON.stringify(response.result, null, 2));
+}
+
+export async function handlePayloadFind(
+  socketPath: string,
+  id: string,
+  query: string
+): Promise<void> {
+  const response = await sendRequest(socketPath, 'payload-find', {
+    id,
+    query,
+  });
+
+  if (response.error) {
+    console.error(`Error: ${response.error.message}`);
+    process.exit(1);
+  }
+
+  console.log(JSON.stringify(response.result, null, 2));
+}
+
+export async function handleScript(socketPath: string, jsonPayload: string): Promise<void> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonPayload);
+  } catch {
+    console.error('Error: Invalid JSON script');
+    process.exit(1);
+  }
+
+  const steps = Array.isArray(parsed) ? parsed : (parsed as { steps?: unknown })?.steps;
+  if (!Array.isArray(steps)) {
+    console.error('Error: Script must be an array of steps or an object with a steps array');
+    process.exit(1);
+  }
+
+  const response = await sendRequest(socketPath, 'script', { steps });
+  if (response.error) {
+    console.error(`Error: ${response.error.message}`);
+    process.exit(1);
+  }
+
+  console.log(JSON.stringify(response.result, null, 2));
 }
 
 /**
@@ -191,7 +251,9 @@ export async function handleDoctor(socketPath: string): Promise<void> {
       configuredServers = config.servers.map((server) => server.name);
       const disabled = config.servers.filter((server) => server.enabled === false).length;
 
-      console.log(`  ✓ Loaded ${config.servers.length} server(s)${disabled ? `, ${disabled} disabled` : ''}`);
+      console.log(
+        `  ✓ Loaded ${config.servers.length} server(s)${disabled ? `, ${disabled} disabled` : ''}`
+      );
       if (config.excludePatterns.length > 0) {
         console.log(`    excludeTools: ${config.excludePatterns.join(', ')}`);
       }
@@ -267,29 +329,50 @@ export async function handleDaemonStatus(socketPath: string): Promise<void> {
 
   const status = response.result as {
     pid: number;
+    releaseId?: string;
     uptime: number;
     connectedServers: number;
     totalServers: number;
     cachedToolCount: number;
     socketPath: string;
-    servers: Array<{ name: string; connected: boolean; lastError?: string }>;
+    servers: ServerStatus[];
   };
 
   const hours = Math.floor(status.uptime / 3600);
   const minutes = Math.floor((status.uptime % 3600) / 60);
   const uptimeStr = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
 
-  console.log(`Daemon running (PID ${status.pid}, uptime ${uptimeStr})`);
-  console.log(`Servers: ${status.connectedServers} connected, ${status.totalServers - status.connectedServers} failed`);
+  console.log(
+    `Daemon running (PID ${status.pid}, release ${status.releaseId ?? 'legacy'}, uptime ${uptimeStr})`
+  );
+  const failed = status.servers.filter((server) => server.state === 'failed');
+  const inactive = status.servers.filter(
+    (server) => !server.connected && server.state !== 'failed'
+  );
+  console.log(
+    `Servers: ${status.connectedServers} connected, ${inactive.length} inactive, ${failed.length} failed`
+  );
   console.log(`Tools: ${status.cachedToolCount} cached`);
   console.log(`Socket: ${status.socketPath}`);
 
-  // Show failed servers
-  const failed = status.servers.filter(s => !s.connected);
-  if (failed.length > 0) {
-    console.log('\nFailed servers:');
-    for (const s of failed) {
-      console.log(`  - ${s.name}: ${s.lastError || 'unknown error'}`);
+  if (status.servers.length > 0) {
+    console.log('\nConnection lifecycle:');
+    for (const server of status.servers) {
+      const details = [
+        `state=${server.state ?? (server.connected ? 'ready' : 'failed')}`,
+        server.generation ? `generation=${server.generation}` : undefined,
+        server.connectionAgeSeconds !== undefined
+          ? `age=${server.connectionAgeSeconds}s`
+          : undefined,
+        `active=${server.activeCalls ?? 0}`,
+        `recycles=${server.recycleCount ?? 0}`,
+        `auth-resets=${server.authInvalidations ?? 0}`,
+        `failures=${server.consecutiveFailures ?? 0}`,
+      ].filter((value): value is string => value !== undefined);
+      console.log(`  - ${server.name}: ${details.join(', ')}`);
+      if (server.lastError) {
+        console.log(`    last error: ${server.lastError}`);
+      }
     }
   }
 }

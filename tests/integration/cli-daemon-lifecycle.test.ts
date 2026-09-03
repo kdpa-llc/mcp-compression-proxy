@@ -52,6 +52,9 @@ describe('mcp-cli daemon lifecycle', () => {
     writeFileSync(
       join(testHome, '.mcp-compression-proxy', 'servers.json'),
       JSON.stringify({
+        cli: {
+          payloadThreshold: 10,
+        },
         mcpServers: [
           {
             name: 'local-skills',
@@ -99,6 +102,61 @@ describe('mcp-cli daemon lifecycle', () => {
 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain('local-skills/single_tool');
+  }, 30000);
+
+  it('caches, finds, and reads a large tool result', async () => {
+    const call = await runCli([
+      'call',
+      'local-skills/single_tool',
+      '{}',
+    ]);
+
+    expect(call.code).toBe(0);
+    const payloadId = call.stdout.match(/Payload ID: ([a-f0-9]+)/)?.[1];
+    expect(payloadId).toBeDefined();
+
+    const found = await runCli([
+      'output',
+      'find',
+      payloadId!,
+      'executed successfully',
+    ]);
+    expect(found.code).toBe(0);
+    expect(found.stdout).toContain('executed successfully');
+
+    const read = await runCli([
+      'output',
+      'read',
+      payloadId!,
+      '0',
+      'all',
+    ]);
+    expect(read.code).toBe(0);
+    expect(read.stdout).toContain('Single tool executed successfully');
+  }, 30000);
+
+  it('runs a declarative call script through the daemon', async () => {
+    const script = JSON.stringify([
+      {
+        id: 'first',
+        server: 'local-skills',
+        tool: 'single_tool',
+        arguments: {},
+      },
+      {
+        id: 'second',
+        server: 'local-skills',
+        tool: 'single_tool',
+        arguments: {},
+      },
+    ]);
+
+    const result = await runCli(['script', script]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('"id": "first"');
+    expect(result.stdout).toContain('"id": "second"');
+    expect(result.stdout).toContain('"payload"');
   }, 30000);
 
   it('is idempotent - starting again reports already running', async () => {

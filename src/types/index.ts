@@ -22,6 +22,16 @@ export interface MCPServerConfig {
   headers?: Record<string, string>;
   enabled?: boolean;
   timeout?: number; // Timeout in seconds for server initialization
+  /** Lazy recycle threshold. Reopen on the next use after this age. 0 disables. */
+  softMaxConnectionAgeSeconds?: number;
+  /** Absolute lifetime. Drain at this age and close after active calls finish. 0 disables. */
+  hardMaxConnectionAgeSeconds?: number;
+  /** Deprecated alias for softMaxConnectionAgeSeconds. */
+  maxConnectionAgeSeconds?: number;
+  /** Case-insensitive substrings that identify an authentication failure. */
+  authErrorPatterns?: string[];
+  /** Tool-name wildcard patterns that are safe to retry once after auth recovery. */
+  authRetryTools?: string[];
 }
 
 export interface MCPClientConnection {
@@ -41,6 +51,22 @@ export interface MCPClientConnection {
    */
   config: MCPServerConfig;
 }
+
+export interface ConnectionLifecycleDefaults {
+  softMaxConnectionAgeSeconds?: number;
+  hardMaxConnectionAgeSeconds?: number;
+  /** Deprecated alias for softMaxConnectionAgeSeconds. */
+  maxConnectionAgeSeconds?: number;
+  authErrorPatterns?: string[];
+  authRetryTools?: string[];
+}
+
+export type ConnectionLifecycleState =
+  | 'closed'
+  | 'starting'
+  | 'ready'
+  | 'draining'
+  | 'failed';
 
 export interface AggregatedToolsResponse {
   tools: Array<{
@@ -73,6 +99,20 @@ export interface ServerStatus {
   name: string;
   connected: boolean;
   lastError?: string;
+  state?: ConnectionLifecycleState;
+  activeCalls?: number;
+  drainingConnections?: number;
+  generation?: number;
+  connectedAt?: number;
+  lastUsedAt?: number;
+  lastAttemptAt?: number;
+  lastSuccessAt?: number;
+  connectionAgeSeconds?: number;
+  softMaxConnectionAgeSeconds?: number;
+  hardMaxConnectionAgeSeconds?: number;
+  recycleCount?: number;
+  authInvalidations?: number;
+  consecutiveFailures?: number;
 }
 
 export interface HealthResponse {
@@ -96,7 +136,16 @@ export interface ToolsQueryParams {
 
 // ── CLI IPC Types ──
 
-export type IPCMethod = 'tools' | 'search' | 'info' | 'call' | 'stats' | 'daemon-status';
+export type IPCMethod =
+  | 'tools'
+  | 'search'
+  | 'info'
+  | 'call'
+  | 'payload-read'
+  | 'payload-find'
+  | 'script'
+  | 'stats'
+  | 'daemon-status';
 
 export interface IPCRequest {
   id: string;
@@ -111,7 +160,7 @@ export interface IPCResponse {
 }
 
 export interface CLIConfig {
-  payloadThreshold?: number;   // chars, default 500
+  payloadThreshold?: number;   // chars, default 10,000
   autoStartDaemon?: boolean;   // default true
   daemonLogLevel?: string;     // default 'info'
 }
@@ -119,6 +168,7 @@ export interface CLIConfig {
 export interface DaemonStatusResult {
   running: boolean;
   pid: number;
+  releaseId?: string;
   uptime: number;
   servers: ServerStatus[];
   /**
@@ -143,4 +193,3 @@ export interface ToolInfoResult {
   description: string;
   inputSchema: object;
 }
-

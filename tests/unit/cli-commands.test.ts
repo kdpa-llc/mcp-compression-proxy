@@ -16,6 +16,9 @@ import {
   handleSearch,
   handleInfo,
   handleCall,
+  handlePayloadRead,
+  handlePayloadFind,
+  handleScript,
   handleStats,
   handleDaemonStatus,
   handleDoctor,
@@ -237,6 +240,80 @@ describe('CLI commands', () => {
 
       await expect(handleCall(SOCKET, 'fs/read_file', '{}')).rejects.toThrow('process.exit(1)');
       expect(exitCode).toBe(1);
+    });
+  });
+
+  describe('large output commands', () => {
+    it('reads a cached payload', async () => {
+      mockSendRequest.mockResolvedValue({
+        id: '1',
+        result: {
+          id: 'payload-1',
+          content: 'chunk',
+          offset: 0,
+          nextOffset: 5,
+          totalChars: 5,
+          eof: true,
+        },
+      });
+
+      await handlePayloadRead(SOCKET, 'payload-1', {
+        offset: 0,
+        length: 5,
+      });
+
+      expect(mockSendRequest).toHaveBeenCalledWith(
+        SOCKET,
+        'payload-read',
+        { id: 'payload-1', offset: 0, length: 5 }
+      );
+      expect(stdoutLines.join('\n')).toContain('chunk');
+    });
+
+    it('finds text in a cached payload', async () => {
+      mockSendRequest.mockResolvedValue({
+        id: '1',
+        result: {
+          id: 'payload-1',
+          query: 'needle',
+          matches: [{ line: 2, offset: 8, match: 'needle', context: 'needle' }],
+        },
+      });
+
+      await handlePayloadFind(SOCKET, 'payload-1', 'needle');
+
+      expect(mockSendRequest).toHaveBeenCalledWith(
+        SOCKET,
+        'payload-find',
+        { id: 'payload-1', query: 'needle' }
+      );
+      expect(stdoutLines.join('\n')).toContain('needle');
+    });
+
+    it('runs a script from either an array or steps object', async () => {
+      mockSendRequest.mockResolvedValue({
+        id: '1',
+        result: { steps: [{ id: 'one', output: 'ok' }] },
+      });
+
+      await handleScript(
+        SOCKET,
+        JSON.stringify([{ id: 'one', server: 's', tool: 't' }])
+      );
+
+      expect(mockSendRequest).toHaveBeenCalledWith(
+        SOCKET,
+        'script',
+        { steps: [{ id: 'one', server: 's', tool: 't' }] }
+      );
+      expect(stdoutLines.join('\n')).toContain('"one"');
+    });
+
+    it('rejects invalid script JSON before IPC', async () => {
+      await expect(handleScript(SOCKET, 'not-json')).rejects.toThrow(
+        'process.exit(1)'
+      );
+      expect(mockSendRequest).not.toHaveBeenCalled();
     });
   });
 
