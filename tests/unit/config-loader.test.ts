@@ -19,7 +19,16 @@ describe('Config Loader', () => {
 
   beforeEach(() => {
     // Create temp directory for tests
-    testDir = join(tmpdir(), `mcp-test-${Date.now()}`);
+    // Prefix, pid and a random suffix, not just a timestamp: this suite and
+    // compression-persistence both used `mcp-test-<ms>`, so two beforeEach
+    // calls landing in the same millisecond in parallel workers shared a
+    // directory and clobbered each other's fixtures. This suite chdir's into
+    // it and writes servers.json, so losing the race meant a config that
+    // should have thrown simply was not there to load.
+    testDir = join(
+      tmpdir(),
+      `mcp-loader-test-${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2)}`
+    );
     mkdirSync(testDir, { recursive: true });
 
     // Save original values
