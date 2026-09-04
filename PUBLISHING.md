@@ -36,8 +36,9 @@ The project uses [semantic-release](https://github.com/semantic-release/semantic
 
 `@semantic-release/git` finishes the release by pushing the generated
 `CHANGELOG.md`, package versions, and `src/version.ts` directly to `main` as
-`github-actions[bot]`. The repository therefore protects `main` with a
-**repository ruleset**, not a classic branch protection rule.
+the user authenticated by the `RELEASE_TOKEN` Actions secret. The repository
+therefore protects `main` with a **repository ruleset**, not a classic branch
+protection rule.
 
 The `main` ruleset must:
 
@@ -45,22 +46,39 @@ The `main` ruleset must:
 - require the four CI checks (`Build Project`, `Lint Code`, `Run Tests (22.x)`,
   and `Run Tests (24.x)`);
 - block force pushes and branch deletion; and
-- grant the **github-actions[bot]** user an `Always allow` bypass.
+- grant the **moscaverd** user, which owns the release PAT, an `Always allow`
+  bypass.
 
-That bypass is intentionally limited to the built-in `GITHUB_TOKEN` already
-used by `release.yml`. It lets the release commit bypass every rule without a
-personal access token, a separate GitHub App, or a stored private key.
+The workflow uses `RELEASE_TOKEN` for checkout and as semantic-release's
+`GITHUB_TOKEN`. The default Actions `GITHUB_TOKEN` authenticates as a GitHub
+Actions installation, not as `github-actions[bot]`, and therefore does not
+receive a bypass granted to that bot user.
 
 When configuring the ruleset through the API, use `actor_type: "User"` and
-`actor_id: 41898282`. Do not use the GitHub Actions app (`Integration` id
-`15368`) as the bypass actor: GitHub rejects that built-in integration because
-it is not an app installed in the repository's owner organization.
+`actor_id: 1047574` for `moscaverd`. Do not use the GitHub Actions app
+(`Integration` id `15368`) as the bypass actor: GitHub rejects that built-in
+integration because it is not an app installed in the repository's owner
+organization.
 
 Do not add a classic protection rule for `main` alongside the ruleset. GitHub
 enforces both when they overlap, and classic protection cannot exempt
-`github-actions[bot]` from required status checks on the newly created release
-commit. When migrating protection, create and verify the active ruleset before
-deleting the classic rule so `main` is never left unprotected.
+the release from required status checks on the newly created release commit.
+When migrating protection, create and verify the active ruleset before deleting
+the classic rule so `main` is never left unprotected.
+
+### GitHub Release Credential
+
+Create an Actions secret named `RELEASE_TOKEN`. It may be repository-scoped or
+an organization secret whose repository access includes this repository. Its
+value must be a PAT owned by `moscaverd`, with access to this repository and
+permission to read and write repository contents.
+
+GitHub does not allow an existing Actions secret's value to be read back. If
+the token is currently stored only as a secret in another repository, create a
+replacement PAT (or use a securely retained copy) and store it here. PAT
+expiration and rotation are manual: replace the secret before expiry, then use
+the release workflow's `workflow_dispatch` trigger to retry any release that
+failed before publication.
 
 ### Commit Types and Version Bumps
 
@@ -194,8 +212,10 @@ mcp-compression-proxy --version
 ### "Protected branch update failed" during `@semantic-release/git`
 
 - Confirm `main` is governed by the repository ruleset described above.
-- Confirm **github-actions[bot]** is present in its bypass list with
+- Confirm **moscaverd** is present in its bypass list with
   `Always allow`.
+- Confirm `RELEASE_TOKEN` contains a valid PAT owned by `moscaverd`, has access
+  to this repository, and can write repository contents.
 - Remove any overlapping classic branch protection rule after verifying the
   ruleset is active.
 - Re-run the failed release workflow. A failure in the `prepare` phase happens

@@ -7,6 +7,9 @@ on:
       - next
       - beta
       - alpha
+  # Allows a release to be retried after fixing an external setting, such as
+  # an expired RELEASE_TOKEN, without creating an empty commit.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -20,11 +23,34 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Check the credential before checkout so an expired or missing token is
+      # reported directly instead of surfacing later as an ambiguous git error.
+      - name: Verify RELEASE_TOKEN
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          if [ -z "$RELEASE_TOKEN" ]; then
+            echo "::error title=RELEASE_TOKEN missing::The RELEASE_TOKEN secret is not available to this repository. semantic-release pushes its release commit to protected branches, so the default GITHUB_TOKEN cannot be used. Add the PAT for the ruleset bypass identity and grant it access to this repository."
+            exit 1
+          fi
+
+          status=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $RELEASE_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/user || echo "000")
+
+          if [ "$status" != "200" ]; then
+            echo "::error title=RELEASE_TOKEN rejected::GitHub returned HTTP $status for RELEASE_TOKEN. The PAT is expired, revoked, or invalid; replace the secret before retrying this workflow."
+            exit 1
+          fi
+
+          echo "RELEASE_TOKEN accepted by the GitHub API."
+
       - name: Checkout
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.RELEASE_TOKEN }}
           persist-credentials: true
 
       # Pinned rather than lts/*: npm trusted publishing (OIDC) requires npm
@@ -63,6 +89,6 @@ jobs:
 
       - name: Release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npx semantic-release
