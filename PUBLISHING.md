@@ -32,6 +32,36 @@ The project uses [semantic-release](https://github.com/semantic-release/semantic
    - Publishes to npm
    - Commits version changes back to repository
 
+### Branch Protection and the Release Commit
+
+`@semantic-release/git` finishes the release by pushing the generated
+`CHANGELOG.md`, package versions, and `src/version.ts` directly to `main` as
+`github-actions[bot]`. The repository therefore protects `main` with a
+**repository ruleset**, not a classic branch protection rule.
+
+The `main` ruleset must:
+
+- require pull requests for normal changes;
+- require the four CI checks (`Build Project`, `Lint Code`, `Run Tests (22.x)`,
+  and `Run Tests (24.x)`);
+- block force pushes and branch deletion; and
+- grant the **github-actions[bot]** user an `Always allow` bypass.
+
+That bypass is intentionally limited to the built-in `GITHUB_TOKEN` already
+used by `release.yml`. It lets the release commit bypass every rule without a
+personal access token, a separate GitHub App, or a stored private key.
+
+When configuring the ruleset through the API, use `actor_type: "User"` and
+`actor_id: 41898282`. Do not use the GitHub Actions app (`Integration` id
+`15368`) as the bypass actor: GitHub rejects that built-in integration because
+it is not an app installed in the repository's owner organization.
+
+Do not add a classic protection rule for `main` alongside the ruleset. GitHub
+enforces both when they overlap, and classic protection cannot exempt
+`github-actions[bot]` from required status checks on the newly created release
+commit. When migrating protection, create and verify the active ruleset before
+deleting the classic rule so `main` is never left unprotected.
+
 ### Commit Types and Version Bumps
 
 | Commit Type | Version Bump | Example |
@@ -160,6 +190,17 @@ mcp-compression-proxy --version
 - Regenerate npm token
 - Update NPM_TOKEN in GitHub secrets
 - Ensure token type is "Automation"
+
+### "Protected branch update failed" during `@semantic-release/git`
+
+- Confirm `main` is governed by the repository ruleset described above.
+- Confirm **github-actions[bot]** is present in its bypass list with
+  `Always allow`.
+- Remove any overlapping classic branch protection rule after verifying the
+  ruleset is active.
+- Re-run the failed release workflow. A failure in the `prepare` phase happens
+  before npm publishing and GitHub release creation, so no package cleanup is
+  needed.
 
 ## First-Time Publishing
 
