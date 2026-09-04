@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file. See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.1.0](https://github.com/kdpa-llc/mcp-compression-proxy/compare/v1.0.3...v1.1.0) (2026-09-04)
+
+### Features
+
+* add managed proxy runtime ([#53](https://github.com/kdpa-llc/mcp-compression-proxy/issues/53)) ([ded1561](https://github.com/kdpa-llc/mcp-compression-proxy/commit/ded1561e287e4204de2c53898dd4e9db8c79e99d))
+* remote HTTP servers, reconnect, hot-reload, pagination, staleness, and CLI diagnostics ([#50](https://github.com/kdpa-llc/mcp-compression-proxy/issues/50)) ([dc4fd51](https://github.com/kdpa-llc/mcp-compression-proxy/commit/dc4fd51af2ec0fd11c3c4f94625af5b4f39f1ff1))
+
+### Bug Fixes
+
+* authenticate releases with bypass token ([20746b4](https://github.com/kdpa-llc/mcp-compression-proxy/commit/20746b4a6c8fef2ecd31c35ed958c20abc6e14af))
+
+### Documentation
+
+* document release ruleset bypass ([#55](https://github.com/kdpa-llc/mcp-compression-proxy/issues/55)) ([49bf208](https://github.com/kdpa-llc/mcp-compression-proxy/commit/49bf208f35ea24052ca3a702f5a7bac55c218340))
+* rewrite README around progressive discovery ([#54](https://github.com/kdpa-llc/mcp-compression-proxy/issues/54)) ([2e37f57](https://github.com/kdpa-llc/mcp-compression-proxy/commit/2e37f57bf61438ffa3b164276f592967cd930313))
+
 ## [1.0.3](https://github.com/kdpa-llc/mcp-compression-proxy/compare/v1.0.2...v1.0.3) (2026-08-24)
 
 ### Bug Fixes
