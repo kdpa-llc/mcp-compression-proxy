@@ -1,3 +1,4 @@
+import { testProcessEnv } from '../helpers/test-process-env.js';
 import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
 import { execFile } from 'child_process';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'fs';
@@ -17,7 +18,7 @@ describe('mcp-cli daemon lifecycle', () => {
   const cliPath = join(repoRoot, 'dist/cli/index.js');
   let testHome: string;
 
-  /** Run the CLI with an isolated HOME, resolving even on a non-zero exit. */
+  /** Run the CLI with an isolated lookup root, resolving even on a non-zero exit. */
   function runCli(
     args: string[],
     timeoutMs = 30000
@@ -26,7 +27,7 @@ describe('mcp-cli daemon lifecycle', () => {
       const child = execFile(
         process.execPath,
         [cliPath, ...args],
-        { env: { ...process.env, HOME: testHome }, timeout: timeoutMs },
+        { env: testProcessEnv(testHome), timeout: timeoutMs },
         (error, stdout, stderr) => {
           const code =
             error && typeof (error as { code?: unknown }).code === 'number'

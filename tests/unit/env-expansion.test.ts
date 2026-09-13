@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals
 import { writeFileSync, mkdirSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { configHomeDirectory } from '../../src/config/home-directory.js';
 
 async function importLoader() {
   const loaderPath = '../../src/config/loader.js';
@@ -15,7 +16,6 @@ async function importLoader() {
 describe('config env var expansion', () => {
   let testDir: string;
   let originalCwd: string;
-  let originalHome: string | undefined;
   let stderr: jest.SpiedFunction<typeof console.error>;
 
   const writeConfig = (env: Record<string, string>): void => {
@@ -32,10 +32,9 @@ describe('config env var expansion', () => {
     mkdirSync(testDir, { recursive: true });
 
     originalCwd = process.cwd();
-    originalHome = process.env.HOME;
     process.chdir(testDir);
     // Point the user-level config at an empty dir so only ./servers.json loads.
-    process.env.HOME = testDir;
+    jest.spyOn(configHomeDirectory, 'get').mockReturnValue(testDir);
 
     stderr = jest.spyOn(console, 'error').mockImplementation(() => {});
   });
@@ -43,11 +42,7 @@ describe('config env var expansion', () => {
   afterEach(() => {
     stderr.mockRestore();
     process.chdir(originalCwd);
-    if (originalHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = originalHome;
-    }
+    jest.restoreAllMocks();
     if (existsSync(testDir)) {
       rmSync(testDir, { recursive: true, force: true });
     }

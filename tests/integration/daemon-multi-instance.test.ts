@@ -1,3 +1,4 @@
+import { testProcessEnv } from '../helpers/test-process-env.js';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import { spawn, type ChildProcess } from 'child_process';
 import {
@@ -33,13 +34,14 @@ describe('versioned daemon instances', () => {
   }> {
     const runtimeDir = join(baseDir, 'releases', releaseId);
     mkdirSync(runtimeDir, { recursive: true });
-    const socketPath = join(runtimeDir, 'daemon.sock');
+    // macOS temp roots are long; keep each release's Unix socket below sun_path.
+    const socketPath = join(testHome, `${releaseId}.sock`);
+    expect(Buffer.byteLength(socketPath)).toBeLessThan(104);
     const readyFile = join(runtimeDir, 'daemon.ready');
 
     const child = spawn(process.execPath, [daemonPath], {
       env: {
-        ...process.env,
-        HOME: testHome,
+        ...testProcessEnv(testHome),
         MCP_DAEMON_BASE_DIR: baseDir,
         MCP_DAEMON_SOCKET_PATH: socketPath,
         MCP_DAEMON_PID_FILE: join(runtimeDir, 'daemon.pid'),

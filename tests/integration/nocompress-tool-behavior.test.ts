@@ -1,3 +1,4 @@
+import { testProcessEnv } from '../helpers/test-process-env.js';
 /**
  * Integration test for noCompress tool behavior
  * Tests the specific bug where noCompress tools keep appearing in get_uncompressed_tools
@@ -16,10 +17,9 @@ describe('NoCompress Tool Behavior', () => {
   let testHome: string;
   let configDir: string;
   let configPath: string;
-  let originalHome: string | undefined;
 
   beforeAll(async () => {
-    // Create a temporary HOME directory so the config loader finds our test config
+    // Create a temporary lookup root so the config loader finds our test config
     testHome = join(tmpdir(), `mcp-nocompress-test-${Date.now()}`);
     configDir = join(testHome, '.mcp-compression-proxy');
     configPath = join(configDir, 'servers.json');
@@ -46,16 +46,13 @@ describe('NoCompress Tool Behavior', () => {
     // Start the MCP Compression Proxy server
     const serverScript = join(process.cwd(), 'dist/index.js');
 
-    // Set HOME to test directory so config loader finds our test config
-    originalHome = process.env.HOME;
-    process.env.HOME = testHome;
+    // Child configuration/cache lookups use the explicit test root.
 
     transport = new StdioClientTransport({
       command: 'node',
       args: [serverScript],
       env: {
-        ...process.env,
-        HOME: testHome,
+        ...testProcessEnv(testHome),
         LOG_LEVEL: 'warn',
       },
     });
@@ -74,10 +71,6 @@ describe('NoCompress Tool Behavior', () => {
   }, 10000);
 
   afterAll(async () => {
-    // Restore HOME
-    if (originalHome !== undefined) {
-      process.env.HOME = originalHome;
-    }
 
     if (mcpClient) {
       await mcpClient.close();

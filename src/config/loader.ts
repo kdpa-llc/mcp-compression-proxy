@@ -1,6 +1,6 @@
 import { readFileSync, existsSync, statSync } from 'fs';
 import { join } from 'path';
-import { homedir as osHomedir } from 'os';
+import { configHomeDirectory } from './home-directory.js';
 import type { MCPServerConfig } from '../types/index.js';
 import {
   serverConfigSchema,
@@ -17,7 +17,7 @@ const validate = ajv.compile(serverConfigSchema);
  * Get home directory (testable)
  */
 function homedir(): string {
-  return process.env.HOME || osHomedir();
+  return configHomeDirectory.get();
 }
 
 /**

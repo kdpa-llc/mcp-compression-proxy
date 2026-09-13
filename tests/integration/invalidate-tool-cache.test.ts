@@ -1,3 +1,4 @@
+import { testProcessEnv } from '../helpers/test-process-env.js';
 /**
  * Per-tool cache invalidation.
  *
@@ -15,7 +16,6 @@ describe('invalidate_tool_cache', () => {
   let mcpClient: Client;
   let transport: StdioClientTransport;
   let testHome: string;
-  let originalHome: string | undefined;
 
   function textOf(result: unknown): string {
     const content = (result as { content?: Array<{ type: string; text?: string }> }).content;
@@ -49,13 +49,11 @@ describe('invalidate_tool_cache', () => {
       )
     );
 
-    originalHome = process.env.HOME;
-    process.env.HOME = testHome;
 
     transport = new StdioClientTransport({
       command: 'node',
       args: [join(process.cwd(), 'dist/index.js')],
-      env: { ...process.env, HOME: testHome, MOCK_TOOL_COUNT: '3', LOG_LEVEL: 'error' },
+      env: { ...testProcessEnv(testHome), MOCK_TOOL_COUNT: '3', LOG_LEVEL: 'error' },
     });
 
     mcpClient = new Client({ name: 'invalidate-test-client', version: '1.0.0' }, { capabilities: {} });
@@ -63,9 +61,6 @@ describe('invalidate_tool_cache', () => {
   }, 20000);
 
   afterAll(async () => {
-    if (originalHome !== undefined) {
-      process.env.HOME = originalHome;
-    }
     if (mcpClient) {
       await mcpClient.close();
     }

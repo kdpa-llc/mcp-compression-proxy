@@ -1,3 +1,4 @@
+import { testProcessEnv } from '../helpers/test-process-env.js';
 /**
  * excludeTools must apply to the compression flow, not just the tool listing.
  *
@@ -17,7 +18,6 @@ describe('excludeTools in the compression flow', () => {
   let mcpClient: Client;
   let transport: StdioClientTransport;
   let testHome: string;
-  let originalHome: string | undefined;
 
   /** Text payload of the first content block of a tool result. */
   function textOf(result: unknown): string {
@@ -53,13 +53,11 @@ describe('excludeTools in the compression flow', () => {
       )
     );
 
-    originalHome = process.env.HOME;
-    process.env.HOME = testHome;
 
     transport = new StdioClientTransport({
       command: 'node',
       args: [join(process.cwd(), 'dist/index.js')],
-      env: { ...process.env, HOME: testHome, MOCK_TOOL_COUNT: '3', LOG_LEVEL: 'error' },
+      env: { ...testProcessEnv(testHome), MOCK_TOOL_COUNT: '3', LOG_LEVEL: 'error' },
     });
 
     mcpClient = new Client({ name: 'exclude-test-client', version: '1.0.0' }, { capabilities: {} });
@@ -67,9 +65,6 @@ describe('excludeTools in the compression flow', () => {
   }, 20000);
 
   afterAll(async () => {
-    if (originalHome !== undefined) {
-      process.env.HOME = originalHome;
-    }
     if (mcpClient) {
       await mcpClient.close();
     }

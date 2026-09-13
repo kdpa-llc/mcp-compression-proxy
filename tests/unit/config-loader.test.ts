@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { writeFileSync, unlinkSync, existsSync, mkdirSync, rmdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import type { MCPServerConfig } from '../../src/types/index.js';
+import { configHomeDirectory } from '../../src/config/home-directory.js';
 
 // We need to dynamically import to reset the module cache
 async function importLoader() {
@@ -15,7 +16,6 @@ async function importLoader() {
 describe('Config Loader', () => {
   let testDir: string;
   let originalCwd: string;
-  let originalHome: string;
 
   beforeEach(() => {
     // Create temp directory for tests
@@ -33,17 +33,16 @@ describe('Config Loader', () => {
 
     // Save original values
     originalCwd = process.cwd();
-    originalHome = process.env.HOME || '';
 
     // Change to test directory
     process.chdir(testDir);
-    process.env.HOME = testDir;
+    jest.spyOn(configHomeDirectory, 'get').mockReturnValue(testDir);
   });
 
   afterEach(() => {
     // Restore original values
     process.chdir(originalCwd);
-    process.env.HOME = originalHome;
+    jest.restoreAllMocks();
 
     // Clean up test directory
     if (existsSync(testDir)) {

@@ -1,3 +1,4 @@
+import { testProcessEnv } from '../helpers/test-process-env.js';
 /**
  * Comprehensive E2E Test with Real LLM
  *
@@ -27,7 +28,6 @@ describe('Comprehensive E2E with Real LLM', () => {
   let testHome: string;
   let configDir: string;
   let configPath: string;
-  let originalHome: string | undefined;
 
   beforeAll(async () => {
     console.log('\n🚀 Setting up Comprehensive E2E Test Environment...\n');
@@ -56,7 +56,7 @@ describe('Comprehensive E2E with Real LLM', () => {
 
     // Create test configuration
     console.log('🔧 Creating test configuration...');
-    // Create a temporary HOME directory so the config loader finds our test config
+    // Create a temporary lookup root so the config loader finds our test config
     testHome = path.join('/tmp', `mcp-test-home-${Date.now()}`);
     configDir = path.join(testHome, '.mcp-compression-proxy');
     configPath = path.join(configDir, 'servers.json');
@@ -101,16 +101,13 @@ describe('Comprehensive E2E with Real LLM', () => {
     console.log('🔧 Starting MCP Compression Proxy server...');
     const serverPath = path.join(process.cwd(), 'dist/index.js');
 
-    // Set HOME to test directory so config loader finds our test config
-    originalHome = process.env.HOME;
-    process.env.HOME = testHome;
+    // Child configuration/cache lookups use the explicit test root.
 
     transport = new StdioClientTransport({
       command: 'node',
       args: [serverPath],
       env: {
-        ...process.env,
-        HOME: testHome, // Ensure child process also uses test HOME
+        ...testProcessEnv(testHome),
         LOG_LEVEL: 'warn', // Reduce noise in test output
       },
     });
@@ -130,10 +127,6 @@ describe('Comprehensive E2E with Real LLM', () => {
   }, 60000);
 
   afterAll(async () => {
-    // Restore HOME
-    if (originalHome !== undefined) {
-      process.env.HOME = originalHome;
-    }
 
     if (mcpClient) {
       await mcpClient.close();

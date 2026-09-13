@@ -1,3 +1,4 @@
+import { testProcessEnv } from '../helpers/test-process-env.js';
 /**
  * Integration test for noCompress pattern matching behavior
  * Tests the specific pattern matching scenario: local-skills__* pattern vs local-skills__get_skill tool
@@ -15,10 +16,9 @@ describe('NoCompress Pattern Matching', () => {
   let testHome: string;
   let configDir: string;
   let configPath: string;
-  let originalHome: string | undefined;
 
   beforeAll(async () => {
-    // Create a temporary HOME directory
+    // Create a temporary lookup root
     testHome = join(tmpdir(), `mcp-pattern-test-${Date.now()}`);
     configDir = join(testHome, '.mcp-compression-proxy');
     configPath = join(configDir, 'servers.json');
@@ -45,16 +45,13 @@ describe('NoCompress Pattern Matching', () => {
     // Start the MCP Compression Proxy server
     const serverScript = join(process.cwd(), 'dist/index.js');
 
-    // Set HOME to test directory
-    originalHome = process.env.HOME;
-    process.env.HOME = testHome;
+    // Child configuration/cache lookups use the explicit test root.
 
     transport = new StdioClientTransport({
       command: 'node',
       args: [serverScript],
       env: {
-        ...process.env,
-        HOME: testHome,
+        ...testProcessEnv(testHome),
         LOG_LEVEL: 'debug',  // Enable debug to see pattern matching
       },
     });
@@ -73,10 +70,6 @@ describe('NoCompress Pattern Matching', () => {
   }, 10000);
 
   afterAll(async () => {
-    // Restore HOME
-    if (originalHome !== undefined) {
-      process.env.HOME = originalHome;
-    }
 
     if (mcpClient) {
       await mcpClient.close();

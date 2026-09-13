@@ -1,3 +1,4 @@
+import { testProcessEnv } from '../helpers/test-process-env.js';
 /**
  * tools/list cursor pagination.
  *
@@ -19,7 +20,6 @@ describe('tools/list pagination', () => {
   let mcpClient: Client;
   let transport: StdioClientTransport;
   let testHome: string;
-  let originalHome: string | undefined;
 
   beforeAll(async () => {
     testHome = join(tmpdir(), `mcp-pagination-test-${Date.now()}`);
@@ -45,15 +45,12 @@ describe('tools/list pagination', () => {
       )
     );
 
-    originalHome = process.env.HOME;
-    process.env.HOME = testHome;
 
     transport = new StdioClientTransport({
       command: 'node',
       args: [join(process.cwd(), 'dist/index.js')],
       env: {
-        ...process.env,
-        HOME: testHome,
+        ...testProcessEnv(testHome),
         MOCK_TOOL_COUNT: String(BACKEND_TOOLS),
         MCP_TOOLS_PAGE_SIZE: String(PAGE_SIZE),
         LOG_LEVEL: 'error',
@@ -65,9 +62,6 @@ describe('tools/list pagination', () => {
   }, 20000);
 
   afterAll(async () => {
-    if (originalHome !== undefined) {
-      process.env.HOME = originalHome;
-    }
     if (mcpClient) {
       await mcpClient.close();
     }

@@ -1,3 +1,4 @@
+import { testProcessEnv } from '../helpers/test-process-env.js';
 /**
  * Comprehensive test verifying noCompress behavior works correctly
  * with real configuration patterns and multiple compression cycles
@@ -15,7 +16,6 @@ describe('Comprehensive NoCompress Verification', () => {
   let testHome: string;
   let configDir: string;
   let configPath: string;
-  let originalHome: string | undefined;
 
   beforeAll(async () => {
     testHome = join(tmpdir(), `mcp-comprehensive-test-${Date.now()}`);
@@ -47,15 +47,12 @@ describe('Comprehensive NoCompress Verification', () => {
 
     writeFileSync(configPath, JSON.stringify(testConfig, null, 2));
 
-    originalHome = process.env.HOME;
-    process.env.HOME = testHome;
 
     transport = new StdioClientTransport({
       command: 'node',
       args: [join(process.cwd(), 'dist/index.js')],
       env: {
-        ...process.env,
-        HOME: testHome,
+        ...testProcessEnv(testHome),
         LOG_LEVEL: 'info',
       },
     });
@@ -74,9 +71,6 @@ describe('Comprehensive NoCompress Verification', () => {
   }, 10000);
 
   afterAll(async () => {
-    if (originalHome !== undefined) {
-      process.env.HOME = originalHome;
-    }
 
     if (mcpClient) {
       await mcpClient.close();
