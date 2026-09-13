@@ -12,15 +12,21 @@ on:
         required: false
         default: 'llama3.2:1b'
 
+permissions:
+  contents: read
+
 jobs:
   real-llm-e2e:
     name: Real LLM Integration Tests
+    if: github.repository == 'kdpa-llc/mcp-compression-proxy'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v7
+      with:
+        persist-credentials: false
 
     - name: Setup Node.js
       uses: actions/setup-node@v7
@@ -110,7 +116,7 @@ jobs:
   real-llm-matrix:
     name: Real LLM Tests (Multiple Models)
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch'
+    if: github.repository == 'kdpa-llc/mcp-compression-proxy' && github.event_name == 'workflow_dispatch'
     timeout-minutes: 45
     strategy:
       matrix:
@@ -122,6 +128,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v7
+      with:
+        persist-credentials: false
 
     - name: Setup Node.js
       uses: actions/setup-node@v7

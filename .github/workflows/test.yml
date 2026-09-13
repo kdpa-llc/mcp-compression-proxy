@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ main, development ]
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Run Tests
@@ -18,6 +21,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v7
+      with:
+        persist-credentials: false
 
     - name: Setup Node.js ${{ matrix.node-version }}
       uses: actions/setup-node@v7
@@ -59,7 +64,7 @@ jobs:
       run: npm run test:coverage
 
     - name: Upload coverage to Codecov
-      if: matrix.node-version == '22.x'
+      if: github.repository == 'kdpa-llc/mcp-compression-proxy' && matrix.node-version == '22.x'
       uses: codecov/codecov-action@v7
       with:
         files: ./coverage/lcov.info
@@ -82,6 +87,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v7
+      with:
+        persist-credentials: false
 
     - name: Setup Node.js
       uses: actions/setup-node@v7
@@ -121,6 +128,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v7
+      with:
+        persist-credentials: false
 
     - name: Setup Node.js
       uses: actions/setup-node@v7

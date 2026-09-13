@@ -12,15 +12,18 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  issues: write
-  pull-requests: write
-  id-token: write
+  contents: read
 
 jobs:
   release:
     name: Release
+    if: github.repository == 'kdpa-llc/mcp-compression-proxy'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
 
     steps:
       # Check the credential before checkout so an expired or missing token is
