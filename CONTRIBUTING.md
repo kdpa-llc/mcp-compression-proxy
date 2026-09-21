@@ -49,6 +49,9 @@ We welcome feature suggestions! Please open an issue with:
 
 ## Development Setup
 
+Use **Node.js 22 or newer**. The supported Node.js range is declared in
+[`package.json`](package.json).
+
 ```bash
 # Clone your fork
 git clone https://github.com/YOUR_USERNAME/mcp-compression-proxy.git
