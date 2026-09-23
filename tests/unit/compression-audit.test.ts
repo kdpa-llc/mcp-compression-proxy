@@ -77,4 +77,13 @@ describe('auditCompression', () => {
     expect(audit.method).toBe('lexical');
     expect(audit.notes[0]).toContain('bridge down');
   });
+
+  it('with a margin, flags only descriptions clearly closer to another tool', async () => {
+    const entries = { 'fs/read_file': 'Read the contents of one or several files from disk.' };
+    const strict = await auditCompression(tools.slice(0, 3), cacheOf(entries));
+    const lenient = await auditCompression(tools.slice(0, 3), cacheOf(entries), undefined, { margin: 0.5 });
+
+    expect(strict.confusable.length).toBeGreaterThanOrEqual(lenient.confusable.length);
+    expect(lenient.confusable).toEqual([]);
+  });
 });

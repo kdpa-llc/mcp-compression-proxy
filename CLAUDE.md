@@ -41,7 +41,7 @@ missing build fails them with `MODULE_NOT_FOUND`.
 
 | Location | Covers |
 |---|---|
-| `tests/unit/` | modules in isolation, 34 suites |
+| `tests/unit/` | modules in isolation, 35 suites |
 | `tests/integration/` | spawns the built binaries over stdio |
 | `tests/e2e/` | full workflows against mocked clients |
 | `tests/e2e-real/` | real Ollama, and real Needle when `NEEDLE_PYTHON` is set; excluded from the default run |
@@ -123,6 +123,11 @@ synced automatically; `tests/unit/version.test.ts` fails CI if it drifts.
   `excludeTools` matches; a call path that bypasses it would let a hidden
   tool run again. List tools through `ToolCatalog`, which follows
   `tools/list` cursors; a bare `client.listTools()` reads only page one.
+- **`skills/mcp-cli/` is shipped and user-facing.** It must match the real
+  CLI: a renamed command or flag is a broken skill. `mcp-cli install-skill`
+  copies it; `describe` is the no-API-key path for compressing and rewriting
+  descriptions (`src/services/description-rewrite.ts`). Rewrites change
+  description text only, never tool names or schema types.
 - **Modules under test cannot use `import.meta`.** Jest runs them as CommonJS.
   Paths relative to the package (the bundled Needle bridge) are resolved in
   the entry points (`src/index.ts`, `src/cli/daemon.ts`) and passed in.

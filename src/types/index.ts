@@ -148,6 +148,7 @@ export type IPCMethod =
   | 'suggest'
   | 'audit'
   | 'compress'
+  | 'describe'
   | 'script'
   | 'stats'
   | 'daemon-status';

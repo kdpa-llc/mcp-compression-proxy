@@ -87,8 +87,11 @@ export async function auditCompression(
   compression: {
     getCompressedDescription(serverName: string, toolName: string): string | undefined;
   },
-  model?: Pick<ModelBackend, 'embed'>
+  model?: Pick<ModelBackend, 'embed'>,
+  options: { margin?: number } = {}
 ): Promise<CompressionAudit> {
+  // How much closer another tool must be before a description is flagged.
+  const margin = options.margin ?? 0;
   const notes: string[] = [];
   const originals = tools.map(
     (tool) => `${splitWords(tool.toolName).join(' ')}. ${tool.description ?? ''}`
@@ -150,7 +153,7 @@ export async function auditCompression(
       const score = similarity(vector, other);
       if (score > best.score) best = { index: otherIndex, score };
     });
-    if (best.index !== -1 && best.score >= own) {
+    if (best.index !== -1 && best.score >= own + margin) {
       confusable.push({
         tool: key(index),
         compressed: text,

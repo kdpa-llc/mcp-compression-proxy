@@ -185,4 +185,65 @@ describe('mcp-cli search and tool policy', () => {
     expect(result.code).toBe(1);
     expect(result.stderr).toContain('No compressor configured');
   }, 30000);
+
+  it('rewrites descriptions through next, review, apply and revert', async () => {
+    const next = await runCli(['describe', 'next', '--tool', 'multi/tool_001']);
+    expect(next.code).toBe(0);
+    const batch = JSON.parse(next.stdout) as {
+      items: Array<{ tool: string; parameters: Record<string, unknown> }>;
+      guidelines: string[];
+    };
+    expect(batch.items[0].tool).toBe('tool_001');
+    expect(batch.items[0].parameters.input).toMatchObject({ type: 'string' });
+    expect(batch.guidelines.length).toBeGreaterThan(0);
+
+    const file = join(testHome, 'proposals.json');
+    const good = {
+      server: 'multi',
+      tool: 'tool_001',
+      description: 'Test tool one: echoes a JSON input back, or reports that tool_001 ran.',
+      parameters: { input: 'Text to send; JSON is echoed back unchanged' },
+    };
+    writeFileSync(file, JSON.stringify([good]));
+
+    const review = await runCli(['describe', 'review', file]);
+    expect(review.code).toBe(0);
+    expect(review.stdout).toContain('+ Test tool one');
+    expect(review.stdout).toContain('Nothing was saved');
+    expect(JSON.parse((await runCli(['info', 'multi/tool_001'])).stdout).inputSchema.properties.input.description).toBe(
+      'Test input parameter'
+    );
+
+    // A later, empty entry supersedes the first; neither may be saved.
+    writeFileSync(file, JSON.stringify([good, { server: 'multi', tool: 'tool_001', description: '' }]));
+    const rejected = await runCli(['describe', 'apply', file]);
+    expect(rejected.stdout).toContain('Applied 0');
+
+    writeFileSync(file, JSON.stringify([good]));
+    const applied = await runCli(['describe', 'apply', file]);
+    expect(applied.code).toBe(0);
+    expect(applied.stdout).toContain('Applied 1');
+
+    const info = JSON.parse((await runCli(['info', 'multi/tool_001'])).stdout);
+    expect(info.inputSchema.properties.input.description).toBe('Text to send; JSON is echoed back unchanged');
+    expect((await runCli(['search', 'echoes'])).stdout).toContain('multi/tool_001');
+
+    const reverted = await runCli(['describe', 'revert', 'multi/tool_001']);
+    expect(reverted.stdout).toContain('Reverted 1 tool(s)');
+    expect(
+      JSON.parse((await runCli(['info', 'multi/tool_001'])).stdout).inputSchema.properties.input.description
+    ).toBe('Test input parameter');
+  }, 60000);
+
+  it('installs the bundled skill without needing the daemon', async () => {
+    const skills = join(testHome, 'skills-root');
+    const first = await runCli(['install-skill', '--path', skills]);
+    expect(first.code).toBe(0);
+    expect(first.stdout).toContain('Installed the mcp-cli skill');
+    expect(existsSync(join(skills, 'mcp-cli', 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(skills, 'mcp-cli', 'DESCRIBE.md'))).toBe(true);
+
+    const again = await runCli(['install-skill', '--path', skills]);
+    expect(again.stdout).toContain('already up to date');
+  }, 30000);
 });

@@ -24,6 +24,12 @@ import { CallSuggester } from '../services/call-suggester.js';
 import { auditCompression } from '../services/compression-audit.js';
 import { CompressionSampler } from '../services/compression-sampler.js';
 import { openAiSamplingHost } from '../services/openai-compressor.js';
+import {
+  applyReview,
+  nextBatch,
+  reviewProposals,
+  type DescribeMode,
+} from '../services/description-rewrite.js';
 import { fileURLToPath } from 'url';
 
 const RUNTIME_PATHS = getDaemonRuntimePaths();
@@ -275,7 +281,12 @@ async function startDaemon(): Promise<void> {
                 name: tool.toolName,
                 server: serverName,
                 description: tool.description || '',
-                inputSchema: tool.inputSchema,
+                inputSchema: compressionCache.applySchemaDescriptions(
+                  serverName,
+                  tool.toolName,
+                  tool.inputSchema,
+                  tool.description
+                ),
                 ...(tool.title !== undefined ? { title: tool.title } : {}),
                 ...(tool.annotations !== undefined ? { annotations: tool.annotations } : {}),
               },
@@ -388,6 +399,51 @@ async function startDaemon(): Promise<void> {
             if (requeued > 0) await compressionCache.saveToDisk();
           }
           return { id, result: { ...audit, requeued } };
+        }
+
+        case 'describe': {
+          const action = String(params?.action || '');
+          const mode: DescribeMode = params?.mode === 'compress' ? 'compress' : 'rewrite';
+          const tools = await toolCatalog.list();
+
+          if (action === 'next') {
+            return {
+              id,
+              result: nextBatch(tools, compressionCache, {
+                mode,
+                limit: Number(params?.limit) || undefined,
+                server: typeof params?.server === 'string' ? params.server : undefined,
+                tool: typeof params?.tool === 'string' ? params.tool : undefined,
+                all: params?.all === true,
+              }),
+            };
+          }
+
+          if (action === 'review' || action === 'apply') {
+            const review = await reviewProposals(params?.proposals, tools, compressionCache, {
+              mode,
+              model: localModel?.backend,
+            });
+            if (action === 'review') return { id, result: review };
+            const outcome = applyReview(review, tools, compressionCache);
+            if (outcome.applied.length > 0) await compressionCache.saveToDisk();
+            return { id, result: { ...review, ...outcome } };
+          }
+
+          if (action === 'revert') {
+            const targets =
+              params?.all === true
+                ? compressionCache.getCacheEntries().map((entry) => `${entry.serverName}/${entry.toolName}`)
+                : [String(params?.tool || '')];
+            const reverted = targets.filter((key) => {
+              const slash = key.indexOf('/');
+              return slash > 0 && compressionCache.invalidate(key.slice(0, slash), key.slice(slash + 1));
+            });
+            if (reverted.length > 0) await compressionCache.saveToDisk();
+            return { id, result: { reverted } };
+          }
+
+          return { id, error: { code: -1, message: `Unknown describe action: ${action}` } };
         }
 
         case 'compress': {

@@ -82,7 +82,17 @@ The daemon starts automatically on the first command and keeps backend connectio
 
 ### 4. Tell your agent how to use it
 
-Add this to your project instructions or `AGENTS.md`:
+Install the bundled skill:
+
+```bash
+mcp-cli install-skill            # ~/.claude/skills/mcp-cli
+mcp-cli install-skill --project  # ./.claude/skills/mcp-cli, to commit with a repo
+mcp-cli install-skill --path DIR # any agent's skills directory
+```
+
+The skill teaches the agent the whole workflow - search, `info`, `call`, `--want`/`--where`, payloads, scripts - and costs one line of context until a task needs an MCP capability. Your agent then reaches every MCP server through shell commands, with no MCP connection of its own. Re-run after upgrading; a copy you have edited is only replaced with `--force`.
+
+For an agent without skill support, add this to your project instructions or `AGENTS.md` instead:
 
 ```text
 Use mcp-cli to access MCP tools. Search before choosing a tool, inspect its
@@ -197,6 +207,8 @@ flowchart TD
 | `mcp-cli stats`                                      | Show server and compression statistics             |
 | `mcp-cli compress [--limit N]`                       | Compress descriptions with the compressor endpoint |
 | `mcp-cli audit [--requeue]`                          | Check compressions and find duplicate tools        |
+| `mcp-cli describe next\|review\|apply\|revert`       | Compress or rewrite descriptions with your agent   |
+| `mcp-cli install-skill [--project]`                  | Install the mcp-cli skill for your agent           |
 | `mcp-cli search-quality`                             | How often search ranked the used tool first        |
 | `mcp-cli doctor`                                     | Validate configuration and backend health          |
 | `mcp-cli daemon status`                              | Show daemon and connection lifecycle state         |
@@ -362,6 +374,24 @@ See [`servers.json.example`](servers.json.example) for a complete starting point
 ### Search learning
 
 With `"search": { "learnFromUsage": true }`, a search followed by `info` or `call` on one of its results is recorded in `~/.mcp-compression-proxy/search-usage.jsonl` (owner-only, last 5,000 choices). Tools chosen for queries with the same words rank higher, and `mcp-cli search-quality` reports how often the used tool was ranked first, in the top five, or not shown at all: real numbers for your own tool set.
+
+### Improve descriptions with your own agent
+
+Many servers ship vague or missing descriptions. With the skill installed, ask your agent to "rewrite the MCP tool descriptions" (or "compress" them): it uses the model you already run, with no API key and no extra model.
+
+```bash
+mcp-cli describe next --mode rewrite --limit 10   # tools needing work, weakest first, as JSON
+mcp-cli describe review proposals.json            # before/after and checks; saves nothing
+mcp-cli describe apply proposals.json             # saves only what passed, after you approve
+mcp-cli describe revert <server>/<tool>           # or --all
+```
+
+- `next` gives each tool's original description, parameters, why it needs work, and similar tools it must be told apart from.
+- `rewrite` may improve parameter descriptions too; names, types and required fields never change. `compress` must end up shorter.
+- `review` rejects unknown tools or parameters, over-long text, and a description that reads clearly more like another tool than its own.
+- The server's original is always kept. A tool whose server later changes its description is offered again.
+
+The skill's instructions have the agent ask before starting and show you the review before applying.
 
 ### Compressor endpoint
 

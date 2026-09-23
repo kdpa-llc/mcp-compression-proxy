@@ -72,6 +72,29 @@ describe('CompressionPersistence', () => {
       });
     });
 
+    it('round-trips rewrite kind and parameter descriptions', async () => {
+      const cache = new Map([
+        [
+          'gh:list_issues',
+          {
+            original: 'Gets issues.',
+            compressed: 'List issues in one repository.',
+            compressedAt: '2026-09-23T00:00:00.000Z',
+            kind: 'rewritten' as const,
+            parameters: { state: 'open, closed or all' },
+          },
+        ],
+        ['fs:read', { compressed: 'Read.', compressedAt: '2026-09-23T00:00:00.000Z' }],
+      ]);
+
+      await persistence.save(cache);
+      const loaded = await persistence.load();
+
+      expect(loaded.get('gh:list_issues')).toEqual(cache.get('gh:list_issues'));
+      expect(loaded.get('fs:read')).not.toHaveProperty('kind');
+      expect(loaded.get('fs:read')).not.toHaveProperty('parameters');
+    });
+
     it('should return empty cache when file does not exist', async () => {
       const loaded = await persistence.load();
       expect(loaded.size).toBe(0);

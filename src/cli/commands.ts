@@ -1,3 +1,5 @@
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'fs';
+import { dirname, join, relative } from 'path';
 import { sendRequest, isDaemonRunning } from './ipc-client.js';
 import { loadJSONServers } from '../config/loader.js';
 import type { ServerStatus, ToolEntry, ToolInfoResult } from '../types/index.js';
@@ -659,4 +661,168 @@ export async function handleDaemonStatus(socketPath: string): Promise<void> {
       }
     }
   }
+}
+
+interface ReviewedEntry {
+  server: string;
+  tool: string;
+  accepted: boolean;
+  problems: string[];
+  warnings: string[];
+  before: { description: string; parameters: Record<string, string> };
+  after: { description: string; parameters: Record<string, string> };
+  chars: { before: number; after: number };
+}
+
+/** A before/after view of reviewed proposals, for the user to approve. */
+export function formatReview(review: {
+  mode: string;
+  method: string;
+  reviewed: ReviewedEntry[];
+  accepted: number;
+  rejected: number;
+}): string {
+  const lines: string[] = [];
+  for (const item of review.reviewed) {
+    const name = item.server && item.tool ? `${item.server}/${item.tool}` : '(unnamed entry)';
+    lines.push(
+      `${item.accepted ? '✓' : '✗'} ${name}  (${item.chars.before} -> ${item.chars.after} chars)`
+    );
+    if (item.before.description !== item.after.description) {
+      lines.push(`    - ${item.before.description || '(none)'}`);
+      lines.push(`    + ${item.after.description || '(none)'}`);
+    }
+    for (const [param, text] of Object.entries(item.after.parameters)) {
+      const before = item.before.parameters[param];
+      if (before === text) continue;
+      lines.push(`    ${param}:`);
+      lines.push(`      - ${before || '(none)'}`);
+      lines.push(`      + ${text}`);
+    }
+    for (const problem of item.problems) lines.push(`    ✗ ${problem}`);
+    for (const warning of item.warnings) lines.push(`    ! ${warning}`);
+  }
+  lines.push(
+    `\n${review.accepted} accepted, ${review.rejected} rejected (${review.mode}; distinctness checked by ${review.method === 'semantic' ? 'meaning' : 'shared words'}).`
+  );
+  return lines.join('\n');
+}
+
+/**
+ * mcp-cli describe next|review|apply|revert — compress or rewrite tool
+ * descriptions with the agent's own model, reviewed by the user.
+ */
+export async function handleDescribe(
+  socketPath: string,
+  action: string,
+  options: {
+    mode?: string;
+    limit?: number;
+    server?: string;
+    tool?: string;
+    all?: boolean;
+    proposals?: string;
+  } = {}
+): Promise<void> {
+  const mode = options.mode === 'compress' ? 'compress' : 'rewrite';
+  if (options.mode !== undefined && options.mode !== 'compress' && options.mode !== 'rewrite') {
+    console.error('Error: --mode must be compress or rewrite');
+    process.exit(1);
+  }
+
+  const params: Record<string, unknown> = { action, mode };
+  if (action === 'next') {
+    if (options.limit !== undefined) params.limit = options.limit;
+    if (options.server) params.server = options.server;
+    if (options.tool) params.tool = options.tool;
+    if (options.all) params.all = true;
+  } else if (action === 'review' || action === 'apply') {
+    if (!options.proposals) {
+      console.error(`Usage: mcp-cli describe ${action} <file.json|-> [--mode compress|rewrite]`);
+      process.exit(1);
+    }
+    try {
+      params.proposals = JSON.parse(options.proposals);
+    } catch {
+      console.error('Error: proposals must be JSON: [{"server":"...","tool":"...","description":"..."}]');
+      process.exit(1);
+    }
+  } else if (action === 'revert') {
+    if (!options.all && !options.tool) {
+      console.error('Usage: mcp-cli describe revert <server>/<tool> | --all');
+      process.exit(1);
+    }
+    if (options.all) params.all = true;
+    else params.tool = options.tool;
+  } else {
+    console.error('Usage: mcp-cli describe <next|review|apply|revert> ...');
+    process.exit(1);
+  }
+
+  const response = await sendRequest(socketPath, 'describe', params);
+  if (response.error) {
+    console.error(`Error: ${response.error.message}`);
+    process.exit(1);
+  }
+
+  if (action === 'next') {
+    console.log(JSON.stringify(response.result, null, 2));
+    return;
+  }
+
+  if (action === 'revert') {
+    const { reverted } = response.result as { reverted: string[] };
+    console.log(
+      reverted.length > 0
+        ? `Reverted ${reverted.length} tool(s) to their original descriptions: ${reverted.join(', ')}`
+        : 'Nothing to revert.'
+    );
+    return;
+  }
+
+  const result = response.result as Parameters<typeof formatReview>[0] & { applied?: string[] };
+  console.log(formatReview(result));
+  if (action === 'apply') {
+    console.log(`Applied ${result.applied?.length ?? 0}. Originals are kept; undo with mcp-cli describe revert.`);
+  } else if (result.accepted > 0) {
+    console.log('Nothing was saved. Apply the accepted ones with: mcp-cli describe apply <file>');
+  }
+}
+
+/**
+ * Copy the bundled skill into a skills directory.
+ *
+ * Refuses to replace a copy that differs from the bundled one unless forced,
+ * so local edits to an installed skill are not silently lost.
+ */
+export function installSkill(
+  sourceDir: string,
+  targetDir: string,
+  options: { force?: boolean } = {}
+): { target: string; status: 'installed' | 'updated' | 'unchanged' } {
+  if (!existsSync(join(sourceDir, 'SKILL.md'))) {
+    throw new Error(`Bundled skill not found at ${sourceDir}`);
+  }
+
+  const files = readdirSync(sourceDir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => relative(sourceDir, join(entry.parentPath, entry.name)));
+
+  if (existsSync(targetDir)) {
+    const identical = files.every((file) => {
+      const target = join(targetDir, file);
+      return existsSync(target) && readFileSync(target, 'utf-8') === readFileSync(join(sourceDir, file), 'utf-8');
+    });
+    if (identical) return { target: targetDir, status: 'unchanged' };
+    if (!options.force) {
+      throw new Error(
+        `${targetDir} already exists and differs from the bundled skill. Re-run with --force to replace it.`
+      );
+    }
+  }
+
+  const existed = existsSync(targetDir);
+  mkdirSync(dirname(targetDir), { recursive: true });
+  cpSync(sourceDir, targetDir, { recursive: true, force: true });
+  return { target: targetDir, status: existed ? 'updated' : 'installed' };
 }
