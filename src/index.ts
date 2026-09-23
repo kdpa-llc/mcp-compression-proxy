@@ -1,41 +1,26 @@
 #!/usr/bin/env node
 
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-  Tool,
-  type CallToolResult,
-} from '@modelcontextprotocol/sdk/types.js';
-import { MCPClientManager } from './mcp/client-manager.js';
-import { callToolWithAuthRecovery } from './mcp/tool-call-executor.js';
-import { CompressionCache } from './services/compression-cache.js';
-import { SessionManager } from './services/session-manager.js';
-import { loadJSONServersCached, matchesIgnorePattern } from './config/loader.js';
-import { writeFileSync, readFileSync } from 'fs';
-import { resolve } from 'path';
-import pino from 'pino';
-import { StatsService } from './services/stats-service.js';
-import { CompressionSampler } from './services/compression-sampler.js';
-import { SERVER_NAME, VERSION } from './version.js';
-import { DEFAULT_PAYLOAD_THRESHOLD, PayloadStore } from './cli/payload-interceptor.js';
-import { runCallScript, type CallScriptStep } from './mcp/call-script.js';
-import { ToolCatalog, type CatalogTool } from './mcp/tool-catalog.js';
-import { ToolSearch } from './search/tool-search.js';
-import { UsageLog } from './search/usage-log.js';
-import { createLocalModel, type LocalModel } from './models/local-model.js';
-import { modelAuthConfirmer } from './models/auth-confirmer.js';
-import { shapeAndStore } from './services/shaped-call.js';
-import { openAiSamplingHost } from './services/openai-compressor.js';
-import { MetaTools, LAZY_KEPT_MANAGEMENT_TOOLS } from './native/meta-tools.js';
 import { fileURLToPath } from 'url';
 import { join } from 'path';
+import pino from 'pino';
+import { MCPClientManager } from './mcp/client-manager.js';
+import { ToolCatalog } from './mcp/tool-catalog.js';
+import { CompressionCache } from './services/compression-cache.js';
+import { loadJSONServersCached } from './config/loader.js';
+import { PayloadStore } from './cli/payload-interceptor.js';
 import { getDaemonRuntimePaths } from './cli/runtime-paths.js';
+import { ModelRegistry } from './models/model-registry.js';
+import { modelAuthConfirmer } from './models/auth-confirmer.js';
+import { ProxySession } from './proxy/session.js';
+import { lastGoodConfig, type ProxyView } from './proxy/view.js';
 
 /**
  * MCP Server that aggregates tools from multiple MCP servers
- * with LLM-based description compression
+ * with LLM-based description compression.
+ *
+ * This entry point wires one session to stdio; everything a session does lives
+ * in src/proxy/session.ts.
  */
 
 const logger = pino({
@@ -52,53 +37,6 @@ const logger = pino({
   },
 });
 
-// Initialize services
-const clientManager = new MCPClientManager(logger);
-const payloadStore = new PayloadStore({
-  directory: getDaemonRuntimePaths().payloadDir,
-  removeDirectoryOnDestroy: false,
-});
-const compressionCache = new CompressionCache(logger);
-const sessionManager = new SessionManager(logger);
-const statsService = new StatsService(logger, clientManager, compressionCache, sessionManager);
-
-// Current session context (set by tools)
-let currentSessionId: string | undefined;
-
-// Create MCP server
-const server = new Server(
-  {
-    name: SERVER_NAME,
-    version: VERSION,
-  },
-  {
-    capabilities: {
-      tools: {},
-    },
-  }
-);
-
-// Compresses via the host's own LLM when the client supports sampling.
-const compressionSampler = new CompressionSampler(logger, {
-  getClientCapabilities: () => server.getClientCapabilities(),
-  createMessage: (params) => server.createMessage(params),
-});
-
-function toolResultText(result: CallToolResult): string {
-  return result.content
-    .flatMap((item) => (item.type === 'text' && item.text ? [item.text] : []))
-    .join('\n');
-}
-
-async function executeBackendTool(
-  serverName: string,
-  toolName: string,
-  args: Record<string, unknown>
-): Promise<{ result: CallToolResult; output: string }> {
-  const result = await callToolWithAuthRecovery(clientManager, logger, serverName, toolName, args);
-  return { result, output: toolResultText(result) };
-}
-
 /**
  * How long a backend tool snapshot stays reusable.
  *
@@ -109,1134 +47,37 @@ async function executeBackendTool(
  */
 const TOOL_CACHE_TTL_MS = 3000;
 
-const toolCatalog = new ToolCatalog(clientManager, logger, TOOL_CACHE_TTL_MS);
-
-const usageLog = new UsageLog(
-  join(getDaemonRuntimePaths().baseDir, 'search-usage.jsonl'),
-  () => loadJSONServersCached()?.search?.learnFromUsage === true
+const runtimePaths = getDaemonRuntimePaths();
+const clientManager = new MCPClientManager(logger);
+const payloadStore = new PayloadStore({
+  directory: runtimePaths.payloadDir,
+  removeDirectoryOnDestroy: false,
+});
+const compressionCache = new CompressionCache(logger);
+const models = new ModelRegistry({
+  // dist/index.js -> <package>/python/needle_bridge.py
+  bridgeScript: fileURLToPath(new URL('../python/needle_bridge.py', import.meta.url)),
+  stateDir: runtimePaths.baseDir,
+  logger,
+});
+const config = lastGoodConfig(loadJSONServersCached, logger);
+const view: ProxyView = {
+  config,
+  backends: clientManager,
+  catalog: new ToolCatalog(clientManager, logger, TOOL_CACHE_TTL_MS),
+  cwd: process.cwd(),
+};
+const session = new ProxySession(
+  view,
+  {
+    logger,
+    payloadStore,
+    compressionCache,
+    models,
+    usageLogFile: join(runtimePaths.baseDir, 'search-usage.jsonl'),
+  },
+  { toolsPageSize: Number.parseInt(process.env.MCP_TOOLS_PAGE_SIZE ?? '', 10) }
 );
-
-/** The optional local model; created in main() once the config is loaded. */
-let localModel: LocalModel | undefined;
-
-const toolSearch = new ToolSearch(toolCatalog, compressionCache, {
-  usage: usageLog,
-  semantic: {
-    score: (query, tools) =>
-      localModel?.embeddings?.score(query, tools) ?? Promise.resolve(undefined),
-  },
-});
-
-function payloadThreshold(): number {
-  return loadJSONServersCached()?.cli?.payloadThreshold ?? DEFAULT_PAYLOAD_THRESHOLD;
-}
-
-/**
- * A backend call as a client sees it: excluded tools refused, large results
- * replaced by a payload reference.
- */
-async function callAggregated(
-  serverName: string,
-  toolName: string,
-  args: Record<string, unknown>
-): Promise<CallToolResult> {
-  try {
-    const executed = await executeBackendTool(serverName, toolName, args);
-    const captured = payloadStore.capture(executed.output, payloadThreshold());
-    if (!captured.reference) {
-      return executed.result;
-    }
-    return {
-      content: [{ type: 'text', text: captured.output }],
-      isError: executed.result.isError,
-      structuredContent: { payload: captured.reference },
-    };
-  } catch (error) {
-    logger.error({ serverName, toolName, error }, 'Tool call failed');
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `Error calling tool: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        },
-      ],
-      isError: true,
-    };
-  }
-}
-
-const metaTools = new MetaTools({
-  catalog: toolCatalog,
-  search: toolSearch,
-  usage: usageLog,
-  compression: compressionCache,
-  payloadStore,
-  threshold: payloadThreshold,
-  model: () => localModel?.backend,
-  embedder: () => localModel?.embeddings,
-  callBackend: callAggregated,
-  executeText: async (serverName, toolName, args) => {
-    const executed = await executeBackendTool(serverName, toolName, args);
-    return { output: executed.output, isError: executed.result.isError };
-  },
-});
-
-/** A backend tool plus the metadata needed to namespace and compress it. */
-type BackendTool = CatalogTool;
-
-/**
- * Every tool from every connected backend, once, with excluded tools already
- * dropped: every consumer of this snapshot - the compression tools included -
- * must agree on which tools exist, or the proxy asks the model to spend calls
- * compressing tools it will never advertise.
- */
-function fetchAllBackendTools(): Promise<BackendTool[]> {
-  return toolCatalog.list();
-}
-
-/**
- * Whether a tool still needs compressing: never compressed, or compressed from
- * a description the backend has since changed.
- */
-function needsCompression(tool: BackendTool): boolean {
-  return (
-    !compressionCache.hasCompressed(tool.serverName, tool.toolName) ||
-    compressionCache.isStale(tool.serverName, tool.toolName, tool.description)
-  );
-}
-
-/** Tools returned per `tools/list` page when the client does not stop early. */
-const DEFAULT_TOOLS_PAGE_SIZE = 100;
-
-/**
- * Page size, overridable so a test can force pagination without standing up a
- * backend that exposes hundreds of tools. Anything unparseable or non-positive
- * falls back rather than producing an empty page forever.
- */
-function toolsPageSize(): number {
-  const configured = Number.parseInt(process.env.MCP_TOOLS_PAGE_SIZE ?? '', 10);
-  return Number.isInteger(configured) && configured > 0 ? configured : DEFAULT_TOOLS_PAGE_SIZE;
-}
-
-/**
- * Decode a pagination cursor into an offset.
- *
- * Cursors are opaque to the client but are just offsets here - this is a local
- * 1:1 stdio transport, so there is nothing to tamper-proof against. Returns
- * `undefined` for a cursor that cannot be honoured, which the caller reports
- * rather than treating as "start over".
- */
-function parseCursor(cursor: unknown): number | undefined {
-  if (cursor === undefined) return 0;
-  if (typeof cursor !== 'string') return undefined;
-
-  const offset = Number.parseInt(cursor, 10);
-  return Number.isInteger(offset) && offset >= 0 && String(offset) === cursor ? offset : undefined;
-}
-
-/**
- * List all tools from aggregated MCP servers + management tools
- */
-server.setRequestHandler(ListToolsRequestSchema, async (request) => {
-  logger.debug('Handling tools/list request');
-
-  // Fetch backend tools first so the management tools can advertise live
-  // coverage numbers derived from this same snapshot.
-  const backendTools = await fetchAllBackendTools();
-  const coverage = statsService.computeCoverage(backendTools);
-  const liveStats = statsService.formatCoverage(coverage);
-
-  const aggregatorTools: Tool[] = [
-    {
-      name: 'mcp-compression-proxy__create_session',
-      description: 'Create a new session for independent tool expansion control',
-      inputSchema: {
-        type: 'object',
-        properties: {},
-      },
-    },
-    {
-      name: 'mcp-compression-proxy__delete_session',
-      description: 'Delete a session',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          sessionId: {
-            type: 'string',
-            description: 'Session ID to delete',
-          },
-        },
-        required: ['sessionId'],
-      },
-    },
-    {
-      name: 'mcp-compression-proxy__set_session',
-      description:
-        'Set the active session for subsequent tool calls (affects which tools show expanded descriptions)',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          sessionId: {
-            type: 'string',
-            description: 'Session ID to use (from create_session)',
-          },
-        },
-        required: ['sessionId'],
-      },
-    },
-    {
-      name: 'mcp-compression-proxy__clear_compressed_tools_cache',
-      description:
-        'Clear all cached compressed tool descriptions. Use this to start fresh with compression or when tool descriptions have changed significantly.',
-      inputSchema: {
-        type: 'object',
-        properties: {},
-      },
-    },
-    {
-      name: 'mcp-compression-proxy__get_uncompressed_tools',
-      description: `Get tools that need compression (those without cached compressed descriptions). Returns up to the specified limit of tools that need compression. After compressing these descriptions, call mcp-compression-proxy__cache_compressed_tools. Repeat this process until no uncached tools remain. ${liveStats}`,
-      inputSchema: {
-        type: 'object',
-        properties: {
-          limit: {
-            type: 'number',
-            description: 'Maximum number of tools to return (default: 25, max: 100)',
-            minimum: 1,
-            maximum: 100,
-            default: 25,
-          },
-          outputFile: {
-            type: 'string',
-            description: 'Optional file path to write tools JSON instead of returning as text',
-          },
-        },
-      },
-    },
-    {
-      name: 'mcp-compression-proxy__cache_compressed_tools',
-      description: `Save compressed tool descriptions to cache (max 100 tools per call). Provide either descriptions array or inputFile path. After caching, call mcp-compression-proxy__get_uncompressed_tools again to get the next batch if any remain uncached. Continue until all tools are compressed. ${liveStats}`,
-      inputSchema: {
-        type: 'object',
-        properties: {
-          descriptions: {
-            type: 'array',
-            description:
-              'Array of compressed tool descriptions (max 100). Use this OR inputFile, not both.',
-            maxItems: 100,
-            items: {
-              type: 'object',
-              properties: {
-                serverName: { type: 'string' },
-                toolName: { type: 'string' },
-                description: { type: 'string' },
-              },
-              required: ['serverName', 'toolName', 'description'],
-            },
-          },
-          inputFile: {
-            type: 'string',
-            description:
-              'File path to read compressed tools JSON. Use this OR descriptions, not both.',
-          },
-        },
-      },
-    },
-    {
-      name: 'mcp-compression-proxy__invalidate_tool_cache',
-      description:
-        "Drop one tool's cached compressed description so it is compressed again. Use when a compression lost something important; descriptions that merely went stale are re-queued automatically.",
-      inputSchema: {
-        type: 'object',
-        properties: {
-          serverName: {
-            type: 'string',
-            description: 'Server name (e.g., "filesystem")',
-          },
-          toolName: {
-            type: 'string',
-            description: 'Tool name (e.g., "read_file")',
-          },
-        },
-        required: ['serverName', 'toolName'],
-      },
-    },
-    {
-      name: 'mcp-compression-proxy__expand_tool',
-      description: 'Expand a tool to show its full original description (session-specific)',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          serverName: {
-            type: 'string',
-            description: 'Server name (e.g., "filesystem")',
-          },
-          toolName: {
-            type: 'string',
-            description: 'Tool name (e.g., "read_file")',
-          },
-        },
-        required: ['serverName', 'toolName'],
-      },
-    },
-    {
-      name: 'mcp-compression-proxy__collapse_tool',
-      description: 'Collapse a tool back to compressed description (session-specific)',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          serverName: {
-            type: 'string',
-            description: 'Server name',
-          },
-          toolName: {
-            type: 'string',
-            description: 'Tool name',
-          },
-        },
-        required: ['serverName', 'toolName'],
-      },
-    },
-    {
-      name: 'mcp-compression-proxy__compress_via_sampling',
-      description: `Compress uncached tool descriptions automatically using this client's own LLM, via MCP sampling. Requires a client that supports sampling; returns an error explaining the manual alternative if it does not. No API key or extra configuration needed. ${liveStats}`,
-      inputSchema: {
-        type: 'object',
-        properties: {
-          limit: {
-            type: 'number',
-            description: 'Maximum number of tools to compress in this call (default: 25, max: 100)',
-            minimum: 1,
-            maximum: 100,
-            default: 25,
-          },
-        },
-      },
-    },
-    {
-      name: 'mcp-compression-proxy__stats',
-      description:
-        'Get compression and server statistics. Optional inputs: serverName filter and detailLevel ("summary" | "full", default summary). Returns JSON with coverage, cache, and session details.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          serverName: {
-            type: 'string',
-            description: 'Optional server name to scope stats to a single backend server',
-          },
-          detailLevel: {
-            type: 'string',
-            description: 'Detail level for stats ("summary" | "full")',
-            enum: ['summary', 'full'],
-            default: 'summary',
-          },
-        },
-      },
-    },
-    {
-      name: 'mcp-compression-proxy__read_output',
-      description:
-        'Read a cached large tool output by payload ID. Reads 10K characters by default; use offset/length to page or all=true to return the remainder.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          id: { type: 'string', description: 'Payload ID returned by a tool call' },
-          offset: { type: 'number', minimum: 0, default: 0 },
-          length: { type: 'number', minimum: 1, default: 10000 },
-          all: { type: 'boolean', default: false },
-        },
-        required: ['id'],
-      },
-    },
-    {
-      name: 'mcp-compression-proxy__find_output',
-      description:
-        'Find literal text inside a cached large tool output without loading the full payload into context.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          id: { type: 'string', description: 'Payload ID returned by a tool call' },
-          query: { type: 'string', minLength: 1 },
-          caseSensitive: { type: 'boolean', default: false },
-          maxMatches: { type: 'number', minimum: 1, maximum: 100, default: 20 },
-          contextChars: { type: 'number', minimum: 0, maximum: 2000, default: 200 },
-        },
-        required: ['id', 'query'],
-      },
-    },
-    {
-      name: 'mcp-compression-proxy__run_script',
-      description:
-        'Run up to 20 MCP calls sequentially. Later arguments may reference prior JSON output with {"$ref":"stepId#/json/pointer"}. This is declarative and does not execute shell or JavaScript.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          steps: {
-            type: 'array',
-            minItems: 1,
-            maxItems: 20,
-            items: {
-              type: 'object',
-              properties: {
-                id: { type: 'string', minLength: 1 },
-                server: { type: 'string', minLength: 1 },
-                tool: { type: 'string', minLength: 1 },
-                arguments: { type: 'object' },
-                continueOnError: { type: 'boolean', default: false },
-              },
-              required: ['id', 'server', 'tool'],
-            },
-          },
-        },
-        required: ['steps'],
-      },
-    },
-  ];
-
-  const aggregatedTools: Tool[] = backendTools.map((tool) => {
-    // Check if tool is expanded in current session
-    const isExpanded = sessionManager.isToolExpanded(
-      currentSessionId,
-      tool.serverName,
-      tool.toolName
-    );
-
-    // Get description: compressed by default, original if expanded
-    const description = compressionCache.getDescription(
-      tool.serverName,
-      tool.toolName,
-      tool.description,
-      isExpanded
-    );
-
-    // title and annotations pass through: clients use hints such as
-    // readOnlyHint to decide what may run without asking. outputSchema does
-    // not - a result over the payload threshold is replaced by a payload
-    // reference, which would fail the client's validation against it.
-    return {
-      name: `${tool.serverName}__${tool.toolName}`,
-      description,
-      inputSchema: isExpanded
-        ? tool.inputSchema
-        : compressionCache.applySchemaDescriptions(
-            tool.serverName,
-            tool.toolName,
-            tool.inputSchema,
-            tool.description
-          ),
-      ...(tool.title !== undefined ? { title: tool.title } : {}),
-      ...(tool.annotations !== undefined ? { annotations: tool.annotations } : {}),
-    };
-  });
-
-  const config = loadJSONServersCached();
-  // Lazy exposure lists a few discovery tools instead of every backend
-  // schema; pinnedTools keeps chosen backend tools listed directly.
-  const allTools =
-    config?.toolExposure === 'lazy'
-      ? [
-          ...metaTools.definitions('lazy'),
-          ...aggregatorTools.filter((tool) => LAZY_KEPT_MANAGEMENT_TOOLS.includes(tool.name)),
-          ...aggregatedTools.filter((tool) =>
-            matchesIgnorePattern(tool.name, config.pinnedTools ?? [])
-          ),
-        ]
-      : [...aggregatorTools, ...metaTools.definitions('full'), ...aggregatedTools];
-
-  // Backend tools are already filtered; this also lets excludeTools hide the
-  // proxy's own management tools.
-  const excludePatterns = clientManager.getExcludePatterns();
-  const filteredTools = allTools.filter((tool) => {
-    const isExcluded = matchesIgnorePattern(tool.name, excludePatterns);
-    if (isExcluded) {
-      logger.debug({ tool: tool.name }, 'Tool excluded by pattern');
-    }
-    return !isExcluded;
-  });
-
-  logger.debug(
-    { count: filteredTools.length, excluded: allTools.length - filteredTools.length },
-    'Returning tools'
-  );
-
-  // Paginate over the post-exclude list: a cursor pointing into the unfiltered
-  // set would drift as patterns change, and would leak excluded tools at the
-  // page boundaries.
-  const offset = parseCursor(request.params?.cursor);
-
-  if (offset === undefined) {
-    return {
-      tools: [],
-      // The spec has no error channel here, so an unusable cursor returns
-      // nothing rather than silently restarting from the top - a caller
-      // looping on nextCursor would otherwise never terminate.
-      _meta: { error: `Invalid cursor: ${String(request.params?.cursor)}` },
-    };
-  }
-
-  const pageSize = toolsPageSize();
-  const page = filteredTools.slice(offset, offset + pageSize);
-  const nextOffset = offset + page.length;
-
-  return {
-    tools: page,
-    ...(nextOffset < filteredTools.length ? { nextCursor: String(nextOffset) } : {}),
-  };
-});
-
-/**
- * Call a tool (either management tool or aggregated MCP tool)
- */
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
-
-  logger.debug({ tool: name, args }, 'Handling tools/call request');
-
-  if (metaTools.handles(name)) {
-    return metaTools.call(name, (args ?? {}) as Record<string, unknown>);
-  }
-
-  // Management tools
-  if (name === 'mcp-compression-proxy__create_session') {
-    const sessionId = sessionManager.createSession();
-    currentSessionId = sessionId;
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `Session created: ${sessionId}\n\nThis session is now active. Tools expanded in this session will show full descriptions.`,
-        },
-      ],
-    };
-  }
-
-  if (name === 'mcp-compression-proxy__delete_session') {
-    const { sessionId } = args as { sessionId: string };
-    const deleted = sessionManager.deleteSession(sessionId);
-
-    if (currentSessionId === sessionId) {
-      currentSessionId = undefined;
-    }
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: deleted
-            ? `Session ${sessionId} deleted successfully.`
-            : `Session ${sessionId} not found.`,
-        },
-      ],
-    };
-  }
-
-  if (name === 'mcp-compression-proxy__set_session') {
-    const { sessionId } = args as { sessionId: string };
-
-    if (!sessionManager.hasSession(sessionId)) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Error: Session ${sessionId} not found. Create a session first with mcp-compression-proxy__create_session.`,
-          },
-        ],
-        isError: true,
-      };
-    }
-
-    currentSessionId = sessionId;
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `Active session set to: ${sessionId}`,
-        },
-      ],
-    };
-  }
-
-  if (name === 'mcp-compression-proxy__clear_compressed_tools_cache') {
-    try {
-      await compressionCache.clearAll();
-      logger.info('Compression cache cleared');
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: 'Successfully cleared all cached compressed tool descriptions.',
-          },
-        ],
-      };
-    } catch (error) {
-      logger.error({ error }, 'Failed to clear cache');
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Error clearing cache: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          },
-        ],
-        isError: true,
-      };
-    }
-  }
-
-  if (name === 'mcp-compression-proxy__get_uncompressed_tools') {
-    const { limit = 25, outputFile } = args as { limit?: number; outputFile?: string };
-    const actualLimit = Math.min(Math.max(limit, 1), 100);
-
-    const backendTools = await fetchAllBackendTools();
-    const coverage = statsService.computeCoverage(backendTools);
-    const liveStats = statsService.formatCoverage(coverage);
-
-    // Stale entries rejoin the queue alongside never-compressed ones, so a
-    // backend that rewrites a description is picked up by the existing
-    // compress -> cache loop without the caller learning a new concept.
-    const allUncompressedTools = backendTools
-      .filter((tool) => needsCompression(tool))
-      .map((tool) => ({
-        serverName: tool.serverName,
-        toolName: tool.toolName,
-        description: tool.description || '',
-      }));
-
-    // Apply limit
-    const toolsToCompress = allUncompressedTools.slice(0, actualLimit);
-    const remaining = Math.max(0, allUncompressedTools.length - actualLimit);
-
-    if (outputFile) {
-      // Write tools to file instead of returning as text
-      try {
-        const filePath = resolve(outputFile);
-        writeFileSync(filePath, JSON.stringify(toolsToCompress, null, 2), 'utf-8');
-
-        logger.info({ filePath, count: toolsToCompress.length }, 'Wrote tools to file');
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Found ${allUncompressedTools.length} tools without compressed descriptions.\n\nWrote ${toolsToCompress.length} tools to file: ${filePath}\n\nRemaining uncached tools: ${remaining}\n\n${liveStats}\n\nAfter compressing the descriptions in the file, call mcp-compression-proxy__cache_compressed_tools with inputFile parameter.${remaining > 0 ? '\n\nThen call mcp-compression-proxy__get_uncompressed_tools again to get the next batch.' : ''}`,
-            },
-          ],
-        };
-      } catch (error) {
-        logger.error({ outputFile, error }, 'Failed to write tools to file');
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Error writing tools to file: ${error instanceof Error ? error.message : 'Unknown error'}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-    }
-
-    // Original behavior: return as text
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `Found ${allUncompressedTools.length} tools without compressed descriptions.\n\nReturning ${toolsToCompress.length} tools for compression (limit: ${actualLimit}).\n\nRemaining uncached tools: ${remaining}\n\n${liveStats}\n\nTools to compress:\n\n${JSON.stringify(toolsToCompress, null, 2)}\n\nAfter compressing these descriptions, call mcp-compression-proxy__cache_compressed_tools with the results.${remaining > 0 ? '\n\nThen call mcp-compression-proxy__get_uncompressed_tools again to get the next batch.' : ''}`,
-        },
-      ],
-    };
-  }
-
-  if (name === 'mcp-compression-proxy__cache_compressed_tools') {
-    const { descriptions, inputFile } = args as {
-      descriptions?: Array<{
-        serverName: string;
-        toolName: string;
-        description: string;
-      }>;
-      inputFile?: string;
-    };
-
-    // Validate that exactly one parameter is provided. The "neither" case is
-    // handled by the final else below, which lets the compiler narrow
-    // `descriptions` instead of needing a non-null assertion.
-    if (descriptions && inputFile) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: 'Error: Cannot provide both descriptions and inputFile. Choose one method.',
-          },
-        ],
-        isError: true,
-      };
-    }
-
-    // Assigned by every branch below; an initializer would be dead on all of
-    // them.
-    let toolsToCache: Array<{
-      serverName: string;
-      toolName: string;
-      description: string;
-    }>;
-
-    if (inputFile) {
-      // Read from file
-      try {
-        const filePath = resolve(inputFile);
-        const fileContent = readFileSync(filePath, 'utf-8');
-        toolsToCache = JSON.parse(fileContent);
-
-        if (!Array.isArray(toolsToCache)) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: 'Error: File must contain a JSON array of tools.',
-              },
-            ],
-            isError: true,
-          };
-        }
-
-        logger.info({ filePath, count: toolsToCache.length }, 'Read tools from file');
-      } catch (error) {
-        logger.error({ inputFile, error }, 'Failed to read tools from file');
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Error reading tools from file: ${error instanceof Error ? error.message : 'Unknown error'}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-    } else if (descriptions) {
-      toolsToCache = descriptions;
-    } else {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: 'Error: Must provide either descriptions array or inputFile path.',
-          },
-        ],
-        isError: true,
-      };
-    }
-
-    if (toolsToCache.length > 100) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Error: Cannot cache more than 100 tools at once. Received ${toolsToCache.length} tools.`,
-          },
-        ],
-        isError: true,
-      };
-    }
-
-    // Snapshot every backend tool once. Looking the original description up per
-    // tool would issue one listTools round-trip per entry (up to 100 per call).
-    const backendTools = await fetchAllBackendTools();
-    const originalsByKey = new Map(
-      backendTools.map((tool) => [`${tool.serverName}:${tool.toolName}`, tool.description])
-    );
-
-    const coverageBefore = statsService.computeCoverage(backendTools);
-
-    let savedCount = 0;
-
-    for (const desc of toolsToCache) {
-      const { serverName, toolName, description: compressedDescription } = desc;
-
-      compressionCache.saveCompressed(
-        serverName,
-        toolName,
-        compressedDescription,
-        originalsByKey.get(`${serverName}:${toolName}`)
-      );
-
-      savedCount++;
-    }
-
-    // Recompute against the same snapshot to report before/after coverage
-    const coverageAfter = statsService.computeCoverage(backendTools);
-    const remainingTools = coverageAfter.uncompressedTools;
-
-    // Persist to disk
-    try {
-      await compressionCache.saveToDisk();
-      logger.info('Compression cache persisted to disk');
-    } catch (error) {
-      logger.error({ error }, 'Failed to persist cache to disk');
-    }
-
-    const sourceInfo = inputFile ? `from file: ${inputFile}` : 'from descriptions parameter';
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `Cached ${savedCount} compressed tool descriptions successfully ${sourceInfo}.\n\nCoverage: ${coverageBefore.compressedTools}/${coverageBefore.totalTools} (${coverageBefore.coveragePercent}%) → ${coverageAfter.compressedTools}/${coverageAfter.totalTools} (${coverageAfter.coveragePercent}%)\nEstimated tokens saved: ~${coverageAfter.estimatedTokensSaved} (was ~${coverageBefore.estimatedTokensSaved})\n\n${remainingTools > 0 ? `Remaining tools to compress: ${remainingTools}\n\nCall mcp-compression-proxy__get_uncompressed_tools to continue with the next batch.` : 'All tools have been compressed! 🎉'}`,
-        },
-      ],
-    };
-  }
-
-  if (name === 'mcp-compression-proxy__invalidate_tool_cache') {
-    const { serverName, toolName } = args as { serverName: string; toolName: string };
-
-    const removed = compressionCache.invalidate(serverName, toolName);
-
-    if (!removed) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `No cached compression found for ${serverName}:${toolName}. Nothing to invalidate.`,
-          },
-        ],
-      };
-    }
-
-    try {
-      await compressionCache.saveToDisk();
-    } catch (error) {
-      logger.error({ error, serverName, toolName }, 'Failed to persist cache after invalidation');
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Invalidated ${serverName}:${toolName} in memory, but persisting the cache failed: ${error instanceof Error ? error.message : 'Unknown error'}. The entry will come back on restart.`,
-          },
-        ],
-        isError: true,
-      };
-    }
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `Invalidated the cached compression for ${serverName}:${toolName}.\n\nIt will be offered again by mcp-compression-proxy__get_uncompressed_tools.`,
-        },
-      ],
-    };
-  }
-
-  if (name === 'mcp-compression-proxy__expand_tool') {
-    const { serverName, toolName } = args as {
-      serverName: string;
-      toolName: string;
-    };
-
-    if (!currentSessionId) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: 'Error: No active session. Create a session first with mcp-compression-proxy__create_session.',
-          },
-        ],
-        isError: true,
-      };
-    }
-
-    if (!compressionCache.hasCompressed(serverName, toolName)) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Error: No compressed description found for ${serverName}:${toolName}`,
-          },
-        ],
-        isError: true,
-      };
-    }
-
-    sessionManager.expandTool(currentSessionId, serverName, toolName);
-
-    const original = compressionCache.getOriginalDescription(serverName, toolName);
-    const compressed = compressionCache.getCompressedDescription(serverName, toolName);
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `Tool ${serverName}:${toolName} expanded in session ${currentSessionId}.\n\nOriginal: ${original}\nCompressed: ${compressed}`,
-        },
-      ],
-    };
-  }
-
-  if (name === 'mcp-compression-proxy__collapse_tool') {
-    const { serverName, toolName } = args as {
-      serverName: string;
-      toolName: string;
-    };
-
-    if (!currentSessionId) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: 'Error: No active session.',
-          },
-        ],
-        isError: true,
-      };
-    }
-
-    sessionManager.collapseTool(currentSessionId, serverName, toolName);
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `Tool ${serverName}:${toolName} collapsed in session ${currentSessionId}.`,
-        },
-      ],
-    };
-  }
-
-  if (name === 'mcp-compression-proxy__compress_via_sampling') {
-    const { limit = 25 } = args as { limit?: number };
-    const actualLimit = Math.min(Math.max(limit, 1), 100);
-
-    // Prefer the client's own model; fall back to a configured compressor
-    // endpoint, since sampling is deprecated and many clients never had it.
-    const compressor = loadJSONServersCached()?.compressor;
-    const sampler = compressionSampler.isSupported()
-      ? compressionSampler
-      : compressor
-        ? new CompressionSampler(logger, openAiSamplingHost(compressor))
-        : undefined;
-
-    if (!sampler) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: 'Error: This client does not support MCP sampling, so the proxy cannot borrow its LLM, and no "compressor" endpoint is configured in servers.json.\n\nConfigure one (any OpenAI-compatible /chat/completions, e.g. Ollama at http://localhost:11434/v1), or use the manual flow: call mcp-compression-proxy__get_uncompressed_tools, compress the descriptions yourself, then post them back with mcp-compression-proxy__cache_compressed_tools.',
-          },
-        ],
-        isError: true,
-      };
-    }
-
-    const backendTools = await fetchAllBackendTools();
-    const coverageBefore = statsService.computeCoverage(backendTools);
-
-    const uncompressed = backendTools
-      .filter((tool) => needsCompression(tool))
-      .slice(0, actualLimit);
-
-    if (uncompressed.length === 0) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Nothing to compress - all ${coverageBefore.totalTools} tools already have compressed descriptions.\n\n${statsService.formatCoverage(coverageBefore)}`,
-          },
-        ],
-      };
-    }
-
-    const { descriptions, batchesAttempted, batchesFailed } =
-      await sampler.compress(uncompressed);
-
-    for (const entry of descriptions) {
-      const original = backendTools.find(
-        (tool) => tool.serverName === entry.serverName && tool.toolName === entry.toolName
-      )?.description;
-
-      compressionCache.saveCompressed(
-        entry.serverName,
-        entry.toolName,
-        entry.description,
-        original
-      );
-    }
-
-    if (descriptions.length > 0) {
-      try {
-        await compressionCache.saveToDisk();
-      } catch (error) {
-        logger.error({ error }, 'Failed to persist sampled compressions to disk');
-      }
-    }
-
-    const coverageAfter = statsService.computeCoverage(backendTools);
-    const failureNote =
-      batchesFailed > 0
-        ? `\n\n${batchesFailed} of ${batchesAttempted} sampling batches produced no usable result. Re-run to retry them, or fall back to the manual flow.`
-        : '';
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `Compressed ${descriptions.length} of ${uncompressed.length} tools using ${sampler === compressionSampler ? "this client's LLM" : `the configured compressor (${compressor?.model})`}.\n\nCoverage: ${coverageBefore.compressedTools}/${coverageBefore.totalTools} (${coverageBefore.coveragePercent}%) → ${coverageAfter.compressedTools}/${coverageAfter.totalTools} (${coverageAfter.coveragePercent}%)\nEstimated tokens saved: ~${coverageAfter.estimatedTokensSaved}${failureNote}\n\n${
-            coverageAfter.uncompressedTools > 0
-              ? `Remaining: ${coverageAfter.uncompressedTools}. Call this tool again for the next batch.`
-              : 'All tools have been compressed! 🎉'
-          }`,
-        },
-      ],
-    };
-  }
-
-  if (name === 'mcp-compression-proxy__stats') {
-    const { serverName, detailLevel } = args as {
-      serverName?: string;
-      detailLevel?: 'summary' | 'full';
-    };
-
-    try {
-      const stats = await statsService.getStats({ serverName, detailLevel });
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(stats, null, 2),
-          },
-        ],
-      };
-    } catch (error) {
-      logger.error({ error, serverName }, 'Failed to compute stats');
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Error generating stats: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          },
-        ],
-        isError: true,
-      };
-    }
-  }
-
-  if (name === 'mcp-compression-proxy__read_output') {
-    const { id, offset, length, all } = args as {
-      id: string;
-      offset?: number;
-      length?: number;
-      all?: boolean;
-    };
-
-    try {
-      const result = payloadStore.read(id, { offset, length, all });
-      return {
-        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: error instanceof Error ? error.message : String(error),
-          },
-        ],
-        isError: true,
-      };
-    }
-  }
-
-  if (name === 'mcp-compression-proxy__find_output') {
-    const { id, query, caseSensitive, maxMatches, contextChars } = args as {
-      id: string;
-      query: string;
-      caseSensitive?: boolean;
-      maxMatches?: number;
-      contextChars?: number;
-    };
-
-    try {
-      const result = payloadStore.find(id, query, {
-        caseSensitive,
-        maxMatches,
-        contextChars,
-      });
-      return {
-        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: error instanceof Error ? error.message : String(error),
-          },
-        ],
-        isError: true,
-      };
-    }
-  }
-
-  if (name === 'mcp-compression-proxy__run_script') {
-    const { steps } = args as { steps: CallScriptStep[] };
-
-    try {
-      const config = loadJSONServersCached();
-      const result = await runCallScript(
-        steps,
-        async (serverName, toolName, stepArgs) => {
-          const executed = await executeBackendTool(serverName, toolName, stepArgs);
-          return {
-            output: executed.output,
-            isError: executed.result.isError,
-          };
-        },
-        payloadStore,
-        config?.cli?.payloadThreshold ?? DEFAULT_PAYLOAD_THRESHOLD,
-        (output, spec) =>
-          shapeAndStore(output, spec, payloadStore, payloadThreshold(), localModel?.backend)
-      );
-      return {
-        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: error instanceof Error ? error.message : String(error),
-          },
-        ],
-        isError: true,
-      };
-    }
-  }
-
-  // Aggregated MCP tool call
-  // Tool name format: "serverName__toolName". Split on the first separator
-  // only - backend tools are free to have "__" in their own names.
-  const separatorIndex = name.indexOf('__');
-
-  if (separatorIndex <= 0 || separatorIndex + 2 >= name.length) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `Error: Invalid tool name format. Expected "serverName__toolName", got "${name}"`,
-        },
-      ],
-      isError: true,
-    };
-  }
-
-  const serverName = name.slice(0, separatorIndex);
-  const toolName = name.slice(separatorIndex + 2);
-
-  return callAggregated(serverName, toolName, (args || {}) as Record<string, unknown>);
-});
 
 /**
  * Shut down backend servers and exit.
@@ -1257,95 +98,60 @@ async function shutdown(reason: string, exitCode = 0): Promise<void> {
     logger.error({ error }, 'Error while disconnecting backend servers');
   }
 
-  try {
-    await server.close();
-  } catch (error) {
-    logger.debug({ error }, 'Error while closing server transport');
-  }
-
-  sessionManager.destroy();
+  await session.close();
   payloadStore.destroy();
-  await localModel?.backend.close();
+  await models.closeAll();
 
   process.exit(exitCode);
 }
 
-/**
- * Parse command-line arguments
- */
-function parseArgs(): { clearCache: boolean } {
-  const args = process.argv.slice(2);
-  return {
-    clearCache: args.includes('--clear-cache'),
-  };
-}
-
-/**
- * Start the server
- */
 async function main() {
   logger.info('Starting MCP Compression Proxy Server');
 
-  // Parse command-line arguments
-  const { clearCache } = parseArgs();
-
-  // Handle --clear-cache flag
-  if (clearCache) {
+  if (process.argv.slice(2).includes('--clear-cache')) {
     logger.info('Clearing compression cache...');
     await compressionCache.clearAll();
     logger.info('Cache cleared successfully');
     process.exit(0);
   }
 
-  // Load cached compressions from disk
   try {
     await compressionCache.loadFromDisk();
   } catch (error) {
     logger.warn({ error }, 'Failed to load cache, continuing with empty cache');
   }
 
-  // Load configuration from JSON files
-  const config = loadJSONServersCached();
+  const initial = config();
 
-  // Initialize backend MCP servers BEFORE connecting to Q CLI
-  // This ensures all tools are available when the MCP client queries us
-  if (!config) {
+  // Initialize backend MCP servers BEFORE connecting to the client, so all
+  // tools are available when it first asks.
+  if (!initial) {
     logger.warn(
       'No valid configuration found. Server will start with no backend MCP servers. Please create a servers.json file to add MCP servers.'
     );
-    // Continue with empty configuration - server will only provide management tools
   } else {
-    // Configure noCompress patterns and uncompressed-tool fallback
-    clientManager.setExcludePatterns(config.excludePatterns);
-    compressionCache.setNoCompressPatterns(config.noCompressPatterns);
-    compressionCache.setFallbackBehavior(config.compressionFallbackBehavior ?? 'original');
+    clientManager.setExcludePatterns(initial.excludePatterns);
 
-    // Initialize MCP clients (only enabled servers)
-    const enabledServers = config.servers.filter((server) => {
-      // Server is enabled if enabled field is not explicitly false
-      return server.enabled !== false;
-    });
-
+    const enabledServers = initial.servers.filter((server) => server.enabled !== false);
     logger.info(
       {
-        total: config.servers.length,
+        total: initial.servers.length,
         enabled: enabledServers.length,
-        servers: enabledServers.map((s) => s.name),
+        servers: enabledServers.map((server) => server.name),
       },
       'Initializing backend MCP servers with timeout protection'
     );
 
-    // Wait for all servers to initialize or timeout before reporting ready
     try {
       await clientManager.initializeServers(
         enabledServers,
-        config.defaultTimeout,
-        config.inheritEnv,
+        initial.defaultTimeout,
+        initial.inheritEnv,
         {
-          softMaxConnectionAgeSeconds: config.softMaxConnectionAgeSeconds,
-          hardMaxConnectionAgeSeconds: config.hardMaxConnectionAgeSeconds,
-          authErrorPatterns: config.authErrorPatterns,
-          authRetryTools: config.authRetryTools,
+          softMaxConnectionAgeSeconds: initial.softMaxConnectionAgeSeconds,
+          hardMaxConnectionAgeSeconds: initial.hardMaxConnectionAgeSeconds,
+          authErrorPatterns: initial.authErrorPatterns,
+          authRetryTools: initial.authRetryTools,
         }
       );
       logger.info('Backend MCP servers initialization complete');
@@ -1354,38 +160,19 @@ async function main() {
     }
   }
 
-  // Model settings are read once; restart the MCP client after changing them.
-  localModel = createLocalModel(config?.model, {
-    // dist/index.js -> <package>/python/needle_bridge.py
-    bridgeScript: fileURLToPath(new URL('../python/needle_bridge.py', import.meta.url)),
-    stateDir: getDaemonRuntimePaths().baseDir,
-    logger,
-  });
-  if (localModel?.config.confirmAuthFailures) {
-    clientManager.setAuthFailureConfirmer(modelAuthConfirmer(localModel.backend));
+  const model = models.get(initial?.model);
+  if (model?.config.confirmAuthFailures) {
+    clientManager.setAuthFailureConfirmer(modelAuthConfirmer(model.backend));
   }
-  if (localModel?.embeddings && config?.toolExposure === 'lazy') {
-    // Lazy mode searches on every discovery; index before the first one.
-    const embeddings = localModel.embeddings;
-    toolCatalog
-      .list()
-      .then((tools) => embeddings.warm(tools))
-      .catch((error) => logger.warn({ error: String(error) }, 'Could not index tool embeddings'));
-  }
+  session.warmSearch();
 
   // Outside the branch above on purpose: the fingerprint the watch polls counts
   // a missing config file, so a user who writes their first servers.json after
   // starting the proxy gets their servers without restarting the MCP client.
-  clientManager.startConfigWatch(loadJSONServersCached, undefined, (reloaded) => {
-    compressionCache.setNoCompressPatterns(reloaded.noCompressPatterns);
-    compressionCache.setFallbackBehavior(reloaded.compressionFallbackBehavior ?? 'original');
-  });
-
-  // Now connect to the MCP client - all backend servers are ready (or timed out)
-  const transport = new StdioServerTransport();
+  clientManager.startConfigWatch(loadJSONServersCached);
 
   // When the client disconnects, take the backend servers down with us.
-  server.onclose = () => {
+  session.server.onclose = () => {
     void shutdown('client disconnected');
   };
 
@@ -1395,8 +182,7 @@ async function main() {
     });
   }
 
-  await server.connect(transport);
-
+  await session.connect(new StdioServerTransport());
   logger.info('MCP Compression Proxy Server ready and connected to stdio');
 }
 

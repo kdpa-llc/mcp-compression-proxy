@@ -10,6 +10,16 @@ import { matchesIgnorePattern } from '../config/loader.js';
 import type { CompressionFallbackBehavior } from '../config/schema.js';
 
 /**
+ * How one client wants descriptions shown. A daemon shares one cache between
+ * clients whose servers.json files say different things, so the display
+ * settings travel with each call; without them the cache's own settings apply.
+ */
+export interface DisplayPolicy {
+  noCompressPatterns?: string[];
+  fallbackBehavior?: CompressionFallbackBehavior;
+}
+
+/**
  * In-memory cache for compressed tool descriptions
  * Key format: "serverName:toolName"
  */
@@ -80,8 +90,8 @@ export class CompressionCache {
    * Check if a tool should bypass compression display
    * (for showing original descriptions while still caching compressed versions)
    */
-  private shouldBypassCompression(toolName: string): boolean {
-    return matchesIgnorePattern(toolName, this.noCompressPatterns);
+  private shouldBypassCompression(toolName: string, policy?: DisplayPolicy): boolean {
+    return matchesIgnorePattern(toolName, policy?.noCompressPatterns ?? this.noCompressPatterns);
   }
 
   /**
@@ -131,13 +141,14 @@ export class CompressionCache {
     serverName: string,
     toolName: string,
     originalDescription?: string,
-    isExpandedInSession?: boolean
+    isExpandedInSession?: boolean,
+    policy?: DisplayPolicy
   ): string | undefined {
     const fullToolName = `${serverName}__${toolName}`;
     const key = this.getKey(serverName, toolName);
 
     // Always bypass compression for noCompress patterns
-    if (this.shouldBypassCompression(fullToolName)) {
+    if (this.shouldBypassCompression(fullToolName, policy)) {
       return originalDescription;
     }
 
@@ -153,7 +164,7 @@ export class CompressionCache {
 
     // Nothing compressed yet - 'blank' keeps the tool callable while costing
     // no context; 'original' (default) shows the server's own description.
-    return this.fallbackBehavior === 'blank' ? '' : originalDescription;
+    return (policy?.fallbackBehavior ?? this.fallbackBehavior) === 'blank' ? '' : originalDescription;
   }
 
   /**
@@ -202,12 +213,13 @@ export class CompressionCache {
     serverName: string,
     toolName: string,
     schema: T,
-    liveOriginal?: string
+    liveOriginal?: string,
+    policy?: DisplayPolicy
   ): T {
     const parameters = this.cache[this.getKey(serverName, toolName)]?.parameters;
     if (
       !parameters ||
-      this.shouldBypassCompression(`${serverName}__${toolName}`) ||
+      this.shouldBypassCompression(`${serverName}__${toolName}`, policy) ||
       this.isStale(serverName, toolName, liveOriginal)
     ) {
       return schema;
