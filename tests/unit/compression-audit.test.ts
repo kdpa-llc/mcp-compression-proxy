@@ -87,3 +87,16 @@ describe('auditCompression', () => {
     expect(lenient.confusable).toEqual([]);
   });
 });
+
+describe('auditCompression edges', () => {
+  it('handles tools with no words to compare', async () => {
+    const bare = [
+      { serverName: 's', toolName: 'a', inputSchema: { type: 'object' as const } },
+      { serverName: 't', toolName: 'b', inputSchema: { type: 'object' as const } },
+    ];
+    const audit = await auditCompression(bare, cacheOf({ 's/a': 'the' }));
+    expect(audit.checked).toBe(1);
+    expect(audit.duplicates).toEqual([]);
+  });
+});
+

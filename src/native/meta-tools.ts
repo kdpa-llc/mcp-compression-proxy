@@ -141,15 +141,12 @@ export interface MetaToolDeps {
   executeText(server: string, tool: string, args: Record<string, unknown>): Promise<{ output: string; isError?: boolean }>;
 }
 
-function json(value: unknown, isError = false): CallToolResult {
-  return {
-    content: [{ type: 'text', text: JSON.stringify(value, null, 2) }],
-    ...(isError ? { isError: true } : {}),
-  };
+function json(value: unknown): CallToolResult {
+  return { content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] };
 }
 
-function text(message: string, isError = false): CallToolResult {
-  return { content: [{ type: 'text', text: message }], ...(isError ? { isError: true } : {}) };
+function errorText(message: string): CallToolResult {
+  return { content: [{ type: 'text', text: message }], isError: true };
 }
 
 /**
@@ -187,16 +184,16 @@ export class MetaTools {
         case META_TOOLS.auditCompression:
           return await this.audit(args);
         default:
-          return text(`Unknown tool: ${name}`, true);
+          return errorText(`Unknown tool: ${name}`);
       }
     } catch (error) {
-      return text(`Error: ${error instanceof Error ? error.message : String(error)}`, true);
+      return errorText(`Error: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
   private async searchTools(args: Record<string, unknown>): Promise<CallToolResult> {
     const query = String(args.query ?? '').trim();
-    if (!query) return text('Error: query is required', true);
+    if (!query) return errorText('Error: query is required');
     const limit = Number(args.limit);
     const result = await this.deps.search.search(
       query,
@@ -213,7 +210,7 @@ export class MetaTools {
     const server = String(args.server ?? '');
     const tool = String(args.tool ?? '');
     const found = await this.deps.catalog.find(server, tool);
-    if (!found) return text(`Error: Tool '${tool}' not found on server '${server}'`, true);
+    if (!found) return errorText(`Error: Tool '${tool}' not found on server '${server}'`);
     this.deps.usage?.recordSelection(server, tool);
     return json({
       server,
@@ -230,7 +227,7 @@ export class MetaTools {
   private async callTool(args: Record<string, unknown>): Promise<CallToolResult> {
     const server = String(args.server ?? '');
     const tool = String(args.tool ?? '');
-    if (!server || !tool) return text('Error: server and tool are required', true);
+    if (!server || !tool) return errorText('Error: server and tool are required');
     const toolArgs = (args.arguments ?? {}) as Record<string, unknown>;
     this.deps.usage?.recordSelection(server, tool);
 
@@ -240,7 +237,7 @@ export class MetaTools {
     }
 
     const { output, isError } = await this.deps.executeText(server, tool, toolArgs);
-    if (isError) return text(output, true);
+    if (isError) return errorText(output);
     return json(
       await shapeAndStore(output, spec, this.deps.payloadStore, this.deps.threshold(), this.deps.model())
     );
@@ -248,7 +245,7 @@ export class MetaTools {
 
   private async suggestTool(args: Record<string, unknown>): Promise<CallToolResult> {
     const request = String(args.request ?? '').trim();
-    if (!request) return text('Error: request is required', true);
+    if (!request) return errorText('Error: request is required');
     const suggestion = await new CallSuggester(
       this.deps.search,
       this.deps.catalog,
@@ -273,7 +270,7 @@ export class MetaTools {
 
   private async shapeSaved(args: Record<string, unknown>): Promise<CallToolResult> {
     const spec = readShapeSpec(args);
-    if (!spec) return text('Error: pass want and/or where', true);
+    if (!spec) return errorText('Error: pass want and/or where');
     const content = this.deps.payloadStore.read(String(args.id ?? ''), { all: true }).content;
     return json(
       await shapeAndStore(content, spec, this.deps.payloadStore, this.deps.threshold(), this.deps.model())

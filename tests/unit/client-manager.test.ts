@@ -1564,6 +1564,12 @@ describe('MCPClientManager', () => {
         expect(onConfigLoaded).toHaveBeenCalledWith(withPatterns);
       });
 
+      it('should treat missing exclude patterns as none', () => {
+        clientManager.setExcludePatterns(['a__*']);
+        clientManager.setExcludePatterns(undefined);
+        expect(clientManager.getExcludePatterns()).toEqual([]);
+      });
+
       it('should pick up edited excludeTools on a tick', async () => {
         // The daemon used to keep the exclusions it read at startup, so an
         // edit to excludeTools changed nothing until a restart.

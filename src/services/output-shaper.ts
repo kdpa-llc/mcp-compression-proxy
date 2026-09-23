@@ -111,8 +111,8 @@ function lookup(source: Record<string, unknown>, key: string): { found: boolean;
   return { found: false };
 }
 
+/** Whether a present (non-null) value fits a leaf type. */
 function matchesLeaf(value: unknown, leaf: Leaf): boolean {
-  if (value === null || value === undefined) return false;
   if (leaf.options) {
     return leaf.options.some((option) => option.toLowerCase() === String(value).toLowerCase());
   }
@@ -212,7 +212,8 @@ export function findList(value: unknown): { items: unknown[]; path: string } | u
 }
 
 function itemText(item: unknown): string {
-  return typeof item === 'string' ? item : JSON.stringify(item) ?? '';
+  // Items come from parsed JSON or split text, so JSON.stringify never sees undefined.
+  return typeof item === 'string' ? item : JSON.stringify(item);
 }
 
 /**
@@ -273,7 +274,8 @@ export async function rankItems(
   }
 
   const indexes = [...fused]
-    .sort((a, b) => b[1] - a[1] || a[0] - b[0])
+    // Scores come from distinct ranks, so they never tie; the sort is stable anyway.
+    .sort((a, b) => b[1] - a[1])
     .slice(0, limit)
     .map(([position]) => position);
   return { indexes, ranking, notes };
@@ -423,12 +425,11 @@ async function shapeJson(
   const list = findList(value);
   const item = itemShapeFor(want, list?.path || (list ? '/' : undefined));
 
-  // Without a filter or a list-shaped want, this is a plain projection.
+  // Without a filter or a list-shaped want, this is a plain projection. (With
+  // neither want nor where, shapeOutput has already returned.)
   if (!where && !item) {
-    if (want !== undefined) {
-      meta.method = 'projection';
-      return { data: project(value, want, '', meta), meta };
-    }
+    meta.method = 'projection';
+    return { data: project(value, want, '', meta), meta };
   }
 
   if (!list) {

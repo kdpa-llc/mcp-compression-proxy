@@ -44,8 +44,9 @@ function tfidfVectors(texts: string[]): { vectors: Map<string, number>[]; simila
       documentFrequency.set(token, (documentFrequency.get(token) ?? 0) + 1);
     }
   }
+  // Every token was counted above, so its frequency exists.
   const idf = (token: string) =>
-    Math.log(1 + texts.length / (documentFrequency.get(token) ?? 1));
+    Math.log(1 + texts.length / (documentFrequency.get(token) as number));
 
   const vectors = tokenized.map((tokens) => {
     const vector = new Map<string, number>();

@@ -357,9 +357,10 @@ export async function reviewProposals(
     options.model,
     { margin: DISTINCTNESS_MARGIN }
   );
-  for (const finding of audit.confusable) {
-    const item = reviewed.find((entry) => entry.accepted && toolKey(entry.server, entry.tool) === finding.tool);
-    if (item) {
+  const confusable = new Map(audit.confusable.map((finding) => [finding.tool, finding]));
+  for (const item of reviewed) {
+    const finding = item.accepted ? confusable.get(toolKey(item.server, item.tool)) : undefined;
+    if (finding) {
       item.accepted = false;
       delete item.proposal;
       item.problems.push(

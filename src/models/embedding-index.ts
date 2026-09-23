@@ -66,7 +66,8 @@ export function meanVector(vectors: Float32Array[]): Float32Array {
   for (const vector of vectors) {
     for (let i = 0; i < mean.length; i++) mean[i] += vector[i];
   }
-  for (let i = 0; i < mean.length; i++) mean[i] /= vectors.length || 1;
+  // With no vectors the mean is empty, so this never divides by zero.
+  for (let i = 0; i < mean.length; i++) mean[i] /= vectors.length;
   return mean;
 }
 

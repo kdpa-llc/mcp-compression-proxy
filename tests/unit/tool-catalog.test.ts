@@ -176,4 +176,19 @@ describe('ToolCatalog', () => {
     expect(await catalog.find('b', 'nope')).toBeUndefined();
     expect(await catalog.find('zzz', 'send')).toBeUndefined();
   });
+
+  it('does not let a stale listing clear a newer one in flight', async () => {
+    const catalog = new ToolCatalog(manager, logger);
+
+    const first = catalog.list();
+    manager.setExcludePatterns(['a__read']);
+    const second = catalog.list();
+
+    const [, after] = await Promise.all([first, second]);
+    // Exclusion is applied as each listing finishes, so the newer one is right.
+    expect(after.map((t) => t.toolName)).not.toContain('read');
+    // Both fan-outs ran; the first finishing did not drop the second's slot.
+    expect(listA).toHaveBeenCalledTimes(2);
+  });
 });
+

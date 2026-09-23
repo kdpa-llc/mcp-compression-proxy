@@ -57,8 +57,9 @@ export class Bm25Index {
     return this.ids.length;
   }
 
+  /** Only called for tokens some document contains, so the count exists. */
   private idf(token: string): number {
-    const df = this.documentFrequency.get(token) ?? 0;
+    const df = this.documentFrequency.get(token) as number;
     return Math.log(1 + (this.ids.length - df + 0.5) / (df + 0.5));
   }
 

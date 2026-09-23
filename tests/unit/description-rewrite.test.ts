@@ -282,3 +282,32 @@ describe('applySchemaDescriptions', () => {
     expect(cache.applySchemaDescriptions('gh', 'list_issues', schema, 'Gets issues.')).toBe(schema);
   });
 });
+
+describe('description rewrite edges', () => {
+  const bare: CatalogTool = { serverName: 'x', toolName: 'bare', inputSchema: { type: 'object' } };
+
+  it('handles tools with no description and no properties', () => {
+    expect(descriptionIssues(bare)).toEqual(['no description']);
+    const batch = nextBatch([...tools, bare], newCache(), { tool: 'x/bare' });
+    expect(batch.items[0]).toMatchObject({ original: '', parameters: {} });
+    const withBareSimilar = nextBatch([bare, { ...bare, toolName: 'bare_two' }], newCache(), { tool: 'x/bare' });
+    expect(withBareSimilar.items[0].similar).toEqual([{ tool: 'x/bare_two', description: '' }]);
+  });
+
+  it('rejects a missing description, parameters on an unknown tool, and over-long parameter text', async () => {
+    const review = await reviewProposals(
+      [
+        { server: 'gh', tool: 'list_issues', parameters: { state: 'x'.repeat(401) } },
+        { server: 'gh', tool: 'ghost', description: 'x', parameters: { a: 'b' } },
+      ],
+      tools,
+      newCache()
+    );
+    expect(review.reviewed[0].problems).toEqual([
+      'description is empty',
+      'parameter "state" description is over 400 chars',
+    ]);
+    expect(review.reviewed[1].problems).toContain('parameter "a" is not in the tool\'s schema');
+  });
+});
+

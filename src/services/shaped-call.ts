@@ -54,7 +54,8 @@ export async function shapeAndStore(
   const source = handle(payloadStore.capture(output, 0).reference);
   const shaped = await shapeOutput(output, spec, model);
 
-  const serialized = JSON.stringify(shaped.data) ?? 'null';
+  // shapeOutput's data is parsed JSON, text or null - never undefined.
+  const serialized = JSON.stringify(shaped.data);
   if (serialized.length > threshold) {
     const stored = handle(payloadStore.capture(serialized, threshold).reference);
     return {

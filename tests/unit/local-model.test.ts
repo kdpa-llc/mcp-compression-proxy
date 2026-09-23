@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { mkdtempSync, rmSync, statSync, writeFileSync } from 'fs';
+import { EventEmitter } from 'events';
+import { PassThrough } from 'stream';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { Logger } from 'pino';
@@ -293,3 +295,172 @@ describe('createLocalModel', () => {
     expect(withoutSearch?.embeddings).toBeUndefined();
   });
 });
+
+describe('NeedleBridge process edges', () => {
+  /** A child process driven by the test: write lines to its stdout by hand. */
+  function fakeChild(options: { stdout?: boolean } = {}) {
+    const child = new EventEmitter() as EventEmitter & {
+      stdin: PassThrough;
+      stdout?: PassThrough;
+      stderr: PassThrough;
+      kill: jest.Mock;
+      ref: jest.Mock;
+      unref: jest.Mock;
+      written: string[];
+    };
+    child.stdin = new PassThrough();
+    child.stdout = options.stdout === false ? undefined : new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = jest.fn();
+    child.ref = jest.fn();
+    child.unref = jest.fn();
+    child.written = [];
+    child.stdin.on('data', (chunk: Buffer) => child.written.push(...chunk.toString().trim().split('\n')));
+    return child;
+  }
+
+  function bridgeWith(child: ReturnType<typeof fakeChild> | (() => never), config: Record<string, unknown> = {}) {
+    const spawnFn = jest.fn(typeof child === 'function' ? child : () => child);
+    const model = new NeedleBridge(
+      { provider: 'needle', timeout: 5, ...config },
+      '/bundled/needle_bridge.py',
+      makeLogger(),
+      spawnFn as never
+    );
+    return { model, spawnFn };
+  }
+
+  const say = (child: ReturnType<typeof fakeChild>, message: unknown) =>
+    child.stdout?.write(`${JSON.stringify(message)}\n`);
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+  it('runs python3 on the bundled script by default, with telemetry off', async () => {
+    const child = fakeChild();
+    const { model, spawnFn } = bridgeWith(child, { idleTimeout: 0 });
+    const pending = model.embed(['x']);
+    say(child, { hello: 'ignored before ready' });
+    say(child, { ready: true });
+    await tick();
+
+    const [command, args, options] = spawnFn.mock.calls[0] as unknown as [string, string[], { env: Record<string, string> }];
+    expect(command).toBe('python3');
+    expect(args).toEqual(['/bundled/needle_bridge.py']);
+    expect(options.env).toMatchObject({ NEEDLE_TELEMETRY: '0', DO_NOT_TRACK: '1' });
+
+    const request = JSON.parse(child.written[0]);
+    say(child, { id: 999, result: {} }); // unknown id: ignored
+    say(child, { id: request.id, result: { vectors: [] } });
+    await expect(pending).resolves.toEqual([]);
+    await model.close();
+  });
+
+  it('reports a spawn that throws, Error or not', async () => {
+    const thrown = bridgeWith(() => {
+      throw new Error('EACCES');
+    });
+    await expect(thrown.model.embed(['x'])).rejects.toThrow('Local model unavailable: EACCES');
+
+    const odd = bridgeWith(() => {
+      throw 'spawn failed';
+    });
+    await expect(odd.model.embed(['x'])).rejects.toThrow('Local model unavailable: spawn failed');
+  });
+
+  it('fails a child that has no stdout', async () => {
+    const { model } = bridgeWith(fakeChild({ stdout: false }));
+    await expect(model.embed(['x'])).rejects.toThrow('bridge has no stdout');
+  });
+
+  it('gives up on a model that never finishes loading', async () => {
+    jest.useFakeTimers();
+    try {
+      const { model } = bridgeWith(fakeChild());
+      const pending = model.embed(['x']);
+      const assertion = expect(pending).rejects.toThrow('timed out loading the model');
+      await jest.advanceTimersByTimeAsync(120_000);
+      await assertion;
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('reports a bridge error without a message, and keeps the process for concurrent work', async () => {
+    const child = fakeChild();
+    const { model } = bridgeWith(child, { idleTimeout: 0 });
+    const first = model.embed(['a']);
+    say(child, { ready: true });
+    await tick();
+    const second = model.embed(['b']);
+    await tick();
+
+    const [one, two] = child.written.map((line) => JSON.parse(line).id);
+    say(child, { id: one, error: {} });
+    await expect(first).rejects.toThrow('Local model error: unknown');
+    // One request still in flight: the process stays referenced.
+    expect(child.unref).not.toHaveBeenCalled();
+
+    say(child, { id: two, result: { vectors: [] } });
+    await expect(second).resolves.toEqual([]);
+    expect(child.unref).toHaveBeenCalled();
+    await model.close();
+  });
+
+  it('rejects work still in flight when closed', async () => {
+    const child = fakeChild();
+    const { model } = bridgeWith(child);
+    const pending = model.embed(['x']);
+    say(child, { ready: true });
+    await tick();
+
+    await model.close();
+    await expect(pending).rejects.toThrow('Model bridge is closed');
+    expect(child.kill).toHaveBeenCalled();
+  });
+});
+
+describe('EmbeddingIndex edges', () => {
+  const tools = [
+    tool('fs', 'list_directory', 'List a directory.'),
+    tool('mail', 'send_email', 'Send an email.'),
+  ];
+  const vector = () => new Float32Array([1, 0]);
+
+  it('ignores a cache from another format version', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'embeddings-'));
+    try {
+      const cacheFile = join(dir, 'embeddings.json');
+      writeFileSync(cacheFile, JSON.stringify({ version: 2, vectors: { abc: 'AAAA' } }));
+      const embed = jest.fn(async (texts: string[]) => texts.map(vector));
+      await new EmbeddingIndex({ embed }, makeLogger(), cacheFile).score('list', tools);
+      // Both tools and the query had to be embedded: nothing came from the file.
+      expect(embed.mock.calls.flatMap(([texts]) => texts)).toHaveLength(3);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps working when the cache cannot be written', async () => {
+    const logger = makeLogger();
+    const embed = jest.fn(async (texts: string[]) => texts.map(vector));
+    const index = new EmbeddingIndex({ embed }, logger, '/nonexistent/dir/embeddings.json');
+    expect(await index.score('list', tools)).toBeDefined();
+    expect(logger.debug).toHaveBeenCalledWith(expect.anything(), 'Could not persist embedding cache');
+  });
+
+  it('answers nothing when the model returns too few vectors', async () => {
+    const short = new EmbeddingIndex({ embed: jest.fn(async () => []) }, makeLogger());
+    expect(await short.score('list', tools)).toBeUndefined();
+
+    let calls = 0;
+    const noQuery = new EmbeddingIndex(
+      { embed: jest.fn(async (texts: string[]) => (calls++ === 0 ? texts.map(vector) : [])) },
+      makeLogger()
+    );
+    expect(await noQuery.score('list', tools)).toBeUndefined();
+  });
+
+  it('takes the mean of no vectors as an empty vector', () => {
+    expect(meanVector([])).toHaveLength(0);
+  });
+});
+

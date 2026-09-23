@@ -231,8 +231,7 @@ export class NeedleBridge implements ModelBackend {
   /** Keep the process referenced only while there is work in flight. */
   private setReferenced(referenced: boolean): void {
     const child = this.child;
-    if (!child) return;
-    for (const handle of [child, child.stdin, child.stdout, child.stderr]) {
+    for (const handle of [child, child?.stdin, child?.stdout, child?.stderr]) {
       const refable = handle as unknown as { ref?: () => void; unref?: () => void } | null;
       if (referenced) refable?.ref?.();
       else refable?.unref?.();
@@ -244,11 +243,10 @@ export class NeedleBridge implements ModelBackend {
     this.setReferenced(false);
     clearTimeout(this.idleTimer);
     if (this.idleTimeoutMs > 0) {
+      // request() clears this timer, so it only fires with nothing in flight.
       this.idleTimer = setTimeout(() => {
-        if (this.pending.size === 0) {
-          this.logger.info('Stopping idle local model bridge');
-          this.stopChild();
-        }
+        this.logger.info('Stopping idle local model bridge');
+        this.stopChild();
       }, this.idleTimeoutMs);
       this.idleTimer.unref?.();
     }
