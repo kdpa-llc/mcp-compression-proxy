@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file. See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.2.0](https://github.com/kdpa-llc/mcp-compression-proxy/compare/v1.1.2...v1.2.0) (2026-09-23)
+
+### Features
+
+* optional local Needle 3 model for semantic tool search ([f8471c0](https://github.com/kdpa-llc/mcp-compression-proxy/commit/f8471c078613d4b807cc1c51acfe6816c942b751))
+* rank tool search with BM25 and learn from what agents use ([3d042f0](https://github.com/kdpa-llc/mcp-compression-proxy/commit/3d042f0dddb3b32b02fc0694dfd1c09ed12b4363))
+* shaped calls, call suggestions, lazy native mode, audit, compressor ([f02f6c2](https://github.com/kdpa-llc/mcp-compression-proxy/commit/f02f6c25c427bcfc1411827575c3933fe307032e))
+* ship an mcp-cli skill and rewrite descriptions with the agent's own model ([b8f2ac2](https://github.com/kdpa-llc/mcp-compression-proxy/commit/b8f2ac227de297415f36ea13f50d231acc07b6c3))
+
+### Bug Fixes
+
+* enforce excludeTools on calls and read every backend tool page ([6ac641b](https://github.com/kdpa-llc/mcp-compression-proxy/commit/6ac641b3c54abd359881952b8fd514a987bffc3e))
+* harden the model bridge, compressor credentials and rewrite saving ([98beb14](https://github.com/kdpa-llc/mcp-compression-proxy/commit/98beb146bc3b4d35ce92a45a70a89a15d1733eaa))
+* share the usage log across processes and cache audit embeddings ([04c0ee4](https://github.com/kdpa-llc/mcp-compression-proxy/commit/04c0ee4378883bcaece810d3a025c8740fc78a24))
+
+### Documentation
+
+* document ranked search, shaped calls, lazy mode and the local model ([47d612f](https://github.com/kdpa-llc/mcp-compression-proxy/commit/47d612f30d9373d76a439ce2742da16205bddd76))
+
 ## [1.1.2](https://github.com/kdpa-llc/mcp-compression-proxy/compare/v1.1.1...v1.1.2) (2026-09-13)
 
 ### Documentation
