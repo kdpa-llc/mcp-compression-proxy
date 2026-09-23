@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
+import { appendFileSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { splitWords, stem, tokenize } from '../../src/search/text.js';
 import { Bm25Index } from '../../src/search/bm25.js';
 import { ToolSearch, type SemanticScorer } from '../../src/search/tool-search.js';
-import { MAX_USAGE_RECORDS, UsageLog } from '../../src/search/usage-log.js';
+import { MAX_USAGE_RECORDS, USAGE_TRIM_SLACK, UsageLog } from '../../src/search/usage-log.js';
 import type { CatalogTool } from '../../src/mcp/tool-catalog.js';
 import { SEARCH_CATALOG, SEARCH_QUERIES } from '../fixtures/search-catalog.js';
 
@@ -281,17 +281,71 @@ describe('UsageLog', () => {
     expect(new UsageLog(join(dir, 'none.jsonl'), () => true).quality().top1Rate).toBe(0);
   });
 
-  it('skips torn lines and keeps the log bounded', () => {
+  it('skips torn lines and keeps the log bounded, trimming the file in batches', () => {
     const file = join(dir, 'usage.jsonl');
     const line = JSON.stringify({ at: 1, query: 'q', server: 's', tool: 't', rank: 1, shown: 1 });
-    writeFileSync(file, `${line}\n{"broken\n${Array(MAX_USAGE_RECORDS).fill(line).join('\n')}\n`);
+    const lines = () => readFileSync(file, 'utf-8').trim().split('\n').length;
+    writeFileSync(file, `{"broken\n${Array(MAX_USAGE_RECORDS + USAGE_TRIM_SLACK - 2).fill(line).join('\n')}\n`);
 
     const log = makeLog();
     expect(log.load()).toHaveLength(MAX_USAGE_RECORDS);
 
+    // Under the slack, a choice is only appended.
     log.recordSearch('q', ['s/t']);
     log.recordSelection('s', 't');
-    expect(readFileSync(file, 'utf-8').trim().split('\n')).toHaveLength(MAX_USAGE_RECORDS);
+    expect(lines()).toBe(MAX_USAGE_RECORDS + USAGE_TRIM_SLACK);
+
+    // Past it, the file is rewritten with the newest records only.
+    clock += 60_000;
+    log.recordSearch('q', ['s/u']);
+    log.recordSelection('s', 'u');
+    expect(lines()).toBe(MAX_USAGE_RECORDS);
+    expect(log.load()).toHaveLength(MAX_USAGE_RECORDS);
+    expect(log.load().at(-1)).toMatchObject({ tool: 'u' });
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+  });
+
+  it("sees choices another process appended, and notices when it rewrote the file", () => {
+    const proxy = makeLog();
+    const daemon = makeLog();
+    expect(daemon.quality().selections).toBe(0);
+
+    proxy.recordSearch('remember a person', ['memory/create_entities']);
+    clock += 1000;
+    proxy.recordSelection('memory', 'create_entities');
+    expect(daemon.quality().selections).toBe(1);
+    expect(daemon.scores('remember my manager').get('memory/create_entities')).toBeGreaterThan(0);
+
+    // A rewrite by the other process (a trim) replaces the file: read it afresh, not on from the old offset.
+    const file = join(dir, 'usage.jsonl');
+    const other = JSON.stringify({ at: 2, query: 'send mail', server: 'mail', tool: 'send', rank: 1, shown: 1 });
+    writeFileSync(`${file}.tmp`, `${other}\n\n${other}\n`);
+    renameSync(`${file}.tmp`, file);
+    expect(daemon.load().map((record) => record.tool)).toEqual(['send', 'send']);
+
+    rmSync(file);
+    expect(daemon.load()).toEqual([]);
+    expect(daemon.scores('send mail').size).toBe(0);
+  });
+
+  it('waits for a line still being written', () => {
+    const file = join(dir, 'usage.jsonl');
+    const line = JSON.stringify({ at: 1, query: 'q', server: 's', tool: 't', rank: 1, shown: 1 });
+    writeFileSync(file, line.slice(0, 10));
+    const log = makeLog();
+    expect(log.load()).toEqual([]);
+
+    appendFileSync(file, `${line.slice(10)}\n`);
+    expect(log.load()).toHaveLength(1);
+  });
+
+  it('keeps choices in memory when the log cannot be written', () => {
+    const log = new UsageLog(join(dir, 'missing-dir', 'usage.jsonl'), () => true, () => clock);
+    log.recordSearch('show folder', ['fs/list']);
+    clock += 1000;
+    expect(log.recordSelection('fs', 'list')).toMatchObject({ rank: 1 });
+    expect(log.quality().selections).toBe(1);
+    expect(log.scores('folder').get('fs/list')).toBeGreaterThan(0);
   });
 });
 

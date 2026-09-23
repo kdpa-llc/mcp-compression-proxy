@@ -154,13 +154,35 @@ export class EmbeddingIndex implements SemanticScorer {
   }
 
   private missingTexts(tools: CatalogTool[]): string[] {
+    return this.missing(tools.map(embeddingText));
+  }
+
+  private missing(texts: string[]): string[] {
     this.load();
-    const missing = new Set<string>();
-    for (const tool of tools) {
-      const text = embeddingText(tool);
-      if (!this.vectors.has(hashText(text))) missing.add(text);
+    return [...new Set(texts)].filter((text) => !this.vectors.has(hashText(text)));
+  }
+
+  /**
+   * Vectors for any texts, in order, through the same on-disk cache: only
+   * texts not embedded before reach the model, in batches. The compression
+   * audit uses this, so checking a catalog again costs nothing for the tools
+   * whose descriptions did not change.
+   */
+  async embed(texts: string[]): Promise<Float32Array[]> {
+    const missing = this.missing(texts);
+    if (missing.length > 0) {
+      await this.embedMissing(missing);
     }
-    return [...missing];
+    const vectors = texts.map((text) => this.vectors.get(hashText(text)));
+    if (vectors.some((vector) => !vector)) {
+      throw new Error('The local model returned fewer vectors than texts');
+    }
+    const found = vectors as Float32Array[];
+    if (found.some((vector) => vector.length !== found[0].length)) {
+      this.vectors.clear();
+      throw new Error('Cached embeddings do not match the model; they will be rebuilt');
+    }
+    return found;
   }
 
   /** Embed every tool not yet indexed, in the background. Safe to call repeatedly. */

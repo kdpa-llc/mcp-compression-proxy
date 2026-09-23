@@ -198,7 +198,7 @@ flowchart TD
 | `mcp-cli info <server>/<tool>`                       | Load the full schema for one tool                  |
 | `mcp-cli call <server>/<tool> '<json>'`              | Execute a tool                                     |
 | `mcp-cli call ... --want '<shape>' --where '<text>'` | Execute a tool and return only what you asked for  |
-| `mcp-cli suggest <request> [--run]`                  | Candidate tools and a proposed call                |
+| `mcp-cli suggest <request> [--run] [--limit N]`      | Candidate tools (default 5) and a proposed call    |
 | `mcp-cli tools`                                      | List compact summaries for every available tool    |
 | `mcp-cli output find <id> <query>`                   | Search a cached large output                       |
 | `mcp-cli output read <id> [offset] [length\|all]`    | Read a bounded page or the remainder of an output  |
@@ -373,7 +373,7 @@ See [`servers.json.example`](servers.json.example) for a complete starting point
 
 ### Search learning
 
-With `"search": { "learnFromUsage": true }`, a search followed by `info` or `call` on one of its results is recorded in `~/.mcp-compression-proxy/search-usage.jsonl` (owner-only, last 5,000 choices). Tools chosen for queries with the same words rank higher, and `mcp-cli search-quality` reports how often the used tool was ranked first, in the top five, or not shown at all: real numbers for your own tool set.
+With `"search": { "learnFromUsage": true }`, a search followed by `info` or `call` on one of its results is recorded in `~/.mcp-compression-proxy/search-usage.jsonl` (owner-only, last 5,000 choices). Tools chosen for queries with the same words rank higher, and `mcp-cli search-quality` reports how often the used tool was ranked first, in the top five, or not shown at all: real numbers for your own tool set. The native proxy and the `mcp-cli` daemon share the file, so a choice made through either one counts for both.
 
 ### Improve descriptions with your own agent
 

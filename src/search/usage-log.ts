@@ -1,4 +1,4 @@
-import { appendFileSync, readFileSync, writeFileSync } from 'fs';
+import { appendFileSync, closeSync, openSync, readSync, renameSync, statSync, writeFileSync } from 'fs';
 import { tokenize } from './text.js';
 
 /**
@@ -37,6 +37,11 @@ interface RecentSearch {
 
 /** Keep the log bounded; older choices matter less than recent ones anyway. */
 export const MAX_USAGE_RECORDS = 5000;
+/**
+ * Lines the file may hold beyond the bound before it is rewritten, so a full
+ * log costs one rewrite per this many choices rather than one per choice.
+ */
+export const USAGE_TRIM_SLACK = 500;
 /** A tool chosen this long after a search that listed it still counts. */
 const ATTRIBUTION_WINDOW_MS = 10 * 60_000;
 /** A first choice this soon after a search that did not list it is a miss. */
@@ -56,9 +61,22 @@ export function toolKey(server: string, tool: string): string {
  * with the same words ended up choosing, and real numbers for how often the
  * chosen tool was ranked first or in the top five.
  */
+/**
+ * The part of the file already read. The native proxy and the mcp-cli daemon
+ * append to the same file, so each reads on from here to see the other's
+ * choices; a new inode means the file was rewritten and is read again.
+ */
+interface ReadPosition {
+  ino: number;
+  offset: number;
+  /** Lines in the file, which may exceed the records kept in memory. */
+  lines: number;
+}
+
 export class UsageLog {
   private readonly recent: RecentSearch[] = [];
-  private records: UsageRecord[] | undefined;
+  private records: UsageRecord[] = [];
+  private position: ReadPosition | undefined;
   private associations:
     | { tokens: Map<string, Map<string, number>>; tools: Map<string, number> }
     | undefined;
@@ -118,49 +136,95 @@ export class UsageLog {
   }
 
   private append(record: UsageRecord): UsageRecord {
-    const records = this.load();
-    records.push(record);
-    this.associations = undefined;
-
     try {
-      if (records.length > MAX_USAGE_RECORDS) {
-        records.splice(0, records.length - MAX_USAGE_RECORDS);
-        writeFileSync(
-          this.filePath,
-          records.map((entry) => JSON.stringify(entry)).join('\n') + '\n',
-          { mode: 0o600 }
-        );
-      } else {
-        // mode applies on creation; umask can only tighten it.
-        appendFileSync(this.filePath, JSON.stringify(record) + '\n', { mode: 0o600 });
-      }
+      // mode applies on creation; umask can only tighten it.
+      appendFileSync(this.filePath, JSON.stringify(record) + '\n', { mode: 0o600 });
+      this.trimIfNeeded();
     } catch {
       // Learning is best-effort; a read-only home must not fail the call.
+      // Keep the choice for this process at least.
+      this.records.push(record);
+      this.associations = undefined;
     }
     return record;
   }
 
-  /** Every stored record, oldest first. Unparseable lines are skipped. */
+  /**
+   * Rewrite the file with only the newest records once it has grown well past
+   * the bound. Written beside it and renamed over it, so a reader never sees
+   * half a file; a choice another process appends between the read and the
+   * rename is lost, which learning can afford.
+   */
+  private trimIfNeeded(): void {
+    const records = this.load();
+    if (!this.position || this.position.lines <= MAX_USAGE_RECORDS + USAGE_TRIM_SLACK) return;
+    const temp = `${this.filePath}.${process.pid}.tmp`;
+    writeFileSync(temp, records.map((entry) => JSON.stringify(entry)).join('\n') + '\n', {
+      mode: 0o600,
+    });
+    renameSync(temp, this.filePath);
+  }
+
+  /**
+   * Every stored record, oldest first, including those other processes have
+   * appended since the last read. Unparseable lines are skipped.
+   */
   load(): UsageRecord[] {
-    if (this.records) return this.records;
-    const records: UsageRecord[] = [];
+    let stat;
     try {
-      for (const line of readFileSync(this.filePath, 'utf-8').split('\n')) {
-        if (!line.trim()) continue;
-        try {
-          const parsed = JSON.parse(line) as UsageRecord;
-          if (typeof parsed.query === 'string' && typeof parsed.tool === 'string') {
-            records.push(parsed);
-          }
-        } catch {
-          // A torn write leaves one bad line; the rest is still good.
-        }
-      }
+      stat = statSync(this.filePath);
     } catch {
-      // No log yet.
+      // No log yet, or it was deleted: nothing on disk to learn from.
+      if (this.position) {
+        this.records = [];
+        this.position = undefined;
+        this.associations = undefined;
+      }
+      return this.records;
     }
-    this.records = records.slice(-MAX_USAGE_RECORDS);
+
+    if (!this.position || this.position.ino !== stat.ino || stat.size < this.position.offset) {
+      this.records = [];
+      this.position = { ino: stat.ino, offset: 0, lines: 0 };
+      this.associations = undefined;
+    }
+    if (stat.size > this.position.offset) {
+      this.readFrom(this.position, stat.size);
+    }
     return this.records;
+  }
+
+  /** Parse the complete lines between the read position and `size`. */
+  private readFrom(position: ReadPosition, size: number): void {
+    const buffer = Buffer.alloc(size - position.offset);
+    const fd = openSync(this.filePath, 'r');
+    let read: number;
+    try {
+      read = readSync(fd, buffer, 0, buffer.length, position.offset);
+    } finally {
+      closeSync(fd);
+    }
+    // A line still being appended has no newline yet; it is read next time.
+    const end = buffer.subarray(0, read).lastIndexOf(0x0a);
+    if (end === -1) return;
+
+    for (const line of buffer.subarray(0, end).toString('utf-8').split('\n')) {
+      if (!line.trim()) continue;
+      position.lines++;
+      try {
+        const parsed = JSON.parse(line) as UsageRecord;
+        if (typeof parsed.query === 'string' && typeof parsed.tool === 'string') {
+          this.records.push(parsed);
+        }
+      } catch {
+        // A torn write leaves one bad line; the rest is still good.
+      }
+    }
+    position.offset += end + 1;
+    if (this.records.length > MAX_USAGE_RECORDS) {
+      this.records = this.records.slice(-MAX_USAGE_RECORDS);
+    }
+    this.associations = undefined;
   }
 
   /**
@@ -183,6 +247,7 @@ export class UsageLog {
   }
 
   private buildAssociations() {
+    this.load(); // picks up other processes' choices, and resets associations if any
     if (this.associations) return this.associations;
     const tokens = new Map<string, Map<string, number>>();
     const tools = new Map<string, number>();

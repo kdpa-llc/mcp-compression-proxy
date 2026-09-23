@@ -174,6 +174,7 @@ const metaTools = new MetaTools({
   payloadStore,
   threshold: payloadThreshold,
   model: () => localModel?.backend,
+  embedder: () => localModel?.embeddings,
   callBackend: callAggregated,
   executeText: async (serverName, toolName, args) => {
     const executed = await executeBackendTool(serverName, toolName, args);

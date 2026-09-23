@@ -275,6 +275,40 @@ describe('EmbeddingIndex', () => {
     expect([...rescored!.values()].every(Number.isFinite)).toBe(true);
   });
 
+  it('embeds any texts through the cache, in order, sending each text to the model once', async () => {
+    const cacheFile = join(dir, 'embeddings.json');
+    const model = wordModel();
+    const index = new EmbeddingIndex(model, makeLogger(), cacheFile);
+
+    const first = await index.embed(['send email', 'list folder', 'send email']);
+    expect(first).toHaveLength(3);
+    expect(first[0]).toBe(first[2]);
+    expect(model.embed).toHaveBeenCalledWith(['send email', 'list folder']);
+
+    await index.embed(['list folder', 'remember person']);
+    expect(model.embed).toHaveBeenLastCalledWith(['remember person']);
+
+    const reloaded = wordModel();
+    await new EmbeddingIndex(reloaded, makeLogger(), cacheFile).embed(['remember person', 'send email']);
+    expect(reloaded.embed).not.toHaveBeenCalled();
+  });
+
+  it('refuses to hand back missing or mismatched vectors', async () => {
+    const short = new EmbeddingIndex({ embed: jest.fn(async () => []) }, makeLogger());
+    await expect(short.embed(['x'])).rejects.toThrow('fewer vectors than texts');
+
+    let size = 4;
+    const index = new EmbeddingIndex(
+      { embed: jest.fn(async (texts: string[]) => texts.map(() => new Float32Array(size))) },
+      makeLogger()
+    );
+    await index.embed(['a']);
+    size = 8;
+    await expect(index.embed(['a', 'b'])).rejects.toThrow('do not match the model');
+    // The cache was dropped, so the next call starts over at one size.
+    expect((await index.embed(['a', 'b'])).map((vector) => vector.length)).toEqual([8, 8]);
+  });
+
   it('answers lexically while a large catalog indexes in the background', async () => {
     const model = wordModel();
     const index = new EmbeddingIndex(model, makeLogger());

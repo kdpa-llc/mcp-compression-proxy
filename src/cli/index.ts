@@ -56,7 +56,9 @@ Usage:
   mcp-cli call <server>/<tool> <json> [--want <shape>] [--where <text>] [--limit N]
                                         Execute a tool; optionally return only
                                         the fields/items asked for
-  mcp-cli suggest <request> [--run]    Propose a tool call for a plain request
+  mcp-cli suggest <request> [--run] [--limit N]
+                                        Propose a tool call for a plain request;
+                                        --limit sets how many candidates (default 5)
   mcp-cli output read <id> [offset] [length|all]
                                         Read cached large output
   mcp-cli output find <id> <query>      Find text in cached large output
