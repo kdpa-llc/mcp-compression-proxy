@@ -153,6 +153,18 @@ Set `"toolExposure": "lazy"` to list a few discovery tools instead of every back
 
 In the default full exposure, `call_tool` and `shape_output` are also listed, so any client can ask for a shaped result.
 
+### One daemon for every client
+
+By default each MCP client starts its own proxy, and each proxy starts its own copy of every backend: five editor windows mean five of each server. Set `"backendMode": "daemon"` (or `MCP_PROXY_BACKEND_MODE=daemon` in the client's MCP config) and each proxy instead attaches to the shared `mcp-cli` daemon, starting it if none is running, and relays its client's messages to a session the daemon runs for it.
+
+- **Each client keeps its own configuration.** The proxy sends its working directory and environment when it attaches, and the daemon reads that client's `servers.json` - project file included - and expands `${VAR}` references from that client's variables. Server names, `excludeTools`, exposure and the rest apply per client. `mcp-cli` commands work the same way: each is answered from the configuration of the directory and shell it ran in.
+- **Backends are shared when they are the same.** A backend is identified by what it runs - command, arguments, working directory, environment, URL, headers and its lifecycle settings - not by its name, so clients that describe the same server share one process even under different names. A different token or `AWS_PROFILE` gives a client its own. Shell bookkeeping such as `PWD`, `SHLVL` and `*_SESSION_ID` does not count; list more with `shareIgnoreEnv`.
+- **`share` scopes it per server.** Spawned servers default to `"project"`: shared by clients in the same directory, where they run. Remote servers default to `"global"`. Use `"session"` for a stateful server, such as a browser, that must not be shared between agents, or `"global"` with `cwd` for a spawned server that does not care where it runs.
+- **Everything else is shared once:** the compression cache, saved outputs, search learning and the local model process.
+- **Lifecycle.** A backend keeps running for a minute after its last client leaves, so a restarting client finds it warm. A daemon the proxy started exits after 30 minutes with no client (`MCP_DAEMON_IDLE_TIMEOUT`, or `cli.daemonIdleTimeout` for daemons started otherwise). A proxy of another version is refused, and the daemon exits once its own sessions end, making way for the new version. If no daemon can be used, the proxy runs its backends itself, as in the default mode.
+
+`mcp-cli daemon status` lists the servers of the current directory's configuration and how many backends and MCP sessions the daemon holds.
+
 ## 🧠 Where the context savings come from
 
 | Access pattern   | Loaded before the task                                     | Loaded when a tool is selected             |
@@ -188,7 +200,7 @@ flowchart TD
     D --> E
 ```
 
-`mcp-cli` uses a local daemon so repeated commands are short IPC round trips. Native clients launch the stdio proxy and see one namespaced MCP tool catalog.
+`mcp-cli` uses a local daemon so repeated commands are short IPC round trips. Native clients launch the stdio proxy and see one namespaced MCP tool catalog; with `backendMode: "daemon"` those proxies attach to the same daemon, which runs each backend once for every client. See [One daemon for every client](#one-daemon-for-every-client).
 
 ## ⌨️ CLI reference
 
@@ -358,6 +370,11 @@ Local servers inherit the proxy's environment by default. Set `inheritEnv` to `f
 | `cli.payloadThreshold`        | `10000`      | Store larger outputs in private local files                        |
 | `cli.autoStartDaemon`         | `true`       | Start the daemon when a CLI command needs it                       |
 | `cli.daemonLogLevel`          | `"info"`     | Set `debug`, `info`, `warn`, or `error` logging                    |
+| `cli.daemonIdleTimeout`       | `0`          | Seconds with no client before the daemon exits; `0` never          |
+| `backendMode`                 | `"local"`    | `"daemon"` runs backends in the shared daemon for every client     |
+| `shareIgnoreEnv`              | `[]`         | Variables that do not stop clients sharing a spawned server        |
+| `mcpServers[].share`          | see above    | `"session"`, `"project"` or `"global"` sharing between clients     |
+| `mcpServers[].cwd`            | client dir   | Working directory of a spawned server                              |
 | `toolExposure`                | `"full"`     | `"lazy"` lists discovery tools instead of every schema             |
 | `pinnedTools`                 | `[]`         | Tools still listed directly in lazy exposure                       |
 | `search.limit`                | `15`         | Results returned by search                                         |
@@ -369,7 +386,7 @@ Set either connection age to `0` to disable that policy. Lifecycle and authentic
 
 See [`servers.json.example`](servers.json.example) for a complete starting point.
 
-`model` settings are read at startup; after changing them run `mcp-cli daemon restart`, or restart the MCP client for the native proxy.
+`model` settings take effect on the next use after an edit; clients whose configs describe the same model share one model process.
 
 ### Search learning
 
@@ -460,7 +477,7 @@ This allows an external router to canary a candidate, switch new requests atomic
 - Tools matching `excludeTools` are refused on every call path, not only hidden from listings.
 - The optional local model runs as a local subprocess with its telemetry disabled; tool data sent to it stays on the machine. A `compressor` endpoint receives tool names and descriptions only, never tool inputs or outputs.
 - Search learning is off by default; when enabled, queries and chosen tool names are kept in an owner-only local file.
-- The daemon's local control socket can execute downstream MCP tools and is kept inside an owner-only directory.
+- The daemon's local control socket can execute downstream MCP tools and is kept inside an owner-only directory. Clients send it their working directory and environment so it can run their backends as they would; it keeps them in memory only and never logs them.
 - Use `inheritEnv: false` or an allowlist when a third-party local server should not receive unrelated environment variables.
 - MCP Compression Proxy is a transport and lifecycle layer, not a sandbox or authorization boundary. Apply normal trust and permission controls to every backend server.
 

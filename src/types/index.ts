@@ -157,10 +157,21 @@ export type IPCMethod =
   | 'stats'
   | 'daemon-status';
 
+/**
+ * Where an mcp-cli command ran. The daemon answers it from the configuration
+ * that directory and environment produce, not from the ones it started with.
+ */
+export interface RequestContext {
+  cwd: string;
+  env: Record<string, string>;
+}
+
 export interface IPCRequest {
   id: string;
   method: IPCMethod;
   params?: Record<string, unknown>;
+  /** Absent from older clients, which get the daemon's own configuration. */
+  context?: RequestContext;
 }
 
 export interface IPCResponse {

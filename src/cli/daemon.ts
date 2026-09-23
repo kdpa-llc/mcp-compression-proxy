@@ -4,33 +4,20 @@ import net from 'net';
 import fs from 'fs';
 import path from 'path';
 import pino from 'pino';
-import { MCPClientManager } from '../mcp/client-manager.js';
-import { callToolWithAuthRecovery } from '../mcp/tool-call-executor.js';
-import { CompressionCache } from '../services/compression-cache.js';
-import { SessionManager } from '../services/session-manager.js';
-import { StatsService } from '../services/stats-service.js';
-import { loadJSONServers, loadJSONServersCached } from '../config/loader.js';
-import { DEFAULT_PAYLOAD_THRESHOLD, PayloadStore } from './payload-interceptor.js';
-import type { IPCRequest, IPCResponse, CLIConfig } from '../types/index.js';
-import { runCallScript, type CallScriptStep } from '../mcp/call-script.js';
-import { getDaemonRuntimePaths } from './runtime-paths.js';
-import { ToolCatalog } from '../mcp/tool-catalog.js';
-import { ToolSearch } from '../search/tool-search.js';
-import { UsageLog } from '../search/usage-log.js';
-import { createLocalModel } from '../models/local-model.js';
-import { modelAuthConfirmer } from '../models/auth-confirmer.js';
-import { readShapeSpec, shapeAndStore } from '../services/shaped-call.js';
-import { CallSuggester } from '../services/call-suggester.js';
-import { auditCompression } from '../services/compression-audit.js';
-import { CompressionSampler } from '../services/compression-sampler.js';
-import { openAiSamplingHost } from '../services/openai-compressor.js';
-import {
-  applyReview,
-  nextBatch,
-  reviewProposals,
-  type DescribeMode,
-} from '../services/description-rewrite.js';
 import { fileURLToPath } from 'url';
+import { CompressionCache } from '../services/compression-cache.js';
+import { createConfigLoader } from '../config/loader.js';
+import { PayloadStore } from './payload-interceptor.js';
+import type { IPCRequest, IPCResponse } from '../types/index.js';
+import { getDaemonRuntimePaths } from './runtime-paths.js';
+import { BackendPool } from '../mcp/backend-pool.js';
+import { ModelRegistry } from '../models/model-registry.js';
+import type { ProxyServices } from '../proxy/view.js';
+import { SessionHost } from '../daemon/session-host.js';
+import { CliRequests, CliViews, cliViewFactory } from '../daemon/cli-requests.js';
+import { claimPidFile } from '../daemon/launcher.js';
+import { isAttachRequest, readLine, stringEnv } from '../daemon/protocol.js';
+import { VERSION } from '../version.js';
 
 const RUNTIME_PATHS = getDaemonRuntimePaths();
 const {
@@ -52,23 +39,24 @@ export function getPidFilePath(): string {
 }
 
 /**
- * Start the MCP CLI daemon process.
- * Maintains warm connections to all backend MCP servers
- * and handles IPC requests from the CLI client.
+ * Start the daemon.
+ *
+ * One process serves every client: mcp-cli commands, answered from the
+ * configuration of the shell each came from, and MCP sessions attached by
+ * proxies running with backendMode "daemon". All of them share one pool of
+ * backend connections, one compression cache and one set of local models.
  */
 async function startDaemon(): Promise<void> {
   // Ensure base directory exists. 0700 rather than the umask default: the
   // control socket in here accepts commands that run downstream MCP tools,
-  // so it should not be reachable by other local users.
+  // and attached clients send their environment, so it must not be reachable
+  // by other local users.
   fs.mkdirSync(BASE_DIR, { recursive: true, mode: 0o700 });
   // mkdirSync ignores `mode` when the directory already exists, so an
   // upgrade from a previous version still gets tightened.
   fs.chmodSync(BASE_DIR, 0o700);
   for (const runtimePath of [SOCKET_PATH, PID_FILE, READY_FILE, LOG_FILE]) {
-    fs.mkdirSync(path.dirname(runtimePath), {
-      recursive: true,
-      mode: 0o700,
-    });
+    fs.mkdirSync(path.dirname(runtimePath), { recursive: true, mode: 0o700 });
   }
 
   const logger = pino({
@@ -86,545 +74,147 @@ async function startDaemon(): Promise<void> {
     },
   });
 
-  const startTime = Date.now();
-
-  logger.info({ pid: process.pid, releaseId: RELEASE_ID }, 'Daemon starting');
-
-  // Write PID file
-  fs.writeFileSync(PID_FILE, String(process.pid), 'utf-8');
-
-  // Initialize services (reusing existing components)
-  const clientManager = new MCPClientManager(logger);
-  const payloadStore = new PayloadStore({
-    directory: PAYLOAD_DIR,
-    removeDirectoryOnDestroy: false,
-  });
-  const compressionCache = new CompressionCache(logger);
-  const sessionManager = new SessionManager(logger);
-  const statsService = new StatsService(logger, clientManager, compressionCache, sessionManager);
-  // Longer-lived than the native proxy's snapshot: CLI commands arrive
-  // seconds apart, and each would otherwise list every backend again.
-  const toolCatalog = new ToolCatalog(clientManager, logger, 15_000);
-  const usageLog = new UsageLog(
-    path.join(BASE_DIR, 'search-usage.jsonl'),
-    () => loadJSONServersCached()?.search?.learnFromUsage === true
-  );
-  // Model settings are daemon-specific: a change needs `mcp-cli daemon restart`.
-  const localModel = createLocalModel(loadJSONServersCached()?.model, {
-    // dist/cli/daemon.js -> <package>/python/needle_bridge.py
-    bridgeScript: fileURLToPath(new URL('../../python/needle_bridge.py', import.meta.url)),
-    stateDir: BASE_DIR,
-    logger,
-  });
-  const toolSearch = new ToolSearch(toolCatalog, compressionCache, {
-    usage: usageLog,
-    semantic: localModel?.embeddings,
-  });
-  const suggester = new CallSuggester(toolSearch, toolCatalog, localModel?.backend);
-  // Audits compare the whole catalog; the embeddings cache spares re-embedding
-  // every unchanged description each time.
-  const auditEmbedder = localModel?.embeddings ?? localModel?.backend;
-  if (localModel?.config.confirmAuthFailures) {
-    clientManager.setAuthFailureConfirmer(modelAuthConfirmer(localModel.backend));
+  // Two clients may start a daemon at the same moment; the PID file decides
+  // which one runs. The other would otherwise take over the socket and strand
+  // the first.
+  if (!claimPidFile(PID_FILE)) {
+    logger.info('Another daemon is already running; exiting');
+    process.exit(0);
   }
 
-  // Load compression cache from disk
+  const startTime = Date.now();
+  logger.info({ pid: process.pid, releaseId: RELEASE_ID, version: VERSION }, 'Daemon starting');
+
+  const payloadStore = new PayloadStore({ directory: PAYLOAD_DIR, removeDirectoryOnDestroy: false });
+  const compressionCache = new CompressionCache(logger);
   try {
     await compressionCache.loadFromDisk();
   } catch (error) {
     logger.warn({ error }, 'Failed to load compression cache, continuing with empty cache');
   }
+  const models = new ModelRegistry({
+    // dist/cli/daemon.js -> <package>/python/needle_bridge.py
+    bridgeScript: fileURLToPath(new URL('../../python/needle_bridge.py', import.meta.url)),
+    stateDir: BASE_DIR,
+    logger,
+  });
+  // Backends outlive a client by a minute, so one that reconnects - an MCP
+  // client restarting, a CLI view expiring and coming back - finds them warm.
+  const pool = new BackendPool(logger, { releaseGraceMs: 60_000 });
+  const services: ProxyServices = {
+    logger,
+    payloadStore,
+    compressionCache,
+    models,
+    usageLogFile: path.join(BASE_DIR, 'search-usage.jsonl'),
+  };
 
-  // Load config and initialize backend MCP servers
-  const config = loadJSONServers();
-  let cliConfig: CLIConfig = {};
-
-  if (config) {
-    clientManager.setExcludePatterns(config.excludePatterns);
-    compressionCache.setNoCompressPatterns(config.noCompressPatterns);
-
-    // Parse CLI config if present (cast to access extra fields)
-    const rawConfig = config as Record<string, unknown>;
-    if (rawConfig.cli && typeof rawConfig.cli === 'object') {
-      cliConfig = rawConfig.cli as CLIConfig;
-    }
-
-    const enabledServers = config.servers.filter((s) => s.enabled !== false);
-    logger.info(
-      { total: config.servers.length, enabled: enabledServers.length },
-      'Initializing backend MCP servers'
-    );
-
-    try {
-      // inheritEnv must be passed here too: the config watch below reconciles
-      // with it, so omitting it makes every connection's stored config differ
-      // from the reconciled one on the first tick - bouncing every healthy
-      // backend ~5s after startup.
-      await clientManager.initializeServers(
-        enabledServers,
-        config.defaultTimeout,
-        config.inheritEnv,
-        {
-          softMaxConnectionAgeSeconds: config.softMaxConnectionAgeSeconds,
-          hardMaxConnectionAgeSeconds: config.hardMaxConnectionAgeSeconds,
-          authErrorPatterns: config.authErrorPatterns,
-          authRetryTools: config.authRetryTools,
-        }
-      );
-      logger.info('Backend MCP servers initialization complete');
-    } catch (error) {
-      logger.error({ error }, 'Error during backend server initialization');
-    }
-  } else {
-    logger.warn('No configuration found. Daemon started with no backend servers.');
-  }
-
-  // The daemon outlives any single CLI invocation, so it is the entry point
-  // that most needs this: editing servers.json would otherwise mean stopping a
-  // daemon that is holding warm connections. Cached loader rather than the
-  // uncached one used above - the poll is what its mtime fingerprint is for.
-  clientManager.startConfigWatch(loadJSONServersCached, undefined, (reloaded) => {
-    compressionCache.setNoCompressPatterns(reloaded.noCompressPatterns);
+  let lastActivity = Date.now();
+  const touch = () => {
+    lastActivity = Date.now();
+  };
+  let shuttingDown = false;
+  const host = new SessionHost({
+    version: VERSION,
+    pool,
+    models,
+    services,
+    onActivity: touch,
+    onRetire: () => void shutdown('making way for another version'),
+  });
+  const views = new CliViews(cliViewFactory(pool, services, models));
+  const cli = new CliRequests({
+    views,
+    services,
+    fallbackContext: { cwd: process.cwd(), env: stringEnv(process.env) },
+    status: () => {
+      const servers = pool.statuses();
+      return {
+        running: true,
+        pid: process.pid,
+        releaseId: RELEASE_ID,
+        version: VERSION,
+        uptime: Math.floor((Date.now() - startTime) / 1000),
+        servers,
+        backends: servers,
+        cachedToolCount: compressionCache.getCacheMetrics().totalCached,
+        connectedServers: servers.filter((server) => server.connected).length,
+        totalServers: servers.length,
+        socketPath: SOCKET_PATH,
+        sessions: host.status(),
+        cliViews: views.size,
+      };
+    },
   });
 
-  // Clean up stale socket file if it exists
+  // We hold the PID file, so any socket left here belongs to a dead daemon.
   if (fs.existsSync(SOCKET_PATH)) {
     fs.unlinkSync(SOCKET_PATH);
   }
 
-  /** Run a backend tool and join its text content. */
-  async function executeText(
-    serverName: string,
-    toolName: string,
-    args: Record<string, unknown>
-  ): Promise<{ output: string; isError?: boolean }> {
-    const result = await callToolWithAuthRecovery(clientManager, logger, serverName, toolName, args);
-    const content = result.content as Array<{ type: string; text?: string }>;
-    // flatMap rather than filter+map: filter does not narrow the element type.
-    const output = content
-      .flatMap((item) => (item.type === 'text' && item.text ? [item.text] : []))
-      .join('\n');
-    return { output, isError: result.isError };
-  }
-
-  /** The cached compressed description, cut to ~60 chars for listings. */
-  function shortDescription(serverName: string, toolName: string, original?: string): string {
-    const desc = compressionCache.getCompressedDescription(serverName, toolName, original) || original || '';
-    return desc.length > 60 ? desc.slice(0, 57) + '...' : desc;
-  }
-
-  // Handle IPC request
-  async function handleRequest(request: IPCRequest): Promise<IPCResponse> {
-    const { id, method, params } = request;
-
-    try {
-      switch (method) {
-        case 'tools': {
-          const toolEntries = (await toolCatalog.list()).map((tool) => ({
-            server: tool.serverName,
-            tool: tool.toolName,
-            description: shortDescription(tool.serverName, tool.toolName, tool.description),
-          }));
-
-          return { id, result: { tools: toolEntries, count: toolEntries.length } };
-        }
-
-        case 'search': {
-          const query = String(params?.query || '');
-          const requested = Number(params?.limit);
-          const limit =
-            Number.isInteger(requested) && requested > 0
-              ? requested
-              : (loadJSONServersCached()?.search?.limit ?? undefined);
-          const result = await toolSearch.search(query, limit);
-
-          return {
-            id,
-            result: {
-              tools: result.hits,
-              count: result.hits.length,
-              total: result.total,
-              signals: result.signals,
-            },
-          };
-        }
-
-        case 'search-quality': {
-          return {
-            id,
-            result: {
-              enabled: loadJSONServersCached()?.search?.learnFromUsage === true,
-              ...usageLog.quality(),
-            },
-          };
-        }
-
-        case 'info': {
-          const serverName = String(params?.server || '');
-          const toolName = String(params?.tool || '');
-
-          try {
-            const tool = await toolCatalog.find(serverName, toolName);
-            if (tool) {
-              usageLog.recordSelection(serverName, toolName);
-            }
-            if (!tool) {
-              return {
-                id,
-                error: {
-                  code: -1,
-                  message: `Tool '${toolName}' not found on server '${serverName}'`,
-                },
-              };
-            }
-
-            return {
-              id,
-              result: {
-                name: tool.toolName,
-                server: serverName,
-                description: tool.description || '',
-                inputSchema: compressionCache.applySchemaDescriptions(
-                  serverName,
-                  tool.toolName,
-                  tool.inputSchema,
-                  tool.description
-                ),
-                ...(tool.title !== undefined ? { title: tool.title } : {}),
-                ...(tool.annotations !== undefined ? { annotations: tool.annotations } : {}),
-              },
-            };
-          } catch (error) {
-            const msg = error instanceof Error ? error.message : 'Unknown error';
-            return { id, error: { code: -1, message: msg } };
-          }
-        }
-
-        case 'call': {
-          const serverName = String(params?.server || '');
-          const toolName = String(params?.tool || '');
-          const args = (params?.arguments || {}) as Record<string, unknown>;
-          const threshold = cliConfig.payloadThreshold ?? DEFAULT_PAYLOAD_THRESHOLD;
-          const spec = readShapeSpec(params);
-
-          if (!clientManager.isToolExcluded(serverName, toolName)) {
-            usageLog.recordSelection(serverName, toolName);
-          }
-
-          try {
-            const { output: fullOutput, isError } = await executeText(serverName, toolName, args);
-
-            if (spec && !isError) {
-              const shaped = await shapeAndStore(
-                fullOutput,
-                spec,
-                payloadStore,
-                threshold,
-                localModel?.backend
-              );
-              return {
-                id,
-                result: { output: '', isError, payload: shaped.source, shaped },
-              };
-            }
-
-            // Apply payload interception
-            const captured = payloadStore.capture(fullOutput, threshold);
-
-            return {
-              id,
-              result: {
-                output: captured.output,
-                isError,
-                payload: captured.reference,
-              },
-            };
-          } catch (error) {
-            const msg = error instanceof Error ? error.message : 'Unknown error';
-            return { id, error: { code: -1, message: msg } };
-          }
-        }
-
-        case 'payload-shape': {
-          const payloadId = String(params?.id || '');
-          const spec = readShapeSpec(params);
-          if (!spec) {
-            return { id, error: { code: -1, message: 'Pass want and/or where to shape an output' } };
-          }
-          const content = payloadStore.read(payloadId, { all: true }).content;
-          const shaped = await shapeAndStore(
-            content,
-            spec,
-            payloadStore,
-            cliConfig.payloadThreshold ?? DEFAULT_PAYLOAD_THRESHOLD,
-            localModel?.backend
-          );
-          return { id, result: shaped };
-        }
-
-        case 'suggest': {
-          const suggestion = await suggester.suggest(String(params?.request || ''), {
-            candidates: Number(params?.candidates) || undefined,
-          });
-          if (params?.run !== true || !suggestion.runnable || !suggestion.proposal) {
-            return { id, result: { suggestion } };
-          }
-          const { server, tool, arguments: args } = suggestion.proposal;
-          usageLog.recordSelection(server, tool);
-          const { output, isError } = await executeText(server, tool, args);
-          const captured = payloadStore.capture(
-            output,
-            cliConfig.payloadThreshold ?? DEFAULT_PAYLOAD_THRESHOLD
-          );
-          return {
-            id,
-            result: {
-              suggestion,
-              ran: { output: captured.output, isError, payload: captured.reference },
-            },
-          };
-        }
-
-        case 'audit': {
-          const audit = await auditCompression(
-            await toolCatalog.list(),
-            compressionCache,
-            auditEmbedder
-          );
-          let requeued = 0;
-          if (params?.requeue === true) {
-            for (const finding of audit.confusable) {
-              const slash = finding.tool.indexOf('/');
-              if (compressionCache.invalidate(finding.tool.slice(0, slash), finding.tool.slice(slash + 1))) {
-                requeued++;
-              }
-            }
-            if (requeued > 0) await compressionCache.saveToDisk();
-          }
-          return { id, result: { ...audit, requeued } };
-        }
-
-        case 'describe': {
-          const action = String(params?.action || '');
-          const mode: DescribeMode = params?.mode === 'compress' ? 'compress' : 'rewrite';
-          const tools = await toolCatalog.list();
-
-          if (action === 'next') {
-            return {
-              id,
-              result: nextBatch(tools, compressionCache, {
-                mode,
-                limit: Number(params?.limit) || undefined,
-                server: typeof params?.server === 'string' ? params.server : undefined,
-                tool: typeof params?.tool === 'string' ? params.tool : undefined,
-                all: params?.all === true,
-              }),
-            };
-          }
-
-          if (action === 'review' || action === 'apply') {
-            const review = await reviewProposals(params?.proposals, tools, compressionCache, {
-              mode,
-              model: auditEmbedder,
-            });
-            if (action === 'review') return { id, result: review };
-            const outcome = applyReview(review, tools, compressionCache);
-            if (outcome.applied.length > 0) await compressionCache.saveToDisk();
-            return { id, result: { ...review, ...outcome } };
-          }
-
-          if (action === 'revert') {
-            const targets =
-              params?.all === true
-                ? compressionCache.getCacheEntries().map((entry) => `${entry.serverName}/${entry.toolName}`)
-                : [String(params?.tool || '')];
-            const reverted = targets.filter((key) => {
-              const slash = key.indexOf('/');
-              return slash > 0 && compressionCache.invalidate(key.slice(0, slash), key.slice(slash + 1));
-            });
-            if (reverted.length > 0) await compressionCache.saveToDisk();
-            return { id, result: { reverted } };
-          }
-
-          return { id, error: { code: -1, message: `Unknown describe action: ${action}` } };
-        }
-
-        case 'compress': {
-          const compressor = loadJSONServersCached()?.compressor;
-          if (!compressor) {
-            return {
-              id,
-              error: {
-                code: -1,
-                message:
-                  'No compressor configured. Add "compressor": { "url": "http://localhost:11434/v1", "model": "..." } to servers.json.',
-              },
-            };
-          }
-          const limit = Math.min(Math.max(Number(params?.limit) || 25, 1), 100);
-          const tools = await toolCatalog.list();
-          const pending = tools
-            .filter(
-              (tool) =>
-                !compressionCache.hasCompressed(tool.serverName, tool.toolName, tool.description) ||
-                compressionCache.isStale(tool.serverName, tool.toolName, tool.description)
-            )
-            .slice(0, limit);
-          const sampler = new CompressionSampler(logger, openAiSamplingHost(compressor));
-          const { descriptions, batchesAttempted, batchesFailed } = await sampler.compress(pending);
-          const originals = new Map(
-            tools.map((tool) => [`${tool.serverName}:${tool.toolName}`, tool.description])
-          );
-          for (const entry of descriptions) {
-            compressionCache.saveCompressed(
-              entry.serverName,
-              entry.toolName,
-              entry.description,
-              originals.get(`${entry.serverName}:${entry.toolName}`)
-            );
-          }
-          if (descriptions.length > 0) await compressionCache.saveToDisk();
-          const remaining = tools.filter(
-            (tool) =>
-              !compressionCache.hasCompressed(tool.serverName, tool.toolName, tool.description) ||
-              compressionCache.isStale(tool.serverName, tool.toolName, tool.description)
-          ).length;
-          return {
-            id,
-            result: {
-              compressed: descriptions.length,
-              attempted: pending.length,
-              batchesAttempted,
-              batchesFailed,
-              remaining,
-            },
-          };
-        }
-
-        case 'payload-read': {
-          const payloadId = String(params?.id || '');
-          const result = payloadStore.read(payloadId, {
-            offset: params?.offset as number | undefined,
-            length: params?.length as number | undefined,
-            all: params?.all as boolean | undefined,
-          });
-          return { id, result };
-        }
-
-        case 'payload-find': {
-          const payloadId = String(params?.id || '');
-          const query = String(params?.query || '');
-          const result = payloadStore.find(payloadId, query, {
-            caseSensitive: params?.caseSensitive as boolean | undefined,
-            maxMatches: params?.maxMatches as number | undefined,
-            contextChars: params?.contextChars as number | undefined,
-          });
-          return { id, result };
-        }
-
-        case 'script': {
-          const steps = params?.steps;
-          if (!Array.isArray(steps)) {
-            return {
-              id,
-              error: { code: -1, message: 'Script steps must be an array' },
-            };
-          }
-          const threshold = cliConfig.payloadThreshold ?? DEFAULT_PAYLOAD_THRESHOLD;
-          const result = await runCallScript(
-            steps as CallScriptStep[],
-            executeText,
-            payloadStore,
-            threshold,
-            (output, spec) =>
-              shapeAndStore(output, spec, payloadStore, threshold, localModel?.backend)
-          );
-          return { id, result };
-        }
-
-        case 'stats': {
-          const stats = await statsService.getStats({
-            serverName: params?.serverName as string | undefined,
-            detailLevel: (params?.detailLevel as 'summary' | 'full') || 'summary',
-          });
-          return { id, result: stats };
-        }
-
-        case 'daemon-status': {
-          const statuses = clientManager.getServerStatuses();
-          const connectedCount = statuses.filter((s) => s.connected).length;
-          const cacheMetrics = compressionCache.getCacheMetrics();
-
-          return {
-            id,
-            result: {
-              running: true,
-              pid: process.pid,
-              releaseId: RELEASE_ID,
-              uptime: Math.floor((Date.now() - startTime) / 1000),
-              servers: statuses,
-              cachedToolCount: cacheMetrics.totalCached,
-              connectedServers: connectedCount,
-              totalServers: statuses.length,
-              socketPath: SOCKET_PATH,
-            },
-          };
-        }
-
-        default:
-          return { id, error: { code: -1, message: `Unknown method: ${method}` } };
+  /** Serve mcp-cli's newline-delimited requests, starting with one already read. */
+  function serveRequests(socket: net.Socket, firstLine: string, rest: Buffer): void {
+    let buffer = rest.toString('utf-8');
+    const handleLine = (line: string) => {
+      if (!line.trim()) return;
+      let request: IPCRequest;
+      try {
+        request = JSON.parse(line) as IPCRequest;
+      } catch {
+        logger.error({ line: line.slice(0, 200) }, 'Failed to parse IPC request');
+        return;
       }
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Unknown error';
-      logger.error({ method, error: msg }, 'Request handler error');
-      return { id, error: { code: -1, message: msg } };
-    }
-  }
+      touch();
+      cli
+        .handle(request)
+        .catch(
+          (error): IPCResponse => ({
+            id: request.id,
+            error: { code: -1, message: error instanceof Error ? error.message : 'Unknown error' },
+          })
+        )
+        .then((response) => {
+          touch();
+          if (!socket.destroyed) socket.write(JSON.stringify(response) + '\n');
+        });
+    };
 
-  // Create Unix domain socket server
-  const server = net.createServer((socket) => {
-    let buffer = '';
-
+    handleLine(firstLine);
     socket.on('data', (data) => {
       buffer += data.toString();
-
-      // Process newline-delimited JSON
-      let newlineIndex: number;
-      while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
-        const line = buffer.slice(0, newlineIndex);
-        buffer = buffer.slice(newlineIndex + 1);
-
-        if (!line.trim()) continue;
-
-        try {
-          const request: IPCRequest = JSON.parse(line);
-          handleRequest(request)
-            .then((response) => {
-              socket.write(JSON.stringify(response) + '\n');
-            })
-            .catch((error) => {
-              const errResponse: IPCResponse = {
-                id: request.id,
-                error: {
-                  code: -1,
-                  message: error instanceof Error ? error.message : 'Unknown error',
-                },
-              };
-              socket.write(JSON.stringify(errResponse) + '\n');
-            });
-        } catch {
-          logger.error({ line }, 'Failed to parse IPC request');
-        }
+      let newline: number;
+      while ((newline = buffer.indexOf('\n')) !== -1) {
+        handleLine(buffer.slice(0, newline));
+        buffer = buffer.slice(newline + 1);
       }
     });
+    socket.resume();
+  }
 
-    socket.on('error', (error) => {
-      logger.debug({ error: error.message }, 'Socket error');
-    });
+  const server = net.createServer((socket) => {
+    socket.on('error', (error) => logger.debug({ error: error.message }, 'Socket error'));
+    readLine(socket)
+      .then(({ line, rest }) => {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(line);
+        } catch {
+          parsed = undefined;
+        }
+        if (isAttachRequest(parsed)) {
+          return host.attach(socket, parsed, rest);
+        }
+        serveRequests(socket, line, rest);
+        return undefined;
+      })
+      .catch((error) => {
+        logger.debug({ error: error instanceof Error ? error.message : error }, 'Connection ended early');
+        socket.destroy();
+      });
   });
 
   // Without this, a failed listen emits an unhandled 'error' event and kills
-  // the daemon. Because it is forked with stdio: 'ignore', the crash goes
+  // the daemon. Because it is spawned with stdio: 'ignore', the crash goes
   // nowhere: the log simply stops mid-startup and the CLI reports only
   // "Failed to start daemon." Log the cause and leave no stale PID behind.
   server.on('error', (error: NodeJS.ErrnoException) => {
@@ -637,12 +227,10 @@ async function startDaemon(): Promise<void> {
       // Unix domain socket paths are capped near 107 bytes on Linux/macOS.
       hint = ` The socket path is ${SOCKET_PATH.length} characters, which likely exceeds the ~107 byte limit for Unix sockets.`;
     }
-
     logger.error(
       { socketPath: SOCKET_PATH, code: error.code, error: error.message },
       `Failed to listen on the daemon socket.${hint}`
     );
-
     try {
       fs.unlinkSync(PID_FILE);
     } catch {
@@ -651,62 +239,56 @@ async function startDaemon(): Promise<void> {
     process.exit(1);
   });
 
+  // Exit after a quiet period when asked to: a daemon the proxy started on its
+  // own should not outlive its clients forever. Read once, at startup.
+  const idleSeconds = Number(
+    process.env.MCP_DAEMON_IDLE_TIMEOUT ?? createConfigLoader({})()?.cli?.daemonIdleTimeout ?? 0
+  );
+  if (Number.isFinite(idleSeconds) && idleSeconds > 0) {
+    const idleMs = idleSeconds * 1000;
+    const idleTimer = setInterval(() => {
+      if (host.size === 0 && Date.now() - lastActivity >= idleMs) {
+        void shutdown(`idle for ${idleSeconds}s`);
+      }
+    }, Math.min(60_000, Math.max(1000, idleMs / 4)));
+    // Housekeeping must never be what keeps the process alive.
+    idleTimer.unref();
+  }
+
   server.listen(SOCKET_PATH, () => {
     logger.info({ socketPath: SOCKET_PATH, pid: process.pid }, 'Daemon listening');
-
-    // Index tool embeddings in the background so the first semantic search
-    // does not pay for the whole catalog.
-    if (localModel?.embeddings) {
-      const embeddings = localModel.embeddings;
-      toolCatalog
-        .list()
-        .then((tools) => embeddings.warm(tools))
-        .catch((error) => logger.warn({ error: String(error) }, 'Could not index tool embeddings'));
-    }
-
     // Signal readiness by writing a ready marker
     fs.writeFileSync(READY_FILE, String(Date.now()), 'utf-8');
   });
 
-  // Graceful shutdown
-  function shutdown() {
-    logger.info('Daemon shutting down');
+  async function shutdown(reason: string): Promise<void> {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info({ reason }, 'Daemon shutting down');
 
     server.close();
-    void localModel?.backend.close();
-    clientManager
-      .disconnectAll()
-      .then(() => {
-        sessionManager.destroy();
-        payloadStore.destroy();
-
-        // Clean up files
-        try {
-          fs.unlinkSync(SOCKET_PATH);
-        } catch {
-          /* ignore */
-        }
-        try {
-          fs.unlinkSync(PID_FILE);
-        } catch {
-          /* ignore */
-        }
-        try {
-          fs.unlinkSync(READY_FILE);
-        } catch {
-          /* ignore */
-        }
-
-        logger.info('Daemon stopped');
-        process.exit(0);
-      })
-      .catch(() => {
-        process.exit(1);
-      });
+    try {
+      await host.closeAll();
+      views.closeAll();
+      await pool.close();
+      await models.closeAll();
+      payloadStore.destroy();
+    } catch (error) {
+      logger.error({ error }, 'Error while shutting down');
+    }
+    for (const file of [SOCKET_PATH, PID_FILE, READY_FILE]) {
+      try {
+        fs.unlinkSync(file);
+      } catch {
+        /* ignore */
+      }
+    }
+    logger.info('Daemon stopped');
+    process.exit(0);
   }
 
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
 }
 
 // Entry point when run directly
