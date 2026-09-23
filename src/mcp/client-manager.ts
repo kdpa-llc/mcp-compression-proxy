@@ -12,6 +12,12 @@ import type { Logger } from 'pino';
 import { matchesIgnorePattern, type ConfigResult } from '../config/loader.js';
 import { SERVER_NAME, VERSION } from '../version.js';
 
+/**
+ * Second opinion on an auth-pattern match inside a long, successful result:
+ * resolves false when the text merely mentions an authentication failure.
+ */
+export type AuthFailureConfirmer = (resultText: string) => Promise<boolean>;
+
 export const DEFAULT_SOFT_MAX_CONNECTION_AGE_SECONDS = 3600;
 export const DEFAULT_HARD_MAX_CONNECTION_AGE_SECONDS = 28_800;
 
@@ -153,6 +159,7 @@ export class MCPClientManager {
   private configWatchTimer?: ReturnType<typeof setInterval>;
   private shuttingDown = false;
   private excludePatterns: string[] = [];
+  private authFailureConfirmer: AuthFailureConfirmer | undefined;
 
   constructor(logger: Logger) {
     this.logger = logger;
@@ -1004,6 +1011,14 @@ export class MCPClientManager {
 
   isToolExcluded(serverName: string, toolName: string): boolean {
     return matchesIgnorePattern(`${serverName}__${toolName}`, this.excludePatterns);
+  }
+
+  setAuthFailureConfirmer(confirmer: AuthFailureConfirmer | undefined): void {
+    this.authFailureConfirmer = confirmer;
+  }
+
+  getAuthFailureConfirmer(): AuthFailureConfirmer | undefined {
+    return this.authFailureConfirmer;
   }
 
   getConfiguredServerNames(): string[] {

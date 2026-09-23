@@ -3,6 +3,8 @@ import {
   type PayloadReference,
   type PayloadStore,
 } from '../cli/payload-interceptor.js';
+import type { ShapeSpec } from '../services/output-shaper.js';
+import { readShapeSpec, type ShapedOutput } from '../services/shaped-call.js';
 
 export const MAX_CALL_SCRIPT_STEPS = 20;
 
@@ -12,6 +14,11 @@ export interface CallScriptStep {
   tool: string;
   arguments?: Record<string, unknown>;
   continueOnError?: boolean;
+  /** Shape this step's reported output; see services/output-shaper.ts. */
+  want?: unknown;
+  /** Keep only the items of this step's output relevant to this text. */
+  where?: string;
+  limit?: number;
 }
 
 export interface CallScriptStepResult {
@@ -21,7 +28,12 @@ export interface CallScriptStepResult {
   output: string;
   isError?: boolean;
   payload?: PayloadReference;
+  /** Present when the step asked for want/where. */
+  shaped?: ShapedOutput;
 }
+
+/** Shapes a step's output; supplied by the caller, which owns the model. */
+export type ScriptOutputShaper = (output: string, spec: ShapeSpec) => Promise<ShapedOutput>;
 
 export interface CallScriptResult {
   steps: CallScriptStepResult[];
@@ -134,7 +146,8 @@ export async function runCallScript(
   steps: CallScriptStep[],
   execute: ScriptCallExecutor,
   payloadStore: PayloadStore,
-  payloadThreshold = DEFAULT_PAYLOAD_THRESHOLD
+  payloadThreshold = DEFAULT_PAYLOAD_THRESHOLD,
+  shape?: ScriptOutputShaper
 ): Promise<CallScriptResult> {
   if (steps.length > MAX_CALL_SCRIPT_STEPS) {
     throw new Error(`Call scripts may contain at most ${MAX_CALL_SCRIPT_STEPS} steps`);
@@ -191,19 +204,34 @@ export async function runCallScript(
         step.tool,
         resolvedArguments
       );
+      // References always see the full output, so a later step can use any
+      // field even when this step's report was narrowed.
       priorResults.set(step.id, parseOutput(callResult.output));
-      const captured = payloadStore.capture(
-        callResult.output,
-        payloadThreshold
-      );
-      results.push({
-        id: step.id,
-        server: step.server,
-        tool: step.tool,
-        output: captured.output,
-        isError: callResult.isError,
-        payload: captured.reference,
-      });
+      const spec = readShapeSpec(step as unknown as Record<string, unknown>);
+      if (spec && shape && !callResult.isError) {
+        const shaped = await shape(callResult.output, spec);
+        results.push({
+          id: step.id,
+          server: step.server,
+          tool: step.tool,
+          output: shaped.data === undefined ? '' : JSON.stringify(shaped.data),
+          isError: callResult.isError,
+          shaped,
+        });
+      } else {
+        const captured = payloadStore.capture(
+          callResult.output,
+          payloadThreshold
+        );
+        results.push({
+          id: step.id,
+          server: step.server,
+          tool: step.tool,
+          output: captured.output,
+          isError: callResult.isError,
+          payload: captured.reference,
+        });
+      }
 
       if (callResult.isError && !step.continueOnError) {
         return { steps: results, stoppedAt: step.id };

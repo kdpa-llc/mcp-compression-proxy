@@ -47,6 +47,20 @@ export function centeredCosine(a: Float32Array, b: Float32Array, mean: Float32Ar
   return normA === 0 || normB === 0 ? 0 : dot / Math.sqrt(normA * normB);
 }
 
+/**
+ * Below this many vectors their mean is too unstable to subtract: with two,
+ * the centered vectors are exact opposites, so a query's score for one is
+ * minus its score for the other whatever the query says.
+ */
+export const MIN_VECTORS_TO_CENTER = 8;
+
+/** The mean to subtract before comparing, or zeros when there are too few vectors. */
+export function centerFor(vectors: Float32Array[]): Float32Array {
+  return vectors.length >= MIN_VECTORS_TO_CENTER
+    ? meanVector(vectors)
+    : new Float32Array(vectors[0]?.length ?? 0);
+}
+
 export function meanVector(vectors: Float32Array[]): Float32Array {
   const mean = new Float32Array(vectors[0]?.length ?? 0);
   for (const vector of vectors) {
@@ -184,7 +198,7 @@ export class EmbeddingIndex implements SemanticScorer {
     const [queryVector] = await this.model.embed([query]);
     if (!queryVector) return undefined;
 
-    const mean = meanVector([...vectors.values()]);
+    const mean = centerFor([...vectors.values()]);
     const scores = new Map<string, number>();
     for (const [key, vector] of vectors) {
       scores.set(key, centeredCosine(queryVector, vector, mean));

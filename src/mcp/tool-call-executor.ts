@@ -4,7 +4,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import type { Logger } from 'pino';
 import { matchesIgnorePattern } from '../config/loader.js';
-import type { MCPClientManager } from './client-manager.js';
+import type { AuthFailureConfirmer, MCPClientManager } from './client-manager.js';
 
 /** Raised for a call to a tool matched by `excludeTools`. */
 export class ToolExcludedError extends Error {
@@ -54,6 +54,39 @@ export function matchesAuthenticationFailure(
   });
 }
 
+/**
+ * A successful result shorter than this that matches an auth pattern is
+ * treated as an auth failure outright: error bodies are short. Longer ones
+ * may be content that merely quotes the pattern, and get a second opinion
+ * when one is configured.
+ */
+export const AUTH_CONFIRM_MIN_CHARS = 2000;
+
+function resultText(result: CallToolResult): string {
+  return result.content
+    .flatMap((item) => (item.type === 'text' && typeof item.text === 'string' ? [item.text] : []))
+    .join('\n');
+}
+
+/**
+ * Whether a pattern match on a tool result is a real auth failure. Fails
+ * safe: without a confirmer, for error results, for short results, and when
+ * the confirmer itself fails, the match stands, as it always did.
+ */
+async function confirmAuthFailure(
+  result: CallToolResult,
+  confirmer: AuthFailureConfirmer | undefined
+): Promise<boolean> {
+  if (!confirmer || result.isError === true) return true;
+  const text = resultText(result);
+  if (text.length < AUTH_CONFIRM_MIN_CHARS) return true;
+  try {
+    return await confirmer(text);
+  } catch {
+    return true;
+  }
+}
+
 function isRetrySafe(
   serverName: string,
   toolName: string,
@@ -67,6 +100,7 @@ function isRetrySafe(
 
 async function attemptToolCall(
   manager: MCPClientManager,
+  logger: Logger,
   serverName: string,
   toolName: string,
   args: Record<string, unknown>,
@@ -90,9 +124,18 @@ async function attemptToolCall(
             throw new Error('Task-based MCP tool results are not supported by the proxy');
           }
           const callResult = rawResult;
-          if (matchesAuthenticationFailure(callResult, authErrorPatterns)) {
+          const patternMatched = matchesAuthenticationFailure(callResult, authErrorPatterns);
+          if (
+            patternMatched &&
+            (await confirmAuthFailure(callResult, manager.getAuthFailureConfirmer()))
+          ) {
             authFailure = true;
             invalidate('auth-error');
+          } else if (patternMatched) {
+            logger.info(
+              { server: serverName, tool: toolName },
+              'Auth error pattern appeared inside tool content; the model judged it not an authentication failure'
+            );
           } else if (callResult.isError === true) {
             markFailure(`Tool '${toolName}' reported an error`);
           }
@@ -138,6 +181,7 @@ export async function callToolWithAuthRecovery(
 
   const first = await attemptToolCall(
     manager,
+    logger,
     serverName,
     toolName,
     args,
@@ -162,6 +206,7 @@ export async function callToolWithAuthRecovery(
 
   const second = await attemptToolCall(
     manager,
+    logger,
     serverName,
     toolName,
     args,

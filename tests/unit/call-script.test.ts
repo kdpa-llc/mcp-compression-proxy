@@ -174,4 +174,59 @@ describe('runCallScript', () => {
 
     store.destroy();
   });
+
+  it('reports a shaped step while later references still see the full output', async () => {
+    const store = new PayloadStore();
+    const execute = jest.fn(async (_server: string, tool: string, args: Record<string, unknown>) => {
+      if (tool === 'list') {
+        return {
+          output: JSON.stringify({
+            items: [
+              { id: 1, title: 'auth bug', secret: 'x' },
+              { id: 2, title: 'docs', secret: 'y' },
+            ],
+          }),
+        };
+      }
+      return { output: JSON.stringify({ received: args }) };
+    });
+
+    try {
+      const result = await runCallScript(
+        [
+          { id: 'list', server: 's', tool: 'list', want: { items: [{ id: 'integer' }] }, where: 'auth' },
+          { id: 'use', server: 's', tool: 'use', arguments: { secret: { $ref: 'list#/items/1/secret' } } },
+        ],
+        execute,
+        store,
+        10_000,
+        async (output, spec) => {
+          const { shapeAndStore } = await import('../../src/services/shaped-call.js');
+          return shapeAndStore(output, spec, store, 10_000);
+        }
+      );
+
+      expect(JSON.parse(result.steps[0].output)).toEqual({ items: [{ id: 1 }] });
+      expect(result.steps[0].shaped?.meta.filter?.where).toBe('auth');
+      expect(result.steps[0].shaped?.source?.id).toBeDefined();
+      expect(execute).toHaveBeenLastCalledWith('s', 'use', { secret: 'y' });
+    } finally {
+      store.destroy();
+    }
+  });
+
+  it('ignores want/where when no shaper is supplied', async () => {
+    const store = new PayloadStore();
+    try {
+      const result = await runCallScript(
+        [{ id: 'a', server: 's', tool: 't', want: { x: 'number' } }],
+        async () => ({ output: '{"x":1,"y":2}' }),
+        store
+      );
+      expect(result.steps[0].output).toBe('{"x":1,"y":2}');
+      expect(result.steps[0].shaped).toBeUndefined();
+    } finally {
+      store.destroy();
+    }
+  });
 });

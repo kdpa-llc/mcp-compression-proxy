@@ -72,9 +72,16 @@ server.setRequestHandler(ListToolsRequestSchema, async (request) => {
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name } = request.params;
+  const input = request.params.arguments?.input;
+
+  // A JSON input is echoed back, so shaping can be tested on real output.
+  const text =
+    typeof input === 'string' && /^[[{]/.test(input.trim())
+      ? input
+      : `${name} executed successfully`;
 
   return {
-    content: [{ type: 'text', text: `${name} executed successfully` }],
+    content: [{ type: 'text', text }],
     isError: !/^tool_\d{3}$/.test(name),
   };
 });

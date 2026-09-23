@@ -22,6 +22,11 @@ import {
   takeLimit,
   handleInfo,
   handleCall,
+  handleSuggest,
+  handleAudit,
+  handleCompress,
+  handlePayloadShape,
+  takeShapeOptions,
   handlePayloadRead,
   handlePayloadFind,
   handleScript,
@@ -45,12 +50,19 @@ Usage:
   mcp-cli search <query> [--limit N]   Ranked search over tool names/descriptions
   mcp-cli search-quality               How often search ranked the used tool first
   mcp-cli info <server>/<tool>         Get full schema for a tool
-  mcp-cli call <server>/<tool> <json>  Execute a tool
+  mcp-cli call <server>/<tool> <json> [--want <shape>] [--where <text>] [--limit N]
+                                        Execute a tool; optionally return only
+                                        the fields/items asked for
+  mcp-cli suggest <request> [--run]    Propose a tool call for a plain request
   mcp-cli output read <id> [offset] [length|all]
                                         Read cached large output
   mcp-cli output find <id> <query>      Find text in cached large output
+  mcp-cli output shape <id> [--want <shape>] [--where <text>]
+                                        Shape a cached output
   mcp-cli script <json>                 Run a declarative MCP call chain
   mcp-cli stats                        Show compression statistics
+  mcp-cli compress [--limit N]         Compress descriptions with the configured compressor
+  mcp-cli audit [--requeue]            Check compressions; list duplicate tools
   mcp-cli doctor                       Check config and backend health
   mcp-cli daemon start                 Start the background daemon
   mcp-cli daemon stop                  Stop the daemon
@@ -416,27 +428,48 @@ async function main(): Promise<void> {
       break;
 
     case 'call': {
-      if (!filteredArgs[1]) {
+      const { rest, shape } = takeShapeOptions(filteredArgs.slice(1));
+      if (!rest[0]) {
         console.error("Usage: mcp-cli call <server>/<tool> '<json_payload>'");
         process.exit(1);
       }
       // Payload from args or stdin
-      let payload = filteredArgs[2] || '';
+      let payload = rest[1] || '';
       if (!payload) {
         const stdinData = await readStdin();
         if (stdinData) payload = stdinData;
       }
       if (!payload) payload = '{}';
-      await handleCall(SOCKET_PATH, filteredArgs[1], payload);
+      await handleCall(SOCKET_PATH, rest[0], payload, shape);
       break;
     }
+
+    case 'suggest': {
+      const run = filteredArgs.includes('--run');
+      const { rest, limit } = takeLimit(filteredArgs.slice(1).filter((arg) => arg !== '--run'));
+      await handleSuggest(SOCKET_PATH, rest.join(' '), { run, candidates: limit });
+      break;
+    }
+
+    case 'audit':
+      await handleAudit(SOCKET_PATH, { requeue: filteredArgs.includes('--requeue') });
+      break;
+
+    case 'compress':
+      await handleCompress(SOCKET_PATH, { limit: takeLimit(filteredArgs.slice(1)).limit });
+      break;
 
     case 'output': {
       const action = filteredArgs[1];
       const id = filteredArgs[2];
-      if (!id || (action !== 'read' && action !== 'find')) {
-        console.error('Usage: mcp-cli output <read|find> <payload-id> ...');
+      if (!id || (action !== 'read' && action !== 'find' && action !== 'shape')) {
+        console.error('Usage: mcp-cli output <read|find|shape> <payload-id> ...');
         process.exit(1);
+      }
+
+      if (action === 'shape') {
+        await handlePayloadShape(SOCKET_PATH, id, takeShapeOptions(filteredArgs.slice(3)).shape);
+        break;
       }
 
       if (action === 'find') {
