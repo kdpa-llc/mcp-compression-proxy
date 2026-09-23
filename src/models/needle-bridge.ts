@@ -154,6 +154,12 @@ export class NeedleBridge implements ModelBackend {
       startTimer.unref?.();
 
       child.on('error', (error) => fail(error.message));
+      // Writing to a bridge that has just died raises EPIPE on stdin; with no
+      // listener that is an uncaught exception that would take the proxy
+      // down. The exit handler already rejects whatever was in flight.
+      child.stdin?.on('error', (error) => {
+        this.logger.debug({ error: error.message }, 'Local model bridge stdin closed');
+      });
       child.on('exit', (code, signal) => {
         fail(`bridge exited during startup (${signal ?? `code ${code}`})`);
         this.handleExit(child, code, signal);

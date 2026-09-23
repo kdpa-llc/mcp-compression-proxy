@@ -150,6 +150,26 @@ function errorText(message: string): CallToolResult {
 }
 
 /**
+ * call_tool's `arguments` as an object. Models often send a nested object as a
+ * JSON string; anything that is not an object would reach the backend as a
+ * malformed call, so it is refused here with a message the model can act on.
+ */
+function toolArguments(value: unknown): Record<string, unknown> {
+  let parsed = value ?? {};
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed || '{}');
+    } catch {
+      throw new Error('arguments must be a JSON object');
+    }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('arguments must be a JSON object');
+  }
+  return parsed as Record<string, unknown>;
+}
+
+/**
  * The native proxy's discovery, shaping and audit tools.
  *
  * In lazy exposure these replace the full tool list: a client sees a handful
@@ -228,7 +248,7 @@ export class MetaTools {
     const server = String(args.server ?? '');
     const tool = String(args.tool ?? '');
     if (!server || !tool) return errorText('Error: server and tool are required');
-    const toolArgs = (args.arguments ?? {}) as Record<string, unknown>;
+    const toolArgs = toolArguments(args.arguments);
     this.deps.usage?.recordSelection(server, tool);
 
     const spec = readShapeSpec(args);

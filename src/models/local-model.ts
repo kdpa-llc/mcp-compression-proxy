@@ -31,7 +31,13 @@ export function createLocalModel(
   const embeddings =
     config.semanticSearch === false
       ? undefined
-      : new EmbeddingIndex(backend, options.logger, join(options.stateDir, 'embeddings.json'));
+      : new EmbeddingIndex(
+          backend,
+          options.logger,
+          join(options.stateDir, 'embeddings.json'),
+          // Whatever selects the weights: a change here invalidates the cache.
+          JSON.stringify([config.provider, config.command ?? null, config.args ?? null, config.env ?? null])
+        );
 
   return { backend, config, ...(embeddings ? { embeddings } : {}) };
 }

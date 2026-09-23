@@ -402,7 +402,12 @@ export function loadJSONServers(): ConfigResult {
       model = { ...model, ...projectConfig.model };
     }
     if (projectConfig.compressor) {
-      compressor = { ...compressor, ...projectConfig.compressor };
+      // Credentials belong to the endpoint they were written for: a project
+      // that names another url must not receive the user's apiKey or headers.
+      compressor =
+        compressor?.url === projectConfig.compressor.url
+          ? { ...compressor, ...projectConfig.compressor }
+          : { ...projectConfig.compressor };
     }
   } else {
     console.error(`[Config] No project-level config found at: ${paths.project}`);

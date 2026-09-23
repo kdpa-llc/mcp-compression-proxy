@@ -655,7 +655,10 @@ async function startDaemon(): Promise<void> {
     // does not pay for the whole catalog.
     if (localModel?.embeddings) {
       const embeddings = localModel.embeddings;
-      void toolCatalog.list().then((tools) => embeddings.warm(tools));
+      toolCatalog
+        .list()
+        .then((tools) => embeddings.warm(tools))
+        .catch((error) => logger.warn({ error: String(error) }, 'Could not index tool embeddings'));
     }
 
     // Signal readiness by writing a ready marker

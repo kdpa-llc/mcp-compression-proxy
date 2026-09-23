@@ -140,7 +140,7 @@ describe('reviewProposals and applyReview', () => {
           server: 'gh',
           tool: 'list_issues',
           description: 'List issues in one repository, optionally filtered by state.',
-          parameters: { state: 'open, closed or all' },
+          parameters: { state: '  open, closed or all\n' },
         },
       ],
       tools,
@@ -148,6 +148,7 @@ describe('reviewProposals and applyReview', () => {
     );
 
     expect(review.reviewed[0]).toMatchObject({ accepted: true, problems: [] });
+    expect(review.reviewed[0].proposal?.parameters).toEqual({ state: 'open, closed or all' });
     expect(review.reviewed[0].before.parameters).toEqual({ state: 'state' });
     expect(review.reviewed[0].after.parameters).toEqual({ state: 'open, closed or all' });
 

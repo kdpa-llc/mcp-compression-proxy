@@ -143,6 +143,22 @@ describe('MetaTools', () => {
     expect((await meta.call(META_TOOLS.callTool, { tool: 'x' })).isError).toBe(true);
   });
 
+  it('accepts arguments sent as a JSON string, and refuses ones that are not an object', async () => {
+    const { meta, callBackend } = setup();
+
+    await meta.call(META_TOOLS.callTool, { server: 'gh', tool: 'list_issues', arguments: '{"repo":"a/b"}' });
+    expect(callBackend).toHaveBeenLastCalledWith('gh', 'list_issues', { repo: 'a/b' });
+    await meta.call(META_TOOLS.callTool, { server: 'gh', tool: 'list_issues', arguments: '' });
+    expect(callBackend).toHaveBeenLastCalledWith('gh', 'list_issues', {});
+
+    for (const bad of ['{nope', '[1]', 42, ['a']]) {
+      const result = await meta.call(META_TOOLS.callTool, { server: 'gh', tool: 'list_issues', arguments: bad });
+      expect(result.isError).toBe(true);
+      expect(text(result)).toBe('Error: arguments must be a JSON object');
+    }
+    expect(callBackend).toHaveBeenCalledTimes(2);
+  });
+
   it('returns a failed backend call as an error instead of shaping it', async () => {
     const { meta, executeText } = setup();
     executeText.mockResolvedValueOnce({ output: 'boom', isError: true } as never);

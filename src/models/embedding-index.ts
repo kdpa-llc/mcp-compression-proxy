@@ -86,10 +86,16 @@ export class EmbeddingIndex implements SemanticScorer {
   private loaded = false;
   private dirty = false;
 
+  /**
+   * `modelKey` names the model the vectors came from. Cached vectors are only
+   * comparable with vectors from the same weights, so a cache written for
+   * another model (other weights through `model.args`, say) is ignored.
+   */
   constructor(
     private readonly model: Pick<ModelBackend, 'embed'>,
     private readonly logger: Logger,
-    private readonly cacheFile?: string
+    private readonly cacheFile?: string,
+    private readonly modelKey = ''
   ) {}
 
   private load(): void {
@@ -101,9 +107,10 @@ export class EmbeddingIndex implements SemanticScorer {
     try {
       const parsed = JSON.parse(readFileSync(this.cacheFile, 'utf-8')) as {
         version?: number;
+        model?: string;
         vectors?: Record<string, string>;
       };
-      if (parsed.version === 1 && parsed.vectors) {
+      if (parsed.version === 1 && (parsed.model ?? '') === this.modelKey && parsed.vectors) {
         for (const [hash, encoded] of Object.entries(parsed.vectors)) {
           this.vectors.set(hash, decode(encoded));
         }
@@ -123,6 +130,7 @@ export class EmbeddingIndex implements SemanticScorer {
         temp,
         JSON.stringify({
           version: 1,
+          model: this.modelKey,
           vectors: Object.fromEntries(entries.map(([hash, vector]) => [hash, encode(vector)])),
         }),
         { mode: 0o600 }
@@ -198,6 +206,12 @@ export class EmbeddingIndex implements SemanticScorer {
 
     const [queryVector] = await this.model.embed([query]);
     if (!queryVector) return undefined;
+    if ([...vectors.values()].some((vector) => vector.length !== queryVector.length)) {
+      // Vectors from another model: comparing them would only produce NaN.
+      this.logger.warn('Cached tool embeddings do not match the model; re-indexing');
+      this.vectors.clear();
+      return undefined;
+    }
 
     const mean = centerFor([...vectors.values()]);
     const scores = new Map<string, number>();

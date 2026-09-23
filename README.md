@@ -409,6 +409,8 @@ Any OpenAI-compatible `/chat/completions` endpoint can write compressed descript
 
 Run `mcp-cli compress` repeatedly until nothing remains, or call `mcp-compression-proxy__compress_via_sampling` from a native client. Only tool names and descriptions are sent to the endpoint.
 
+A project `servers.json` with its own `compressor` replaces the user-level one. It inherits the user's `apiKey` and `headers` only when both name the same `url`, so a repository's config cannot redirect your key to another endpoint.
+
 ## 🧩 Optional local model
 
 A local [Cactus Needle 3](https://github.com/cactus-compute/needle) model (29-121M parameters, 8-29 MB) adds meaning-based ranking to search and `--where`, proposed calls in `suggest`, and field extraction from text output. Every feature works without it.
@@ -427,7 +429,7 @@ python3 -m venv ~/.mcp-compression-proxy/needle
 }
 ```
 
-The proxy starts its bundled `needle_bridge.py` with that interpreter on first use, keeps it idle-unreferenced, and stops it after `idleTimeout` seconds (default 600). The first start downloads about 35 MB of weights from Hugging Face; after that it runs offline. Needle's usage telemetry is always switched off. Tool embeddings are cached in `~/.mcp-compression-proxy/embeddings.json`.
+The proxy starts its bundled `needle_bridge.py` with that interpreter on first use, keeps it idle-unreferenced, and stops it after `idleTimeout` seconds (default 600). The first start downloads about 35 MB of weights from Hugging Face; after that it runs offline. Needle's usage telemetry is always switched off. Tool embeddings are cached in `~/.mcp-compression-proxy/embeddings.json`, and rebuilt in the background when `command`, `args` or `env` change, since vectors from different weights cannot be compared.
 
 What to expect, measured on a 43-tool catalog with 30 labelled queries (`tests/fixtures/search-catalog.ts`):
 
