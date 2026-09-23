@@ -17,6 +17,8 @@ import { getDaemonRuntimePaths } from './runtime-paths.js';
 import { ToolCatalog } from '../mcp/tool-catalog.js';
 import { ToolSearch } from '../search/tool-search.js';
 import { UsageLog } from '../search/usage-log.js';
+import { createLocalModel } from '../models/local-model.js';
+import { fileURLToPath } from 'url';
 
 const RUNTIME_PATHS = getDaemonRuntimePaths();
 const {
@@ -95,7 +97,17 @@ async function startDaemon(): Promise<void> {
     path.join(BASE_DIR, 'search-usage.jsonl'),
     () => loadJSONServersCached()?.search?.learnFromUsage === true
   );
-  const toolSearch = new ToolSearch(toolCatalog, compressionCache, { usage: usageLog });
+  // Model settings are daemon-specific: a change needs `mcp-cli daemon restart`.
+  const localModel = createLocalModel(loadJSONServersCached()?.model, {
+    // dist/cli/daemon.js -> <package>/python/needle_bridge.py
+    bridgeScript: fileURLToPath(new URL('../../python/needle_bridge.py', import.meta.url)),
+    stateDir: BASE_DIR,
+    logger,
+  });
+  const toolSearch = new ToolSearch(toolCatalog, compressionCache, {
+    usage: usageLog,
+    semantic: localModel?.embeddings,
+  });
 
   // Load compression cache from disk
   try {
@@ -459,6 +471,13 @@ async function startDaemon(): Promise<void> {
   server.listen(SOCKET_PATH, () => {
     logger.info({ socketPath: SOCKET_PATH, pid: process.pid }, 'Daemon listening');
 
+    // Index tool embeddings in the background so the first semantic search
+    // does not pay for the whole catalog.
+    if (localModel?.embeddings) {
+      const embeddings = localModel.embeddings;
+      void toolCatalog.list().then((tools) => embeddings.warm(tools));
+    }
+
     // Signal readiness by writing a ready marker
     fs.writeFileSync(READY_FILE, String(Date.now()), 'utf-8');
   });
@@ -468,6 +487,7 @@ async function startDaemon(): Promise<void> {
     logger.info('Daemon shutting down');
 
     server.close();
+    void localModel?.backend.close();
     clientManager
       .disconnectAll()
       .then(() => {

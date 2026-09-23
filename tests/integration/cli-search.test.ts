@@ -59,6 +59,12 @@ describe('mcp-cli search and tool policy', () => {
         ],
         excludeTools: ['multi__tool_002'],
         search: { learnFromUsage: true },
+        // The stand-in bridge: same protocol as python/needle_bridge.py.
+        model: {
+          provider: 'needle',
+          command: process.execPath,
+          args: [join(repoRoot, 'tests/__mocks__/fake-model-bridge.js')],
+        },
       })
     );
   });
@@ -113,5 +119,19 @@ describe('mcp-cli search and tool policy', () => {
 
     const log = join(testHome, '.mcp-compression-proxy', 'search-usage.jsonl');
     expect(statSync(log).mode & 0o777).toBe(0o600);
+  }, 30000);
+
+  it('indexes tool embeddings through the configured model bridge', async () => {
+    const result = await runCli(['search', 'verbose description']);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('multi/tool_000');
+
+    const cache = join(testHome, '.mcp-compression-proxy', 'embeddings.json');
+    // Indexing starts in the background at daemon start; give it a moment.
+    for (let attempt = 0; attempt < 50 && !existsSync(cache); attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(existsSync(cache)).toBe(true);
+    expect(statSync(cache).mode & 0o777).toBe(0o600);
   }, 30000);
 });
