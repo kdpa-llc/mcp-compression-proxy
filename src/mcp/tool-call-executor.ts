@@ -6,6 +6,14 @@ import type { Logger } from 'pino';
 import { matchesIgnorePattern } from '../config/loader.js';
 import type { MCPClientManager } from './client-manager.js';
 
+/** Raised for a call to a tool matched by `excludeTools`. */
+export class ToolExcludedError extends Error {
+  constructor(serverName: string, toolName: string) {
+    super(`Tool '${serverName}__${toolName}' is excluded by the excludeTools configuration`);
+    this.name = 'ToolExcludedError';
+  }
+}
+
 type AttemptResult =
   | { result: CallToolResult; authFailure: boolean }
   | { error: unknown; authFailure: boolean };
@@ -117,6 +125,10 @@ export async function callToolWithAuthRecovery(
   toolName: string,
   args: Record<string, unknown>
 ): Promise<CallToolResult> {
+  if (manager.isToolExcluded(serverName, toolName)) {
+    throw new ToolExcludedError(serverName, toolName);
+  }
+
   const policy = manager.getAuthRecoveryPolicy(serverName);
   const retrySafe = isRetrySafe(
     serverName,

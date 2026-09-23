@@ -15,6 +15,9 @@ import { mkdirSync, writeFileSync, rmSync } from 'fs';
 
 const PAGE_SIZE = 5;
 const BACKEND_TOOLS = 12;
+// The backend paginates too, in pages that do not line up with the proxy's.
+// The proxy used to read only a backend's first page, dropping tools 4-11.
+const BACKEND_PAGE_SIZE = 4;
 
 describe('tools/list pagination', () => {
   let mcpClient: Client;
@@ -52,6 +55,7 @@ describe('tools/list pagination', () => {
       env: {
         ...testProcessEnv(testHome),
         MOCK_TOOL_COUNT: String(BACKEND_TOOLS),
+        MOCK_PAGE_SIZE: String(BACKEND_PAGE_SIZE),
         MCP_TOOLS_PAGE_SIZE: String(PAGE_SIZE),
         LOG_LEVEL: 'error',
       },
@@ -102,6 +106,8 @@ describe('tools/list pagination', () => {
     expect(seen).toContain(`multi__tool_${String(BACKEND_TOOLS - 1).padStart(3, '0')}`);
     expect(seen).toContain('mcp-compression-proxy__stats');
     expect(seen.length).toBeGreaterThan(PAGE_SIZE);
+    // Every backend page arrived, not just the first.
+    expect(seen.filter((name) => name.startsWith('multi__'))).toHaveLength(BACKEND_TOOLS - 1);
   });
 
   it('omits nextCursor on the final page', async () => {

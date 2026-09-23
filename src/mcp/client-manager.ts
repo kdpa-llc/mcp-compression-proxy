@@ -9,7 +9,7 @@ import type {
   ServerStatus,
 } from '../types/index.js';
 import type { Logger } from 'pino';
-import type { ConfigResult } from '../config/loader.js';
+import { matchesIgnorePattern, type ConfigResult } from '../config/loader.js';
 import { SERVER_NAME, VERSION } from '../version.js';
 
 export const DEFAULT_SOFT_MAX_CONNECTION_AGE_SECONDS = 3600;
@@ -152,6 +152,7 @@ export class MCPClientManager {
   private readonly RECONNECT_MAX_MS = 30_000;
   private configWatchTimer?: ReturnType<typeof setInterval>;
   private shuttingDown = false;
+  private excludePatterns: string[] = [];
 
   constructor(logger: Logger) {
     this.logger = logger;
@@ -718,6 +719,10 @@ export class MCPClientManager {
         return;
       }
 
+      // Exclusion is enforced here, at the one place every tool call passes
+      // through, so it must follow the file like the server set does.
+      this.setExcludePatterns(config.excludePatterns);
+
       // Settings that live outside this class - compression patterns, the
       // uncompressed-tool fallback - are applied by the owner. Without this a
       // proxy started before servers.json existed would connect the servers it
@@ -982,6 +987,23 @@ export class MCPClientManager {
     } finally {
       await this.releaseConnection(slot, connection);
     }
+  }
+
+  /**
+   * The `excludeTools` patterns. Excluded tools are hidden from every listing
+   * and refused by {@link callToolWithAuthRecovery}: hiding alone would leave
+   * them one guessed name away from running.
+   */
+  setExcludePatterns(patterns: string[] | undefined): void {
+    this.excludePatterns = [...(patterns ?? [])];
+  }
+
+  getExcludePatterns(): string[] {
+    return [...this.excludePatterns];
+  }
+
+  isToolExcluded(serverName: string, toolName: string): boolean {
+    return matchesIgnorePattern(`${serverName}__${toolName}`, this.excludePatterns);
   }
 
   getConfiguredServerNames(): string[] {

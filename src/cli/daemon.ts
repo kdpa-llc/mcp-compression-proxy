@@ -9,11 +9,12 @@ import { callToolWithAuthRecovery } from '../mcp/tool-call-executor.js';
 import { CompressionCache } from '../services/compression-cache.js';
 import { SessionManager } from '../services/session-manager.js';
 import { StatsService } from '../services/stats-service.js';
-import { loadJSONServers, loadJSONServersCached, matchesIgnorePattern } from '../config/loader.js';
+import { loadJSONServers, loadJSONServersCached } from '../config/loader.js';
 import { DEFAULT_PAYLOAD_THRESHOLD, PayloadStore } from './payload-interceptor.js';
 import type { IPCRequest, IPCResponse, CLIConfig } from '../types/index.js';
 import { runCallScript, type CallScriptStep } from '../mcp/call-script.js';
 import { getDaemonRuntimePaths } from './runtime-paths.js';
+import { ToolCatalog } from '../mcp/tool-catalog.js';
 
 const RUNTIME_PATHS = getDaemonRuntimePaths();
 const {
@@ -85,6 +86,9 @@ async function startDaemon(): Promise<void> {
   const compressionCache = new CompressionCache(logger);
   const sessionManager = new SessionManager(logger);
   const statsService = new StatsService(logger, clientManager, compressionCache, sessionManager);
+  // Longer-lived than the native proxy's snapshot: CLI commands arrive
+  // seconds apart, and each would otherwise list every backend again.
+  const toolCatalog = new ToolCatalog(clientManager, logger, 15_000);
 
   // Load compression cache from disk
   try {
@@ -98,6 +102,7 @@ async function startDaemon(): Promise<void> {
   let cliConfig: CLIConfig = {};
 
   if (config) {
+    clientManager.setExcludePatterns(config.excludePatterns);
     compressionCache.setNoCompressPatterns(config.noCompressPatterns);
 
     // Parse CLI config if present (cast to access extra fields)
@@ -149,69 +154,45 @@ async function startDaemon(): Promise<void> {
     fs.unlinkSync(SOCKET_PATH);
   }
 
+  /** The cached compressed description, cut to ~60 chars for listings. */
+  function shortDescription(serverName: string, toolName: string, original?: string): string {
+    const desc = compressionCache.getCompressedDescription(serverName, toolName) || original || '';
+    return desc.length > 60 ? desc.slice(0, 57) + '...' : desc;
+  }
+
   // Handle IPC request
   async function handleRequest(request: IPCRequest): Promise<IPCResponse> {
     const { id, method, params } = request;
-    const excludePatterns = config?.excludePatterns || [];
 
     try {
       switch (method) {
         case 'tools': {
-          const serverNames = clientManager.getConfiguredServerNames();
-          const toolEntries: Array<{ server: string; tool: string; description: string }> = [];
-
-          for (const name of serverNames) {
-            try {
-              const result = await clientManager.withClient(name, async ({ client }) =>
-                client.listTools()
-              );
-              for (const tool of result.tools) {
-                const fullName = `${name}__${tool.name}`;
-                if (matchesIgnorePattern(fullName, excludePatterns)) continue;
-
-                const desc =
-                  compressionCache.getCompressedDescription(name, tool.name) ||
-                  tool.description ||
-                  '';
-                // Truncate to ~60 chars for compact listing
-                const shortDesc = desc.length > 60 ? desc.slice(0, 57) + '...' : desc;
-                toolEntries.push({ server: name, tool: tool.name, description: shortDesc });
-              }
-            } catch (error) {
-              logger.error({ server: name, error }, 'Failed to list tools');
-            }
-          }
+          const toolEntries = (await toolCatalog.list()).map((tool) => ({
+            server: tool.serverName,
+            tool: tool.toolName,
+            description: shortDescription(tool.serverName, tool.toolName, tool.description),
+          }));
 
           return { id, result: { tools: toolEntries, count: toolEntries.length } };
         }
 
         case 'search': {
           const query = String(params?.query || '').toLowerCase();
-          const serverNames = clientManager.getConfiguredServerNames();
           const matches: Array<{ server: string; tool: string; description: string }> = [];
 
-          for (const name of serverNames) {
-            try {
-              const result = await clientManager.withClient(name, async ({ client }) =>
-                client.listTools()
-              );
-              for (const tool of result.tools) {
-                const fullName = `${name}__${tool.name}`;
-                if (matchesIgnorePattern(fullName, excludePatterns)) continue;
+          for (const tool of await toolCatalog.list()) {
+            const desc =
+              compressionCache.getCompressedDescription(tool.serverName, tool.toolName) ||
+              tool.description ||
+              '';
+            const searchText = `${tool.serverName}/${tool.toolName} ${desc}`.toLowerCase();
 
-                const desc =
-                  compressionCache.getCompressedDescription(name, tool.name) ||
-                  tool.description ||
-                  '';
-                const searchText = `${name}/${tool.name} ${desc}`.toLowerCase();
-
-                if (searchText.includes(query)) {
-                  const shortDesc = desc.length > 60 ? desc.slice(0, 57) + '...' : desc;
-                  matches.push({ server: name, tool: tool.name, description: shortDesc });
-                }
-              }
-            } catch (error) {
-              logger.error({ server: name, error }, 'Failed to list tools for search');
+            if (searchText.includes(query)) {
+              matches.push({
+                server: tool.serverName,
+                tool: tool.toolName,
+                description: shortDescription(tool.serverName, tool.toolName, tool.description),
+              });
             }
           }
 
@@ -223,10 +204,7 @@ async function startDaemon(): Promise<void> {
           const toolName = String(params?.tool || '');
 
           try {
-            const result = await clientManager.withClient(serverName, async ({ client }) =>
-              client.listTools()
-            );
-            const tool = result.tools.find((t) => t.name === toolName);
+            const tool = await toolCatalog.find(serverName, toolName);
             if (!tool) {
               return {
                 id,
@@ -240,10 +218,12 @@ async function startDaemon(): Promise<void> {
             return {
               id,
               result: {
-                name: tool.name,
+                name: tool.toolName,
                 server: serverName,
                 description: tool.description || '',
                 inputSchema: tool.inputSchema,
+                ...(tool.title !== undefined ? { title: tool.title } : {}),
+                ...(tool.annotations !== undefined ? { annotations: tool.annotations } : {}),
               },
             };
           } catch (error) {

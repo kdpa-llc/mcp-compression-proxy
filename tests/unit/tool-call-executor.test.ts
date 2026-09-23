@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { Logger } from 'pino';
 import { MCPClientManager } from '../../src/mcp/client-manager.js';
-import { callToolWithAuthRecovery } from '../../src/mcp/tool-call-executor.js';
+import { callToolWithAuthRecovery, ToolExcludedError } from '../../src/mcp/tool-call-executor.js';
 
 jest.mock('@modelcontextprotocol/sdk/client/index.js');
 jest.mock('@modelcontextprotocol/sdk/client/stdio.js');
@@ -186,5 +186,19 @@ describe('callToolWithAuthRecovery', () => {
     expect(result.isError).toBe(true);
     expect(client.close).not.toHaveBeenCalled();
     expect(manager.getServerStatuses()[0].consecutiveFailures).toBe(1);
+  });
+
+  it('refuses a tool matched by excludeTools without calling the backend', async () => {
+    const callTool = jest.fn<Client['callTool']>();
+    await initializeWithClients([clientWithCall(callTool)]);
+    manager.setExcludePatterns(['builder-mcp__Internal*']);
+
+    await expect(
+      callToolWithAuthRecovery(manager, logger, 'builder-mcp', 'InternalSearch', {})
+    ).rejects.toBeInstanceOf(ToolExcludedError);
+    await expect(
+      callToolWithAuthRecovery(manager, logger, 'builder-mcp', 'InternalSearch', {})
+    ).rejects.toThrow("Tool 'builder-mcp__InternalSearch' is excluded");
+    expect(callTool).not.toHaveBeenCalled();
   });
 });
