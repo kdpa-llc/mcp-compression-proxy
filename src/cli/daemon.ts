@@ -18,6 +18,12 @@ import { ToolCatalog } from '../mcp/tool-catalog.js';
 import { ToolSearch } from '../search/tool-search.js';
 import { UsageLog } from '../search/usage-log.js';
 import { createLocalModel } from '../models/local-model.js';
+import { modelAuthConfirmer } from '../models/auth-confirmer.js';
+import { readShapeSpec, shapeAndStore } from '../services/shaped-call.js';
+import { CallSuggester } from '../services/call-suggester.js';
+import { auditCompression } from '../services/compression-audit.js';
+import { CompressionSampler } from '../services/compression-sampler.js';
+import { openAiSamplingHost } from '../services/openai-compressor.js';
 import { fileURLToPath } from 'url';
 
 const RUNTIME_PATHS = getDaemonRuntimePaths();
@@ -108,6 +114,10 @@ async function startDaemon(): Promise<void> {
     usage: usageLog,
     semantic: localModel?.embeddings,
   });
+  const suggester = new CallSuggester(toolSearch, toolCatalog, localModel?.backend);
+  if (localModel?.config.confirmAuthFailures) {
+    clientManager.setAuthFailureConfirmer(modelAuthConfirmer(localModel.backend));
+  }
 
   // Load compression cache from disk
   try {
@@ -171,6 +181,21 @@ async function startDaemon(): Promise<void> {
   // Clean up stale socket file if it exists
   if (fs.existsSync(SOCKET_PATH)) {
     fs.unlinkSync(SOCKET_PATH);
+  }
+
+  /** Run a backend tool and join its text content. */
+  async function executeText(
+    serverName: string,
+    toolName: string,
+    args: Record<string, unknown>
+  ): Promise<{ output: string; isError?: boolean }> {
+    const result = await callToolWithAuthRecovery(clientManager, logger, serverName, toolName, args);
+    const content = result.content as Array<{ type: string; text?: string }>;
+    // flatMap rather than filter+map: filter does not narrow the element type.
+    const output = content
+      .flatMap((item) => (item.type === 'text' && item.text ? [item.text] : []))
+      .join('\n');
+    return { output, isError: result.isError };
   }
 
   /** The cached compressed description, cut to ~60 chars for listings. */
@@ -266,26 +291,28 @@ async function startDaemon(): Promise<void> {
           const toolName = String(params?.tool || '');
           const args = (params?.arguments || {}) as Record<string, unknown>;
           const threshold = cliConfig.payloadThreshold ?? DEFAULT_PAYLOAD_THRESHOLD;
+          const spec = readShapeSpec(params);
 
           if (!clientManager.isToolExcluded(serverName, toolName)) {
             usageLog.recordSelection(serverName, toolName);
           }
 
           try {
-            const result = await callToolWithAuthRecovery(
-              clientManager,
-              logger,
-              serverName,
-              toolName,
-              args
-            );
-            const content = result.content as Array<{ type: string; text?: string }>;
+            const { output: fullOutput, isError } = await executeText(serverName, toolName, args);
 
-            // Extract text content
-            // flatMap rather than filter+map: filter does not narrow the
-            // element type, which is why this needed a non-null assertion.
-            const textParts = content.flatMap((c) => (c.type === 'text' && c.text ? [c.text] : []));
-            const fullOutput = textParts.join('\n');
+            if (spec && !isError) {
+              const shaped = await shapeAndStore(
+                fullOutput,
+                spec,
+                payloadStore,
+                threshold,
+                localModel?.backend
+              );
+              return {
+                id,
+                result: { output: '', isError, payload: shaped.source, shaped },
+              };
+            }
 
             // Apply payload interception
             const captured = payloadStore.capture(fullOutput, threshold);
@@ -294,7 +321,7 @@ async function startDaemon(): Promise<void> {
               id,
               result: {
                 output: captured.output,
-                isError: result.isError,
+                isError,
                 payload: captured.reference,
               },
             };
@@ -302,6 +329,117 @@ async function startDaemon(): Promise<void> {
             const msg = error instanceof Error ? error.message : 'Unknown error';
             return { id, error: { code: -1, message: msg } };
           }
+        }
+
+        case 'payload-shape': {
+          const payloadId = String(params?.id || '');
+          const spec = readShapeSpec(params);
+          if (!spec) {
+            return { id, error: { code: -1, message: 'Pass want and/or where to shape an output' } };
+          }
+          const content = payloadStore.read(payloadId, { all: true }).content;
+          const shaped = await shapeAndStore(
+            content,
+            spec,
+            payloadStore,
+            cliConfig.payloadThreshold ?? DEFAULT_PAYLOAD_THRESHOLD,
+            localModel?.backend
+          );
+          return { id, result: shaped };
+        }
+
+        case 'suggest': {
+          const suggestion = await suggester.suggest(String(params?.request || ''), {
+            candidates: Number(params?.candidates) || undefined,
+          });
+          if (params?.run !== true || !suggestion.runnable || !suggestion.proposal) {
+            return { id, result: { suggestion } };
+          }
+          const { server, tool, arguments: args } = suggestion.proposal;
+          usageLog.recordSelection(server, tool);
+          const { output, isError } = await executeText(server, tool, args);
+          const captured = payloadStore.capture(
+            output,
+            cliConfig.payloadThreshold ?? DEFAULT_PAYLOAD_THRESHOLD
+          );
+          return {
+            id,
+            result: {
+              suggestion,
+              ran: { output: captured.output, isError, payload: captured.reference },
+            },
+          };
+        }
+
+        case 'audit': {
+          const audit = await auditCompression(
+            await toolCatalog.list(),
+            compressionCache,
+            localModel?.backend
+          );
+          let requeued = 0;
+          if (params?.requeue === true) {
+            for (const finding of audit.confusable) {
+              const slash = finding.tool.indexOf('/');
+              if (compressionCache.invalidate(finding.tool.slice(0, slash), finding.tool.slice(slash + 1))) {
+                requeued++;
+              }
+            }
+            if (requeued > 0) await compressionCache.saveToDisk();
+          }
+          return { id, result: { ...audit, requeued } };
+        }
+
+        case 'compress': {
+          const compressor = loadJSONServersCached()?.compressor;
+          if (!compressor) {
+            return {
+              id,
+              error: {
+                code: -1,
+                message:
+                  'No compressor configured. Add "compressor": { "url": "http://localhost:11434/v1", "model": "..." } to servers.json.',
+              },
+            };
+          }
+          const limit = Math.min(Math.max(Number(params?.limit) || 25, 1), 100);
+          const tools = await toolCatalog.list();
+          const pending = tools
+            .filter(
+              (tool) =>
+                !compressionCache.hasCompressed(tool.serverName, tool.toolName) ||
+                compressionCache.isStale(tool.serverName, tool.toolName, tool.description)
+            )
+            .slice(0, limit);
+          const sampler = new CompressionSampler(logger, openAiSamplingHost(compressor));
+          const { descriptions, batchesAttempted, batchesFailed } = await sampler.compress(pending);
+          const originals = new Map(
+            tools.map((tool) => [`${tool.serverName}:${tool.toolName}`, tool.description])
+          );
+          for (const entry of descriptions) {
+            compressionCache.saveCompressed(
+              entry.serverName,
+              entry.toolName,
+              entry.description,
+              originals.get(`${entry.serverName}:${entry.toolName}`)
+            );
+          }
+          if (descriptions.length > 0) await compressionCache.saveToDisk();
+          const remaining = tools.filter(
+            (tool) =>
+              !compressionCache.hasCompressed(tool.serverName, tool.toolName) ||
+              compressionCache.isStale(tool.serverName, tool.toolName, tool.description)
+          ).length;
+          return {
+            id,
+            result: {
+              compressed: descriptions.length,
+              attempted: pending.length,
+              batchesAttempted,
+              batchesFailed,
+              remaining,
+            },
+          };
         }
 
         case 'payload-read': {
@@ -336,25 +474,11 @@ async function startDaemon(): Promise<void> {
           const threshold = cliConfig.payloadThreshold ?? DEFAULT_PAYLOAD_THRESHOLD;
           const result = await runCallScript(
             steps as CallScriptStep[],
-            async (serverName, toolName, args) => {
-              const callResult = await callToolWithAuthRecovery(
-                clientManager,
-                logger,
-                serverName,
-                toolName,
-                args
-              );
-              const content = callResult.content as Array<{
-                type: string;
-                text?: string;
-              }>;
-              const output = content
-                .flatMap((item) => (item.type === 'text' && item.text ? [item.text] : []))
-                .join('\n');
-              return { output, isError: callResult.isError };
-            },
+            executeText,
             payloadStore,
-            threshold
+            threshold,
+            (output, spec) =>
+              shapeAndStore(output, spec, payloadStore, threshold, localModel?.backend)
           );
           return { id, result };
         }

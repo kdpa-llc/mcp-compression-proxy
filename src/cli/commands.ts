@@ -172,13 +172,51 @@ export async function handleInfo(socketPath: string, serverTool: string): Promis
   console.log(JSON.stringify(result, null, 2));
 }
 
+/** want/where/limit as given on the command line; want stays a JSON string until the daemon parses it. */
+export interface ShapeOptions {
+  want?: string;
+  where?: string;
+  limit?: number;
+}
+
+/** Pull --want, --where and --limit out of an argument list. */
+export function takeShapeOptions(args: string[]): { rest: string[]; shape: ShapeOptions } {
+  const want = takeOption(args, 'want');
+  const where = takeOption(want.rest, 'where');
+  const limit = takeLimit(where.rest);
+  return {
+    rest: limit.rest,
+    shape: {
+      ...(want.value !== undefined ? { want: want.value } : {}),
+      ...(where.value !== undefined ? { where: where.value } : {}),
+      ...(limit.limit !== undefined ? { limit: limit.limit } : {}),
+    },
+  };
+}
+
+function shapeParams(shape: ShapeOptions): Record<string, unknown> {
+  const params: Record<string, unknown> = {};
+  if (shape.want !== undefined) {
+    try {
+      params.want = JSON.parse(shape.want);
+    } catch {
+      console.error('Error: --want must be JSON, e.g. \'{"items":[{"id":"integer","title":"string"}]}\'');
+      process.exit(1);
+    }
+  }
+  if (shape.where !== undefined) params.where = shape.where;
+  if (shape.limit !== undefined) params.limit = shape.limit;
+  return params;
+}
+
 /**
  * mcp-cli call <server>/<tool> '<json>' — execute a tool
  */
 export async function handleCall(
   socketPath: string,
   serverTool: string,
-  jsonPayload: string
+  jsonPayload: string,
+  shape: ShapeOptions = {}
 ): Promise<void> {
   const slashIndex = serverTool.indexOf('/');
   if (slashIndex === -1) {
@@ -203,6 +241,7 @@ export async function handleCall(
     server,
     tool,
     arguments: args,
+    ...shapeParams(shape),
   });
 
   if (response.error) {
@@ -210,13 +249,177 @@ export async function handleCall(
     process.exit(1);
   }
 
-  const result = response.result as { output: string; isError?: boolean };
+  const result = response.result as { output: string; isError?: boolean; shaped?: unknown };
   if (result.isError) {
     console.error(result.output);
     process.exit(1);
   }
 
+  if (result.shaped !== undefined) {
+    console.log(JSON.stringify(result.shaped, null, 2));
+    return;
+  }
+
   console.log(result.output);
+}
+
+/**
+ * mcp-cli output shape <id> --want <shape> --where <text> — shape a saved output
+ */
+export async function handlePayloadShape(
+  socketPath: string,
+  id: string,
+  shape: ShapeOptions
+): Promise<void> {
+  if (shape.want === undefined && shape.where === undefined) {
+    console.error("Usage: mcp-cli output shape <payload-id> [--want '<shape>'] [--where '<text>'] [--limit N]");
+    process.exit(1);
+  }
+
+  const response = await sendRequest(socketPath, 'payload-shape', { id, ...shapeParams(shape) });
+
+  if (response.error) {
+    console.error(`Error: ${response.error.message}`);
+    process.exit(1);
+  }
+
+  console.log(JSON.stringify(response.result, null, 2));
+}
+
+/**
+ * mcp-cli suggest <request> [--run] — propose a tool call for a request
+ */
+export async function handleSuggest(
+  socketPath: string,
+  request: string,
+  options: { run?: boolean; candidates?: number } = {}
+): Promise<void> {
+  if (!request) {
+    console.error('Usage: mcp-cli suggest <what you want to do> [--run] [--limit N]');
+    process.exit(1);
+  }
+
+  const response = await sendRequest(socketPath, 'suggest', {
+    request,
+    ...(options.run ? { run: true } : {}),
+    ...(options.candidates !== undefined ? { candidates: options.candidates } : {}),
+  });
+
+  if (response.error) {
+    console.error(`Error: ${response.error.message}`);
+    process.exit(1);
+  }
+
+  const result = response.result as {
+    suggestion: { runnable: boolean; runBlockedBy?: string };
+    ran?: { output: string; isError?: boolean };
+  };
+
+  if (options.run && !result.ran) {
+    console.error(`Not run: ${result.suggestion.runBlockedBy ?? 'no runnable proposal'}`);
+  }
+
+  console.log(JSON.stringify(result.suggestion, null, 2));
+
+  if (result.ran) {
+    console.log('\n--- output ---');
+    if (result.ran.isError) {
+      console.error(result.ran.output);
+      process.exit(1);
+    }
+    console.log(result.ran.output);
+  }
+}
+
+interface AuditReport {
+  method: string;
+  checked: number;
+  confusable: Array<{
+    tool: string;
+    compressed: string;
+    closestTo: string;
+    ownSimilarity: number;
+    otherSimilarity: number;
+  }>;
+  duplicates: Array<{ tools: [string, string]; similarity: number }>;
+  notes: string[];
+  requeued: number;
+}
+
+/**
+ * mcp-cli audit [--requeue] — check compressed descriptions and find duplicate tools
+ */
+export async function handleAudit(socketPath: string, options: { requeue?: boolean } = {}): Promise<void> {
+  const response = await sendRequest(socketPath, 'audit', options.requeue ? { requeue: true } : {});
+
+  if (response.error) {
+    console.error(`Error: ${response.error.message}`);
+    process.exit(1);
+  }
+
+  const audit = response.result as AuditReport;
+  console.log(`Checked ${audit.checked} compressed description(s), compared by ${audit.method === 'semantic' ? 'meaning (local model)' : 'shared words'}.`);
+
+  if (audit.confusable.length === 0) {
+    console.log('  ✓ Every compressed description is still closest to its own tool.');
+  } else {
+    console.log(`  ! ${audit.confusable.length} compressed description(s) now read more like another tool:`);
+    for (const finding of audit.confusable) {
+      console.log(`    ${finding.tool} -> closer to ${finding.closestTo} (${finding.otherSimilarity} vs ${finding.ownSimilarity})`);
+      console.log(`      "${finding.compressed}"`);
+    }
+    console.log(
+      audit.requeued > 0
+        ? `    Re-queued ${audit.requeued} for compression.`
+        : '    Re-queue them for compression with: mcp-cli audit --requeue'
+    );
+  }
+
+  if (audit.duplicates.length > 0) {
+    console.log(`\nPossible duplicate tools across servers (excluding one saves its whole definition):`);
+    for (const duplicate of audit.duplicates) {
+      console.log(`  ${duplicate.tools[0]}  ~  ${duplicate.tools[1]}  (${duplicate.similarity})`);
+    }
+  }
+
+  for (const note of audit.notes) {
+    console.log(`\nNote: ${note}`);
+  }
+}
+
+/**
+ * mcp-cli compress [--limit N] — write compressed descriptions with the configured compressor
+ */
+export async function handleCompress(socketPath: string, options: { limit?: number } = {}): Promise<void> {
+  // A batch through a local model can take a while.
+  const response = await sendRequest(
+    socketPath,
+    'compress',
+    options.limit !== undefined ? { limit: options.limit } : {},
+    600_000
+  );
+
+  if (response.error) {
+    console.error(`Error: ${response.error.message}`);
+    process.exit(1);
+  }
+
+  const result = response.result as {
+    compressed: number;
+    attempted: number;
+    batchesFailed: number;
+    batchesAttempted: number;
+    remaining: number;
+  };
+  console.log(`Compressed ${result.compressed} of ${result.attempted} tool description(s).`);
+  if (result.batchesFailed > 0) {
+    console.log(`${result.batchesFailed} of ${result.batchesAttempted} batch(es) produced no usable result; run again to retry.`);
+  }
+  console.log(
+    result.remaining > 0
+      ? `${result.remaining} remaining; run mcp-cli compress again.`
+      : 'All tools have compressed descriptions.'
+  );
 }
 
 export async function handlePayloadRead(

@@ -6,6 +6,8 @@ import type { Logger } from 'pino';
 import { NeedleBridge } from '../../src/models/needle-bridge.js';
 import {
   EmbeddingIndex,
+  MIN_VECTORS_TO_CENTER,
+  centerFor,
   centeredCosine,
   embeddingText,
   meanVector,
@@ -194,6 +196,15 @@ describe('EmbeddingIndex', () => {
     expect(centeredCosine(a, b, new Float32Array(3))).toBeGreaterThan(0.9);
     expect(centeredCosine(a, b, mean)).toBeLessThan(0);
     expect(centeredCosine(a, a, a)).toBe(0);
+  });
+
+  it('only subtracts a mean computed from enough vectors', () => {
+    const few = [new Float32Array([1, 2]), new Float32Array([3, 4])];
+    expect(Array.from(centerFor(few))).toEqual([0, 0]);
+
+    const many = Array.from({ length: MIN_VECTORS_TO_CENTER }, () => new Float32Array([2, 4]));
+    expect(Array.from(centerFor(many))).toEqual([2, 4]);
+    expect(centerFor([])).toHaveLength(0);
   });
 
   it('scores tools against a query and caches vectors on disk', async () => {

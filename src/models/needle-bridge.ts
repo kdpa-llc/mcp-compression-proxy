@@ -164,7 +164,11 @@ export class NeedleBridge implements ModelBackend {
         this.logger.debug({ stderr: chunk.slice(0, 2000) }, 'Local model bridge stderr');
       });
 
-      const lines = createInterface({ input: child.stdout! });
+      if (!child.stdout) {
+        fail('bridge has no stdout');
+        return;
+      }
+      const lines = createInterface({ input: child.stdout });
       lines.on('line', (line) => {
         let message: Record<string, unknown>;
         try {

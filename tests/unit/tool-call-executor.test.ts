@@ -201,4 +201,61 @@ describe('callToolWithAuthRecovery', () => {
     ).rejects.toThrow("Tool 'builder-mcp__InternalSearch' is excluded");
     expect(callTool).not.toHaveBeenCalled();
   });
+
+  describe('auth failure confirmation', () => {
+    const quoted = `Wiki page. ${'Background. '.repeat(200)}If you see "Received Midway login page" run mwinit.`;
+
+    function contentClient() {
+      return clientWithCall(
+        jest.fn<Client['callTool']>().mockResolvedValue({
+          content: [{ type: 'text', text: quoted }],
+        })
+      );
+    }
+
+    it('keeps the connection when the confirmer says a long result is only content', async () => {
+      const client = contentClient();
+      await initializeWithClients([client]);
+      const confirmer = jest.fn(async (_text: string) => false);
+      manager.setAuthFailureConfirmer(confirmer);
+
+      const result = await callToolWithAuthRecovery(manager, logger, 'builder-mcp', 'InternalSearch', {});
+
+      expect(confirmer).toHaveBeenCalledWith(quoted);
+      expect(result.content).toEqual([{ type: 'text', text: quoted }]);
+      expect(client.callTool).toHaveBeenCalledTimes(1);
+      expect(manager.getServerStatuses()[0].authInvalidations ?? 0).toBe(0);
+      expect(manager.getAuthFailureConfirmer()).toBe(confirmer);
+    });
+
+    it('lets the pattern stand when the confirmer fails', async () => {
+      await initializeWithClients([contentClient(), contentClient(), contentClient()]);
+      manager.setAuthFailureConfirmer(async () => {
+        throw new Error('model down');
+      });
+
+      await callToolWithAuthRecovery(manager, logger, 'builder-mcp', 'InternalSearch', {});
+
+      expect(manager.getServerStatuses()[0].authInvalidations).toBeGreaterThan(0);
+    });
+
+    it('does not consult the confirmer for short results', async () => {
+      const stale = clientWithCall(
+        jest.fn<Client['callTool']>().mockResolvedValue({
+          content: [{ type: 'text', text: '{"error":"Received Midway login page"}' }],
+        })
+      );
+      const fresh = clientWithCall(
+        jest.fn<Client['callTool']>().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }] })
+      );
+      await initializeWithClients([stale, fresh]);
+      const confirmer = jest.fn(async (_text: string) => false);
+      manager.setAuthFailureConfirmer(confirmer);
+
+      const result = await callToolWithAuthRecovery(manager, logger, 'builder-mcp', 'InternalSearch', {});
+
+      expect(confirmer).not.toHaveBeenCalled();
+      expect(result.content).toEqual([{ type: 'text', text: 'ok' }]);
+    });
+  });
 });

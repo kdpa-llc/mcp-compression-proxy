@@ -19,6 +19,11 @@ import {
   takeLimit,
   handleInfo,
   handleCall,
+  handleSuggest,
+  handleAudit,
+  handleCompress,
+  handlePayloadShape,
+  takeShapeOptions,
   handlePayloadRead,
   handlePayloadFind,
   handleScript,
@@ -270,6 +275,161 @@ describe('CLI commands', () => {
   });
 
   // ── handleCall ───────────────────────────────────────────────────────────────
+
+  describe('shaping, suggest, audit and compress', () => {
+    it('parses --want, --where and --limit out of call arguments', () => {
+      expect(
+        takeShapeOptions(['fs/list', '{}', '--want', '{"a":"string"}', '--where=auth', '--limit', '3'])
+      ).toEqual({ rest: ['fs/list', '{}'], shape: { want: '{"a":"string"}', where: 'auth', limit: 3 } });
+      expect(takeShapeOptions(['fs/list'])).toEqual({ rest: ['fs/list'], shape: {} });
+    });
+
+    it('sends a parsed shape with the call and prints the shaped answer', async () => {
+      mockSendRequest.mockResolvedValue({
+        id: '1',
+        result: { output: '', shaped: { data: { a: 1 }, meta: { method: 'projection' } } },
+      });
+
+      await handleCall(SOCKET, 'fs/list', '{}', { want: '{"a":"number"}', where: 'x', limit: 2 });
+
+      expect(mockSendRequest).toHaveBeenCalledWith(SOCKET, 'call', {
+        server: 'fs',
+        tool: 'list',
+        arguments: {},
+        want: { a: 'number' },
+        where: 'x',
+        limit: 2,
+      });
+      expect(JSON.parse(stdoutLines.join('\n')).data).toEqual({ a: 1 });
+    });
+
+    it('rejects a --want that is not JSON before calling the daemon', async () => {
+      await expect(handleCall(SOCKET, 'fs/list', '{}', { want: '{a:' })).rejects.toThrow('process.exit(1)');
+      expect(stderrLines.join('\n')).toContain('--want must be JSON');
+      expect(mockSendRequest).not.toHaveBeenCalled();
+    });
+
+    it('shapes a saved output, and requires something to shape with', async () => {
+      mockSendRequest.mockResolvedValue({ id: '1', result: { data: [1] } });
+      await handlePayloadShape(SOCKET, 'abc', { where: 'auth' });
+      expect(mockSendRequest).toHaveBeenCalledWith(SOCKET, 'payload-shape', { id: 'abc', where: 'auth' });
+
+      await expect(handlePayloadShape(SOCKET, 'abc', {})).rejects.toThrow('process.exit(1)');
+
+      mockSendRequest.mockResolvedValue({ id: '1', error: { code: -1, message: 'gone' } });
+      await expect(handlePayloadShape(SOCKET, 'abc', { where: 'x' })).rejects.toThrow('process.exit(1)');
+    });
+
+    it('prints a suggestion, and the output when it ran', async () => {
+      mockSendRequest.mockResolvedValue({
+        id: '1',
+        result: { suggestion: { runnable: true }, ran: { output: 'listing', isError: false } },
+      });
+      await handleSuggest(SOCKET, 'list files', { run: true, candidates: 3 });
+      expect(mockSendRequest).toHaveBeenCalledWith(SOCKET, 'suggest', {
+        request: 'list files',
+        run: true,
+        candidates: 3,
+      });
+      expect(stdoutLines.join('\n')).toContain('listing');
+    });
+
+    it('says why a suggestion was not run', async () => {
+      mockSendRequest.mockResolvedValue({
+        id: '1',
+        result: { suggestion: { runnable: false, runBlockedBy: 'the tool does not declare readOnlyHint' } },
+      });
+      await handleSuggest(SOCKET, 'delete it', { run: true });
+      expect(stderrLines.join('\n')).toContain('Not run: the tool does not declare readOnlyHint');
+    });
+
+    it('exits non-zero when a suggested call ran and failed, or on bad input', async () => {
+      mockSendRequest.mockResolvedValue({
+        id: '1',
+        result: { suggestion: { runnable: true }, ran: { output: 'failed', isError: true } },
+      });
+      await expect(handleSuggest(SOCKET, 'x', { run: true })).rejects.toThrow('process.exit(1)');
+      await expect(handleSuggest(SOCKET, '')).rejects.toThrow('process.exit(1)');
+      mockSendRequest.mockResolvedValue({ id: '1', error: { code: -1, message: 'no' } });
+      await expect(handleSuggest(SOCKET, 'x')).rejects.toThrow('process.exit(1)');
+    });
+
+    it('prints audit findings, duplicates and notes', async () => {
+      mockSendRequest.mockResolvedValue({
+        id: '1',
+        result: {
+          method: 'lexical',
+          checked: 2,
+          confusable: [
+            { tool: 'fs/read_file', compressed: 'Reads files.', closestTo: 'fs/read_many', ownSimilarity: 0.3, otherSimilarity: 0.5 },
+          ],
+          duplicates: [{ tools: ['a/x', 'b/x'], similarity: 0.9 }],
+          notes: ['a note'],
+          requeued: 0,
+        },
+      });
+
+      await handleAudit(SOCKET);
+
+      const out = stdoutLines.join('\n');
+      expect(out).toContain('fs/read_file -> closer to fs/read_many');
+      expect(out).toContain('mcp-cli audit --requeue');
+      expect(out).toContain('a/x  ~  b/x');
+      expect(out).toContain('Note: a note');
+    });
+
+    it('reports a clean audit and re-queued findings', async () => {
+      mockSendRequest.mockResolvedValue({
+        id: '1',
+        result: { method: 'semantic', checked: 1, confusable: [], duplicates: [], notes: [], requeued: 0 },
+      });
+      await handleAudit(SOCKET, { requeue: true });
+      expect(mockSendRequest).toHaveBeenCalledWith(SOCKET, 'audit', { requeue: true });
+      expect(stdoutLines.join('\n')).toContain('still closest to its own tool');
+
+      mockSendRequest.mockResolvedValue({
+        id: '1',
+        result: {
+          method: 'lexical',
+          checked: 1,
+          confusable: [{ tool: 'a/b', compressed: 'c', closestTo: 'a/d', ownSimilarity: 0, otherSimilarity: 1 }],
+          duplicates: [],
+          notes: [],
+          requeued: 1,
+        },
+      });
+      await handleAudit(SOCKET, { requeue: true });
+      expect(stdoutLines.join('\n')).toContain('Re-queued 1');
+
+      mockSendRequest.mockResolvedValue({ id: '1', error: { code: -1, message: 'no' } });
+      await expect(handleAudit(SOCKET)).rejects.toThrow('process.exit(1)');
+    });
+
+    it('summarises a compression run', async () => {
+      mockSendRequest.mockResolvedValue({
+        id: '1',
+        result: { compressed: 8, attempted: 10, batchesAttempted: 1, batchesFailed: 1, remaining: 2 },
+      });
+      await handleCompress(SOCKET, { limit: 10 });
+
+      expect(mockSendRequest).toHaveBeenCalledWith(SOCKET, 'compress', { limit: 10 }, 600_000);
+      const out = stdoutLines.join('\n');
+      expect(out).toContain('Compressed 8 of 10');
+      expect(out).toContain('1 of 1 batch');
+      expect(out).toContain('2 remaining');
+
+      mockSendRequest.mockResolvedValue({
+        id: '1',
+        result: { compressed: 1, attempted: 1, batchesAttempted: 1, batchesFailed: 0, remaining: 0 },
+      });
+      await handleCompress(SOCKET);
+      expect(stdoutLines.join('\n')).toContain('All tools have compressed descriptions');
+
+      mockSendRequest.mockResolvedValue({ id: '1', error: { code: -1, message: 'No compressor configured' } });
+      await expect(handleCompress(SOCKET)).rejects.toThrow('process.exit(1)');
+      expect(stderrLines.join('\n')).toContain('No compressor configured');
+    });
+  });
 
   describe('handleCall', () => {
     it('prints output on success', async () => {

@@ -65,7 +65,15 @@ export class ToolSearch {
     private readonly options: { usage?: UsageLog; semantic?: SemanticScorer } = {}
   ) {}
 
-  async search(query: string, limit = DEFAULT_SEARCH_LIMIT): Promise<ToolSearchResult> {
+  /**
+   * `record: false` keeps internal lookups (suggest, lazy-mode helpers) out of
+   * the usage log, whose quality numbers describe searches agents made.
+   */
+  async search(
+    query: string,
+    limit = DEFAULT_SEARCH_LIMIT,
+    options: { record?: boolean } = {}
+  ): Promise<ToolSearchResult> {
     const tools = await this.catalog.list();
     const byKey = new Map(tools.map((tool) => [toolKey(tool.serverName, tool.toolName), tool]));
     const signals: ToolSearchResult['signals'] = ['lexical'];
@@ -136,10 +144,12 @@ export class ToolSearch {
       };
     });
 
-    this.options.usage?.recordSearch(
-      query,
-      hits.map((hit) => toolKey(hit.server, hit.tool))
-    );
+    if (options.record !== false) {
+      this.options.usage?.recordSearch(
+        query,
+        hits.map((hit) => toolKey(hit.server, hit.tool))
+      );
+    }
 
     return { hits, total: ranked.length, signals };
   }

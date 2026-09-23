@@ -22,6 +22,15 @@ import { SERVER_NAME, VERSION } from './version.js';
 import { DEFAULT_PAYLOAD_THRESHOLD, PayloadStore } from './cli/payload-interceptor.js';
 import { runCallScript, type CallScriptStep } from './mcp/call-script.js';
 import { ToolCatalog, type CatalogTool } from './mcp/tool-catalog.js';
+import { ToolSearch } from './search/tool-search.js';
+import { UsageLog } from './search/usage-log.js';
+import { createLocalModel, type LocalModel } from './models/local-model.js';
+import { modelAuthConfirmer } from './models/auth-confirmer.js';
+import { shapeAndStore } from './services/shaped-call.js';
+import { openAiSamplingHost } from './services/openai-compressor.js';
+import { MetaTools, LAZY_KEPT_MANAGEMENT_TOOLS } from './native/meta-tools.js';
+import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { getDaemonRuntimePaths } from './cli/runtime-paths.js';
 
 /**
@@ -101,6 +110,76 @@ async function executeBackendTool(
 const TOOL_CACHE_TTL_MS = 3000;
 
 const toolCatalog = new ToolCatalog(clientManager, logger, TOOL_CACHE_TTL_MS);
+
+const usageLog = new UsageLog(
+  join(getDaemonRuntimePaths().baseDir, 'search-usage.jsonl'),
+  () => loadJSONServersCached()?.search?.learnFromUsage === true
+);
+
+/** The optional local model; created in main() once the config is loaded. */
+let localModel: LocalModel | undefined;
+
+const toolSearch = new ToolSearch(toolCatalog, compressionCache, {
+  usage: usageLog,
+  semantic: {
+    score: (query, tools) =>
+      localModel?.embeddings?.score(query, tools) ?? Promise.resolve(undefined),
+  },
+});
+
+function payloadThreshold(): number {
+  return loadJSONServersCached()?.cli?.payloadThreshold ?? DEFAULT_PAYLOAD_THRESHOLD;
+}
+
+/**
+ * A backend call as a client sees it: excluded tools refused, large results
+ * replaced by a payload reference.
+ */
+async function callAggregated(
+  serverName: string,
+  toolName: string,
+  args: Record<string, unknown>
+): Promise<CallToolResult> {
+  try {
+    const executed = await executeBackendTool(serverName, toolName, args);
+    const captured = payloadStore.capture(executed.output, payloadThreshold());
+    if (!captured.reference) {
+      return executed.result;
+    }
+    return {
+      content: [{ type: 'text', text: captured.output }],
+      isError: executed.result.isError,
+      structuredContent: { payload: captured.reference },
+    };
+  } catch (error) {
+    logger.error({ serverName, toolName, error }, 'Tool call failed');
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `Error calling tool: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        },
+      ],
+      isError: true,
+    };
+  }
+}
+
+const metaTools = new MetaTools({
+  catalog: toolCatalog,
+  search: toolSearch,
+  usage: usageLog,
+  compression: compressionCache,
+  payloadStore,
+  threshold: payloadThreshold,
+  model: () => localModel?.backend,
+  callBackend: callAggregated,
+  executeText: async (serverName, toolName, args) => {
+    const executed = await executeBackendTool(serverName, toolName, args);
+    return { output: executed.output, isError: executed.result.isError };
+  },
+});
 
 /** A backend tool plus the metadata needed to namespace and compress it. */
 type BackendTool = CatalogTool;
@@ -443,7 +522,19 @@ server.setRequestHandler(ListToolsRequestSchema, async (request) => {
     };
   });
 
-  const allTools = [...aggregatorTools, ...aggregatedTools];
+  const config = loadJSONServersCached();
+  // Lazy exposure lists a few discovery tools instead of every backend
+  // schema; pinnedTools keeps chosen backend tools listed directly.
+  const allTools =
+    config?.toolExposure === 'lazy'
+      ? [
+          ...metaTools.definitions('lazy'),
+          ...aggregatorTools.filter((tool) => LAZY_KEPT_MANAGEMENT_TOOLS.includes(tool.name)),
+          ...aggregatedTools.filter((tool) =>
+            matchesIgnorePattern(tool.name, config.pinnedTools ?? [])
+          ),
+        ]
+      : [...aggregatorTools, ...metaTools.definitions('full'), ...aggregatedTools];
 
   // Backend tools are already filtered; this also lets excludeTools hide the
   // proxy's own management tools.
@@ -493,6 +584,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
   logger.debug({ tool: name, args }, 'Handling tools/call request');
+
+  if (metaTools.handles(name)) {
+    return metaTools.call(name, (args ?? {}) as Record<string, unknown>);
+  }
 
   // Management tools
   if (name === 'mcp-compression-proxy__create_session') {
@@ -906,12 +1001,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { limit = 25 } = args as { limit?: number };
     const actualLimit = Math.min(Math.max(limit, 1), 100);
 
-    if (!compressionSampler.isSupported()) {
+    // Prefer the client's own model; fall back to a configured compressor
+    // endpoint, since sampling is deprecated and many clients never had it.
+    const compressor = loadJSONServersCached()?.compressor;
+    const sampler = compressionSampler.isSupported()
+      ? compressionSampler
+      : compressor
+        ? new CompressionSampler(logger, openAiSamplingHost(compressor))
+        : undefined;
+
+    if (!sampler) {
       return {
         content: [
           {
             type: 'text',
-            text: 'Error: This client does not support MCP sampling, so the proxy cannot borrow its LLM.\n\nUse the manual flow instead: call mcp-compression-proxy__get_uncompressed_tools, compress the descriptions yourself, then post them back with mcp-compression-proxy__cache_compressed_tools.',
+            text: 'Error: This client does not support MCP sampling, so the proxy cannot borrow its LLM, and no "compressor" endpoint is configured in servers.json.\n\nConfigure one (any OpenAI-compatible /chat/completions, e.g. Ollama at http://localhost:11434/v1), or use the manual flow: call mcp-compression-proxy__get_uncompressed_tools, compress the descriptions yourself, then post them back with mcp-compression-proxy__cache_compressed_tools.',
           },
         ],
         isError: true,
@@ -937,7 +1041,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     const { descriptions, batchesAttempted, batchesFailed } =
-      await compressionSampler.compress(uncompressed);
+      await sampler.compress(uncompressed);
 
     for (const entry of descriptions) {
       const original = backendTools.find(
@@ -970,7 +1074,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       content: [
         {
           type: 'text',
-          text: `Compressed ${descriptions.length} of ${uncompressed.length} tools using this client's LLM.\n\nCoverage: ${coverageBefore.compressedTools}/${coverageBefore.totalTools} (${coverageBefore.coveragePercent}%) → ${coverageAfter.compressedTools}/${coverageAfter.totalTools} (${coverageAfter.coveragePercent}%)\nEstimated tokens saved: ~${coverageAfter.estimatedTokensSaved}${failureNote}\n\n${
+          text: `Compressed ${descriptions.length} of ${uncompressed.length} tools using ${sampler === compressionSampler ? "this client's LLM" : `the configured compressor (${compressor?.model})`}.\n\nCoverage: ${coverageBefore.compressedTools}/${coverageBefore.totalTools} (${coverageBefore.coveragePercent}%) → ${coverageAfter.compressedTools}/${coverageAfter.totalTools} (${coverageAfter.coveragePercent}%)\nEstimated tokens saved: ~${coverageAfter.estimatedTokensSaved}${failureNote}\n\n${
             coverageAfter.uncompressedTools > 0
               ? `Remaining: ${coverageAfter.uncompressedTools}. Call this tool again for the next batch.`
               : 'All tools have been compressed! 🎉'
@@ -1083,7 +1187,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         },
         payloadStore,
-        config?.cli?.payloadThreshold ?? DEFAULT_PAYLOAD_THRESHOLD
+        config?.cli?.payloadThreshold ?? DEFAULT_PAYLOAD_THRESHOLD,
+        (output, spec) =>
+          shapeAndStore(output, spec, payloadStore, payloadThreshold(), localModel?.backend)
       );
       return {
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
@@ -1121,35 +1227,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const serverName = name.slice(0, separatorIndex);
   const toolName = name.slice(separatorIndex + 2);
 
-  try {
-    const executed = await executeBackendTool(
-      serverName,
-      toolName,
-      (args || {}) as Record<string, unknown>
-    );
-    const threshold = loadJSONServersCached()?.cli?.payloadThreshold ?? DEFAULT_PAYLOAD_THRESHOLD;
-    const captured = payloadStore.capture(executed.output, threshold);
-    if (!captured.reference) {
-      return executed.result;
-    }
-    return {
-      content: [{ type: 'text', text: captured.output }],
-      isError: executed.result.isError,
-      structuredContent: { payload: captured.reference },
-    };
-  } catch (error) {
-    logger.error({ serverName, toolName, error }, 'Tool call failed');
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `Error calling tool: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        },
-      ],
-      isError: true,
-    };
-  }
+  return callAggregated(serverName, toolName, (args || {}) as Record<string, unknown>);
 });
 
 /**
@@ -1179,6 +1257,7 @@ async function shutdown(reason: string, exitCode = 0): Promise<void> {
 
   sessionManager.destroy();
   payloadStore.destroy();
+  await localModel?.backend.close();
 
   process.exit(exitCode);
 }
@@ -1265,6 +1344,22 @@ async function main() {
     } catch (error) {
       logger.error({ error }, 'Error during backend server initialization');
     }
+  }
+
+  // Model settings are read once; restart the MCP client after changing them.
+  localModel = createLocalModel(config?.model, {
+    // dist/index.js -> <package>/python/needle_bridge.py
+    bridgeScript: fileURLToPath(new URL('../python/needle_bridge.py', import.meta.url)),
+    stateDir: getDaemonRuntimePaths().baseDir,
+    logger,
+  });
+  if (localModel?.config.confirmAuthFailures) {
+    clientManager.setAuthFailureConfirmer(modelAuthConfirmer(localModel.backend));
+  }
+  if (localModel?.embeddings && config?.toolExposure === 'lazy') {
+    // Lazy mode searches on every discovery; index before the first one.
+    const embeddings = localModel.embeddings;
+    void toolCatalog.list().then((tools) => embeddings.warm(tools));
   }
 
   // Outside the branch above on purpose: the fingerprint the watch polls counts

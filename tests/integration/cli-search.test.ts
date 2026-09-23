@@ -134,4 +134,55 @@ describe('mcp-cli search and tool policy', () => {
     expect(existsSync(cache)).toBe(true);
     expect(statSync(cache).mode & 0o777).toBe(0o600);
   }, 30000);
+
+  it('returns only the requested fields, then reshapes the saved source', async () => {
+    const output = JSON.stringify({
+      items: [
+        { id: 1, title: 'Login fails with SSO', body: 'x'.repeat(300) },
+        { id: 2, title: 'Dark mode', body: 'y'.repeat(300) },
+      ],
+    });
+    const shaped = await runCli([
+      'call',
+      'multi/tool_000',
+      JSON.stringify({ input: output }),
+      '--want',
+      '{"items":[{"id":"integer","title":"string"}]}',
+      '--where',
+      'login',
+    ]);
+    expect(shaped.code).toBe(0);
+    const parsed = JSON.parse(shaped.stdout) as {
+      data: unknown;
+      source: { id: string };
+    };
+    expect(parsed.data).toEqual({ items: [{ id: 1, title: 'Login fails with SSO' }] });
+
+    const reshaped = await runCli(['output', 'shape', parsed.source.id, '--where', 'dark']);
+    expect(reshaped.code).toBe(0);
+    expect(JSON.parse(reshaped.stdout).data[0].id).toBe(2);
+  }, 30000);
+
+  it('suggests a call with the model bridge and audits compressions', async () => {
+    const suggestion = await runCli(['suggest', 'multi', 'tool', '001', 'input=hi']);
+    expect(suggestion.code).toBe(0);
+    expect(JSON.parse(suggestion.stdout).proposal).toMatchObject({
+      tool: 'tool_001',
+      arguments: { input: 'hi' },
+    });
+
+    const ran = await runCli(['suggest', 'multi', 'tool', '001', 'input=hi', '--run']);
+    expect(ran.code).toBe(0);
+    expect(ran.stdout).toContain('tool_001 executed successfully');
+
+    const audit = await runCli(['audit']);
+    expect(audit.code).toBe(0);
+    expect(audit.stdout).toContain('Checked 0 compressed description(s)');
+  }, 30000);
+
+  it('explains how to configure a compressor when none is set', async () => {
+    const result = await runCli(['compress']);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('No compressor configured');
+  }, 30000);
 });

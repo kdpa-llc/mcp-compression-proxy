@@ -144,6 +144,10 @@ export type IPCMethod =
   | 'call'
   | 'payload-read'
   | 'payload-find'
+  | 'payload-shape'
+  | 'suggest'
+  | 'audit'
+  | 'compress'
   | 'script'
   | 'stats'
   | 'daemon-status';
