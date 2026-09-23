@@ -128,8 +128,8 @@ export class ProxySession {
       search: this.search,
       usage: this.usage,
       compression: {
-        getCompressedDescription: (server, tool) =>
-          compressionCache.getCompressedDescription(server, tool),
+        getCompressedDescription: (server, tool, original) =>
+          compressionCache.getCompressedDescription(server, tool, original),
         applySchemaDescriptions: <T>(server: string, tool: string, schema: T, original?: string) =>
           compressionCache.applySchemaDescriptions(server, tool, schema, original, this.displayPolicy()),
         invalidate: (server, tool) => compressionCache.invalidate(server, tool),
@@ -261,7 +261,7 @@ export class ProxySession {
   private needsCompression(tool: CatalogTool): boolean {
     const cache = this.services.compressionCache;
     return (
-      !cache.hasCompressed(tool.serverName, tool.toolName) ||
+      !cache.hasCompressed(tool.serverName, tool.toolName, tool.description) ||
       cache.isStale(tool.serverName, tool.toolName, tool.description)
     );
   }

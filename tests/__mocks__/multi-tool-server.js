@@ -75,10 +75,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const input = request.params.arguments?.input;
 
   // A JSON input is echoed back, so shaping can be tested on real output.
-  const text =
-    typeof input === 'string' && /^[[{]/.test(input.trim())
-      ? input
-      : `${name} executed successfully`;
+  // @pid, @cwd and @env:NAME report on this process, so a test can see which
+  // process answered and what directory and environment it was given.
+  let text = `${name} executed successfully`;
+  if (typeof input === 'string' && /^[[{]/.test(input.trim())) {
+    text = input;
+  } else if (input === '@pid') {
+    text = String(process.pid);
+  } else if (input === '@cwd') {
+    text = process.cwd();
+  } else if (typeof input === 'string' && input.startsWith('@env:')) {
+    text = process.env[input.slice(5)] ?? '(unset)';
+  }
 
   return {
     content: [{ type: 'text', text }],

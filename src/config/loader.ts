@@ -92,7 +92,7 @@ function expandEnvVarsInObject<T>(obj: T, unresolved: Set<string>): T {
 }
 
 /** Fields that only configure a process we spawn ourselves. */
-const STDIO_ONLY_FIELDS = ['args', 'env', 'inheritEnv'] as const;
+const STDIO_ONLY_FIELDS = ['args', 'env', 'inheritEnv', 'cwd'] as const;
 
 /**
  * Validates JSON config against schema
@@ -260,6 +260,7 @@ export type ConfigResult = {
   compressionFallbackBehavior?: CompressionFallbackBehavior;
   toolExposure?: ToolExposure;
   pinnedTools?: string[];
+  shareIgnoreEnv?: string[];
   search?: SearchConfig;
   model?: ModelConfig;
   compressor?: CompressorConfig;
@@ -286,6 +287,7 @@ export function loadJSONServers(): ConfigResult {
   let compressionFallbackBehavior: CompressionFallbackBehavior = 'original';
   let toolExposure: ToolExposure | undefined;
   let pinnedTools: string[] = [];
+  let shareIgnoreEnv: string[] = [];
   let search: SearchConfig | undefined;
   let model: ModelConfig | undefined;
   let compressor: CompressorConfig | undefined;
@@ -334,6 +336,7 @@ export function loadJSONServers(): ConfigResult {
     }
     toolExposure = userConfig.toolExposure ?? toolExposure;
     pinnedTools = [...(userConfig.pinnedTools ?? [])];
+    shareIgnoreEnv = [...(userConfig.shareIgnoreEnv ?? [])];
     search = userConfig.search ? { ...userConfig.search } : search;
     model = userConfig.model ? { ...userConfig.model } : model;
     compressor = userConfig.compressor ? { ...userConfig.compressor } : compressor;
@@ -395,6 +398,7 @@ export function loadJSONServers(): ConfigResult {
     // Scalars and sections override field by field, like cli; patterns append.
     toolExposure = projectConfig.toolExposure ?? toolExposure;
     pinnedTools = [...pinnedTools, ...(projectConfig.pinnedTools ?? [])];
+    shareIgnoreEnv = [...shareIgnoreEnv, ...(projectConfig.shareIgnoreEnv ?? [])];
     if (projectConfig.search) {
       search = { ...search, ...projectConfig.search };
     }
@@ -496,6 +500,7 @@ export function loadJSONServers(): ConfigResult {
     compressionFallbackBehavior,
     toolExposure,
     pinnedTools,
+    shareIgnoreEnv,
     search,
     model,
     compressor,

@@ -4,14 +4,13 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { fileURLToPath } from 'url';
 import { join } from 'path';
 import pino from 'pino';
-import { MCPClientManager } from './mcp/client-manager.js';
+import { BackendPool } from './mcp/backend-pool.js';
 import { ToolCatalog } from './mcp/tool-catalog.js';
 import { CompressionCache } from './services/compression-cache.js';
 import { loadJSONServersCached } from './config/loader.js';
 import { PayloadStore } from './cli/payload-interceptor.js';
 import { getDaemonRuntimePaths } from './cli/runtime-paths.js';
 import { ModelRegistry } from './models/model-registry.js';
-import { modelAuthConfirmer } from './models/auth-confirmer.js';
 import { ProxySession } from './proxy/session.js';
 import { lastGoodConfig, type ProxyView } from './proxy/view.js';
 
@@ -48,7 +47,8 @@ const logger = pino({
 const TOOL_CACHE_TTL_MS = 3000;
 
 const runtimePaths = getDaemonRuntimePaths();
-const clientManager = new MCPClientManager(logger);
+// One client, so nothing to share and no reason to keep a dropped server up.
+const pool = new BackendPool(logger, { releaseGraceMs: 0 });
 const payloadStore = new PayloadStore({
   directory: runtimePaths.payloadDir,
   removeDirectoryOnDestroy: false,
@@ -61,10 +61,14 @@ const models = new ModelRegistry({
   logger,
 });
 const config = lastGoodConfig(loadJSONServersCached, logger);
+const backends = pool.client(
+  { id: 'local', cwd: process.cwd(), env: process.env },
+  { authConfirmer: () => models.authConfirmer(config()?.model) }
+);
 const view: ProxyView = {
   config,
-  backends: clientManager,
-  catalog: new ToolCatalog(clientManager, logger, TOOL_CACHE_TTL_MS),
+  backends,
+  catalog: new ToolCatalog(backends, logger, TOOL_CACHE_TTL_MS),
   cwd: process.cwd(),
 };
 const session = new ProxySession(
@@ -92,8 +96,9 @@ async function shutdown(reason: string, exitCode = 0): Promise<void> {
 
   logger.info({ reason }, 'Shutting down');
 
+  backends.release();
   try {
-    await clientManager.disconnectAll();
+    await pool.close();
   } catch (error) {
     logger.error({ error }, 'Error while disconnecting backend servers');
   }
@@ -123,15 +128,13 @@ async function main() {
 
   const initial = config();
 
-  // Initialize backend MCP servers BEFORE connecting to the client, so all
-  // tools are available when it first asks.
+  // Connect backend MCP servers BEFORE connecting to the client, so all tools
+  // are available when it first asks.
   if (!initial) {
     logger.warn(
       'No valid configuration found. Server will start with no backend MCP servers. Please create a servers.json file to add MCP servers.'
     );
   } else {
-    clientManager.setExcludePatterns(initial.excludePatterns);
-
     const enabledServers = initial.servers.filter((server) => server.enabled !== false);
     logger.info(
       {
@@ -141,35 +144,19 @@ async function main() {
       },
       'Initializing backend MCP servers with timeout protection'
     );
-
-    try {
-      await clientManager.initializeServers(
-        enabledServers,
-        initial.defaultTimeout,
-        initial.inheritEnv,
-        {
-          softMaxConnectionAgeSeconds: initial.softMaxConnectionAgeSeconds,
-          hardMaxConnectionAgeSeconds: initial.hardMaxConnectionAgeSeconds,
-          authErrorPatterns: initial.authErrorPatterns,
-          authRetryTools: initial.authRetryTools,
-        }
-      );
-      logger.info('Backend MCP servers initialization complete');
-    } catch (error) {
-      logger.error({ error }, 'Error during backend server initialization');
-    }
   }
-
-  const model = models.get(initial?.model);
-  if (model?.config.confirmAuthFailures) {
-    clientManager.setAuthFailureConfirmer(modelAuthConfirmer(model.backend));
+  try {
+    await backends.apply(initial);
+    logger.info('Backend MCP servers initialization complete');
+  } catch (error) {
+    logger.error({ error }, 'Error during backend server initialization');
   }
   session.warmSearch();
 
-  // Outside the branch above on purpose: the fingerprint the watch polls counts
-  // a missing config file, so a user who writes their first servers.json after
-  // starting the proxy gets their servers without restarting the MCP client.
-  clientManager.startConfigWatch(loadJSONServersCached);
+  // Also when there was no config yet: a user who writes their first
+  // servers.json after starting the proxy gets their servers without
+  // restarting the MCP client.
+  backends.watch(config);
 
   // When the client disconnects, take the backend servers down with us.
   session.server.onclose = () => {

@@ -209,7 +209,7 @@ async function startDaemon(): Promise<void> {
 
   /** The cached compressed description, cut to ~60 chars for listings. */
   function shortDescription(serverName: string, toolName: string, original?: string): string {
-    const desc = compressionCache.getCompressedDescription(serverName, toolName) || original || '';
+    const desc = compressionCache.getCompressedDescription(serverName, toolName, original) || original || '';
     return desc.length > 60 ? desc.slice(0, 57) + '...' : desc;
   }
 
@@ -466,7 +466,7 @@ async function startDaemon(): Promise<void> {
           const pending = tools
             .filter(
               (tool) =>
-                !compressionCache.hasCompressed(tool.serverName, tool.toolName) ||
+                !compressionCache.hasCompressed(tool.serverName, tool.toolName, tool.description) ||
                 compressionCache.isStale(tool.serverName, tool.toolName, tool.description)
             )
             .slice(0, limit);
@@ -486,7 +486,7 @@ async function startDaemon(): Promise<void> {
           if (descriptions.length > 0) await compressionCache.saveToDisk();
           const remaining = tools.filter(
             (tool) =>
-              !compressionCache.hasCompressed(tool.serverName, tool.toolName) ||
+              !compressionCache.hasCompressed(tool.serverName, tool.toolName, tool.description) ||
               compressionCache.isStale(tool.serverName, tool.toolName, tool.description)
           ).length;
           return {

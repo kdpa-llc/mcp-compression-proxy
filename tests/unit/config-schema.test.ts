@@ -199,4 +199,19 @@ describe('server config schema', () => {
       expect(validate({ ...base, ...settings })).toBe(false);
     });
   });
+
+  describe('sharing settings', () => {
+    it('accepts share scopes, a working directory and ignored variables', () => {
+      for (const share of ['session', 'project', 'global']) {
+        expect(validate({ mcpServers: [{ name: 's', command: 'c', share, cwd: 'tools' }] })).toBe(true);
+      }
+      expect(validate({ ...base, shareIgnoreEnv: ['TERM_*'] })).toBe(true);
+    });
+
+    it('rejects an unknown scope, an empty cwd and a non-string pattern', () => {
+      expect(validate({ mcpServers: [{ name: 's', command: 'c', share: 'everyone' }] })).toBe(false);
+      expect(validate({ mcpServers: [{ name: 's', command: 'c', cwd: '' }] })).toBe(false);
+      expect(validate({ ...base, shareIgnoreEnv: [1] })).toBe(false);
+    });
+  });
 });

@@ -1,7 +1,8 @@
 import { describe, it, expect, jest } from '@jest/globals';
 import type { Logger } from 'pino';
 import { tmpdir } from 'os';
-import { ModelRegistry, stableJson } from '../../src/models/model-registry.js';
+import { ModelRegistry } from '../../src/models/model-registry.js';
+import { stableJson } from '../../src/utils/stable-json.js';
 import type { LocalModel, createLocalModel } from '../../src/models/local-model.js';
 import { NeedleBridge } from '../../src/models/needle-bridge.js';
 
@@ -60,6 +61,18 @@ describe('ModelRegistry', () => {
     // Closed models are forgotten: the next request builds a new one.
     models.push(fakeModel());
     expect(registry.get({ provider: 'needle', timeout: 1 })).not.toBe(a);
+  });
+
+  it('offers an auth confirmer only for a model section that asks for one', () => {
+    const create = jest.fn<Create>(() => fakeModel());
+    const registry = new ModelRegistry({ bridgeScript: 'bridge.py', stateDir: tmpdir(), logger, create });
+    expect(registry.authConfirmer(undefined)).toBeUndefined();
+    expect(registry.authConfirmer({ provider: 'needle' })).toBeUndefined();
+    expect(create).not.toHaveBeenCalled();
+    expect(typeof registry.authConfirmer({ provider: 'needle', confirmAuthFailures: true })).toBe('function');
+
+    const declined = new ModelRegistry({ bridgeScript: 'bridge.py', stateDir: tmpdir(), logger, create: () => undefined });
+    expect(declined.authConfirmer({ provider: 'needle', confirmAuthFailures: true })).toBeUndefined();
   });
 
   it('builds the real bridge by default, without starting it', async () => {

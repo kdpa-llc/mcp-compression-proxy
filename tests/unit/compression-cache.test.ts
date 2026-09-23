@@ -497,3 +497,71 @@ describe('CompressionCache', () => {
     });
   });
 });
+
+describe('CompressionCache shared between server names', () => {
+  const logger = { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() } as unknown as Logger;
+  const original = 'Search code across every repository you can read.';
+
+  function cacheWith(entries: Map<string, { original?: string; compressed: string; compressedAt: string }> = new Map()) {
+    const persistence = {
+      load: jest.fn(async () => entries),
+      save: jest.fn(async () => undefined),
+      clear: jest.fn(async () => undefined),
+      getCacheFilePath: () => '/tmp/none.json',
+    } as unknown as CompressionPersistence;
+    return new CompressionCache(logger, persistence);
+  }
+
+  it('serves a compression made under another name for the same tool and description', () => {
+    const cache = cacheWith();
+    cache.saveCompressed('github', 'search', 'Search code.', original, { parameters: { query: 'Code query' } });
+
+    expect(cache.getCompressedDescription('gh', 'search', original)).toBe('Search code.');
+    expect(cache.getOriginalDescription('gh', 'search', original)).toBe(original);
+    expect(cache.hasCompressed('gh', 'search', original)).toBe(true);
+    expect(cache.isStale('gh', 'search', original)).toBe(false);
+    expect(cache.getEntry('gh', 'search', original)?.compressed).toBe('Search code.');
+    expect(cache.getDescription('gh', 'search', original)).toBe('Search code.');
+    expect(cache.getDescription('gh', 'search', original, true)).toBe(original);
+    const schema = { type: 'object', properties: { query: { type: 'string' } } };
+    expect(cache.applySchemaDescriptions('gh', 'search', schema, original)).toEqual({
+      type: 'object',
+      properties: { query: { type: 'string', description: 'Code query' } },
+    });
+
+    // Only when it is the same tool, described the same way, and the caller says so.
+    expect(cache.getCompressedDescription('gh', 'search')).toBeUndefined();
+    expect(cache.getCompressedDescription('gh', 'search', 'Another description.')).toBeUndefined();
+    expect(cache.getCompressedDescription('gh', 'find', original)).toBeUndefined();
+  });
+
+  it("prefers the tool's own entry, but not a stale one when another name has a current one", () => {
+    const cache = cacheWith();
+    cache.saveCompressed('gh', 'search', 'Own.', original);
+    cache.saveCompressed('github', 'search', 'Shared.', original);
+    expect(cache.getCompressedDescription('gh', 'search', original)).toBe('Own.');
+
+    cache.saveCompressed('gh', 'search', 'Old.', 'The previous description.');
+    expect(cache.getCompressedDescription('gh', 'search', original)).toBe('Shared.');
+    expect(cache.isStale('gh', 'search', original)).toBe(false);
+
+    cache.saveCompressed('legacy', 'search', 'Legacy.');
+    expect(cache.getCompressedDescription('legacy', 'search', original)).toBe('Legacy.');
+    // An entry without an original can serve only its own name.
+    expect(cache.getCompressedDescription('other', 'search', original)).toBe('Shared.');
+  });
+
+  it('forgets shared lookups when entries change', async () => {
+    const cache = cacheWith(new Map([['github:search', { original, compressed: 'Loaded.', compressedAt: '2026-01-01' }]]));
+    await cache.loadFromDisk();
+    expect(cache.getCompressedDescription('gh', 'search', original)).toBe('Loaded.');
+
+    cache.invalidate('github', 'search');
+    expect(cache.getCompressedDescription('gh', 'search', original)).toBeUndefined();
+
+    cache.saveCompressed('github', 'search', 'Again.', original);
+    expect(cache.getCompressedDescription('gh', 'search', original)).toBe('Again.');
+    cache.clear();
+    expect(cache.getCompressedDescription('gh', 'search', original)).toBeUndefined();
+  });
+});

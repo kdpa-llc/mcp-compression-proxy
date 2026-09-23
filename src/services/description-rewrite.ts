@@ -76,7 +76,7 @@ export interface DescribeBatch {
 }
 
 export interface CacheView {
-  getEntry(serverName: string, toolName: string): CachedDescription | undefined;
+  getEntry(serverName: string, toolName: string, liveOriginal?: string): CachedDescription | undefined;
   isStale(serverName: string, toolName: string, liveOriginal?: string): boolean;
 }
 
@@ -107,7 +107,7 @@ export function descriptionIssues(tool: CatalogTool): string[] {
 }
 
 function needsWork(tool: CatalogTool, cache: CacheView, mode: DescribeMode, all: boolean): boolean {
-  const entry = cache.getEntry(tool.serverName, tool.toolName);
+  const entry = cache.getEntry(tool.serverName, tool.toolName, tool.description);
   if (!entry?.compressed) return true;
   if (cache.isStale(tool.serverName, tool.toolName, tool.description)) return true;
   if (all) return true;
@@ -145,7 +145,7 @@ export function nextBatch(
 
   const items = candidates.slice(0, limit).map(({ tool, issues }): DescribeItem => {
     const key = toolKey(tool.serverName, tool.toolName);
-    const entry = cache.getEntry(tool.serverName, tool.toolName);
+    const entry = cache.getEntry(tool.serverName, tool.toolName, tool.description);
     const required = requiredNames(tool);
     const parameters: Record<string, ParameterInfo> = {};
     for (const [name, spec] of Object.entries(properties(tool))) {
@@ -281,7 +281,7 @@ export async function reviewProposals(
     const warnings: string[] = [];
     const key = entry.server && entry.tool ? toolKey(entry.server, entry.tool) : undefined;
     const tool = key ? byKey.get(key) : undefined;
-    const cached = tool ? cache.getEntry(tool.serverName, tool.toolName) : undefined;
+    const cached = tool ? cache.getEntry(tool.serverName, tool.toolName, tool.description) : undefined;
     const beforeDescription = cached?.compressed ?? tool?.description ?? '';
     const beforeParameters = tool ? currentParameters(tool, cached) : {};
 
@@ -402,7 +402,7 @@ export function applyReview(
       skipped.push(key);
       continue;
     }
-    const existing = cache.getEntry(tool.serverName, tool.toolName);
+    const existing = cache.getEntry(tool.serverName, tool.toolName, tool.description);
     // A stale entry's parameter rewrites describe a schema that has changed.
     const keptParameters =
       existing && !cache.isStale(tool.serverName, tool.toolName, tool.description) ? existing.parameters : undefined;
