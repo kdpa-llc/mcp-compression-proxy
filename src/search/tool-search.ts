@@ -29,13 +29,20 @@ export interface ToolSearchResult {
 
 export const DEFAULT_SEARCH_LIMIT = 15;
 /** Semantic neighbours taken as candidates even without a shared word. */
-const SEMANTIC_CANDIDATES = 8;
+const SEMANTIC_CANDIDATES = 10;
 /**
  * Reciprocal rank fusion constant. Small because catalogs are small: the
  * difference between rank 1 and rank 3 should matter.
  */
 const RRF_K = 10;
-const WEIGHTS = { lexical: 1, semantic: 1, usage: 0.5 };
+/**
+ * Semantic similarity counts half as much as a lexical match. Measured with
+ * Needle 3 on tests/fixtures/search-catalog.ts (30 queries): lexical alone
+ * put the right tool first 17 times and in the top five 23 times; equal
+ * weights gave 14 and 26; half weight 15 and 26. Search shows a list, so the
+ * top-five gain is worth the small top-one cost.
+ */
+const WEIGHTS = { lexical: 1, semantic: 0.5, usage: 0.5 };
 
 function normalise(text: string): string {
   return splitWords(text).join(' ');

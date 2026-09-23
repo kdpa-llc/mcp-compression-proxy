@@ -44,6 +44,7 @@
     "!dist/**/*.test.d.ts",
     "!dist/**/*.spec.js",
     "!dist/**/*.spec.d.ts",
+    "python/needle_bridge.py",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
