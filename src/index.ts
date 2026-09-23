@@ -516,7 +516,14 @@ server.setRequestHandler(ListToolsRequestSchema, async (request) => {
     return {
       name: `${tool.serverName}__${tool.toolName}`,
       description,
-      inputSchema: tool.inputSchema,
+      inputSchema: isExpanded
+        ? tool.inputSchema
+        : compressionCache.applySchemaDescriptions(
+            tool.serverName,
+            tool.toolName,
+            tool.inputSchema,
+            tool.description
+          ),
       ...(tool.title !== undefined ? { title: tool.title } : {}),
       ...(tool.annotations !== undefined ? { annotations: tool.annotations } : {}),
     };

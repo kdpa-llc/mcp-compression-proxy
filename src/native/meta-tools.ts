@@ -128,6 +128,7 @@ export interface MetaToolDeps {
   usage?: UsageLog;
   compression: {
     getCompressedDescription(serverName: string, toolName: string): string | undefined;
+    applySchemaDescriptions?<T>(serverName: string, toolName: string, schema: T, liveOriginal?: string): T;
     invalidate(serverName: string, toolName: string): boolean;
     saveToDisk(): Promise<void>;
   };
@@ -218,7 +219,9 @@ export class MetaTools {
       server,
       tool,
       description: found.description ?? '',
-      inputSchema: found.inputSchema,
+      inputSchema:
+        this.deps.compression.applySchemaDescriptions?.(server, tool, found.inputSchema, found.description) ??
+        found.inputSchema,
       ...(found.title !== undefined ? { title: found.title } : {}),
       ...(found.annotations !== undefined ? { annotations: found.annotations } : {}),
     });

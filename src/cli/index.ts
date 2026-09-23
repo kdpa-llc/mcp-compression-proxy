@@ -25,6 +25,9 @@ import {
   handleSuggest,
   handleAudit,
   handleCompress,
+  handleDescribe,
+  installSkill,
+  takeOption,
   handlePayloadShape,
   takeShapeOptions,
   handlePayloadRead,
@@ -63,6 +66,13 @@ Usage:
   mcp-cli stats                        Show compression statistics
   mcp-cli compress [--limit N]         Compress descriptions with the configured compressor
   mcp-cli audit [--requeue]            Check compressions; list duplicate tools
+  mcp-cli describe next [--mode rewrite|compress] [--limit N] [--server S] [--tool s/t] [--all]
+                                        Tools whose descriptions need work, as JSON
+  mcp-cli describe review <file|->     Show before/after and checks; saves nothing
+  mcp-cli describe apply <file|->      Save the proposals that pass the checks
+  mcp-cli describe revert <s/t>|--all  Back to the server's original descriptions
+  mcp-cli install-skill [--project] [--path DIR] [--force]
+                                        Install the mcp-cli skill for your agent
   mcp-cli doctor                       Check config and backend health
   mcp-cli daemon start                 Start the background daemon
   mcp-cli daemon stop                  Stop the daemon
@@ -401,6 +411,31 @@ async function main(): Promise<void> {
     }
   }
 
+  if (command === 'install-skill') {
+    const { rest, value: path } = takeOption(filteredArgs.slice(1), 'path');
+    const skillsRoot = path
+      ? path
+      : rest.includes('--project')
+        ? join(process.cwd(), '.claude', 'skills')
+        : join(homedir(), '.claude', 'skills');
+    // dist/cli/index.js -> <package>/skills/mcp-cli
+    const source = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'skills', 'mcp-cli');
+    try {
+      const { target, status } = installSkill(source, join(skillsRoot, 'mcp-cli'), {
+        force: rest.includes('--force'),
+      });
+      console.log(
+        status === 'unchanged'
+          ? `The mcp-cli skill at ${target} is already up to date.`
+          : `${status === 'installed' ? 'Installed' : 'Updated'} the mcp-cli skill at ${target}.`
+      );
+    } catch (error) {
+      console.error(`Error: ${error instanceof Error ? error.message : error}`);
+      process.exit(1);
+    }
+    return;
+  }
+
   // All other commands require a running daemon
   await ensureDaemon(noAutoStart);
 
@@ -454,6 +489,45 @@ async function main(): Promise<void> {
     case 'audit':
       await handleAudit(SOCKET_PATH, { requeue: filteredArgs.includes('--requeue') });
       break;
+
+    case 'describe': {
+      const action = filteredArgs[1] ?? '';
+      let args = filteredArgs.slice(2);
+      const mode = takeOption(args, 'mode');
+      args = mode.rest;
+      const server = takeOption(args, 'server');
+      args = server.rest;
+      const tool = takeOption(args, 'tool');
+      args = tool.rest;
+      const { rest, limit } = takeLimit(args);
+      const all = rest.includes('--all');
+      const positional = rest.filter((arg) => arg !== '--all');
+
+      let proposals: string | undefined;
+      if (action === 'review' || action === 'apply') {
+        const source = positional[0];
+        if (source === '-' || source === undefined) {
+          proposals = (await readStdin()) ?? undefined;
+        } else {
+          try {
+            proposals = readFileSync(source, 'utf-8');
+          } catch {
+            console.error(`Error: cannot read ${source}`);
+            process.exit(1);
+          }
+        }
+      }
+
+      await handleDescribe(SOCKET_PATH, action, {
+        mode: mode.value,
+        limit,
+        server: server.value,
+        tool: tool.value ?? (action === 'revert' ? positional[0] : undefined),
+        all,
+        proposals,
+      });
+      break;
+    }
 
     case 'compress':
       await handleCompress(SOCKET_PATH, { limit: takeLimit(filteredArgs.slice(1)).limit });

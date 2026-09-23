@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 // Mock ipc-client before importing commands
 jest.mock('../../src/cli/ipc-client.js', () => ({
@@ -24,6 +27,9 @@ import {
   handleCompress,
   handlePayloadShape,
   takeShapeOptions,
+  handleDescribe,
+  formatReview,
+  installSkill,
   handlePayloadRead,
   handlePayloadFind,
   handleScript,
@@ -275,6 +281,133 @@ describe('CLI commands', () => {
   });
 
   // ── handleCall ───────────────────────────────────────────────────────────────
+
+  describe('describe and install-skill', () => {
+    const review: Parameters<typeof formatReview>[0] = {
+      mode: 'rewrite',
+      method: 'lexical',
+      accepted: 1,
+      rejected: 1,
+      reviewed: [
+        {
+          server: 'gh',
+          tool: 'list_issues',
+          accepted: true,
+          problems: [],
+          warnings: ['longer than the original'],
+          before: { description: 'Gets issues.', parameters: { state: 'state' } },
+          after: { description: 'List issues in one repository.', parameters: { state: 'open or closed' } },
+          chars: { before: 12, after: 30 },
+        },
+        {
+          server: '',
+          tool: '',
+          accepted: false,
+          problems: ['missing server or tool'],
+          warnings: [],
+          before: { description: '', parameters: {} },
+          after: { description: 'x', parameters: {} },
+          chars: { before: 0, after: 1 },
+        },
+      ],
+    };
+
+    it('formats a review as before/after with problems and warnings', () => {
+      const text = formatReview(review);
+      expect(text).toContain('✓ gh/list_issues  (12 -> 30 chars)');
+      expect(text).toContain('- Gets issues.');
+      expect(text).toContain('+ List issues in one repository.');
+      expect(text).toContain('state:');
+      expect(text).toContain('+ open or closed');
+      expect(text).toContain('! longer than the original');
+      expect(text).toContain('✗ (unnamed entry)');
+      expect(text).toContain('✗ missing server or tool');
+      expect(text).toContain('1 accepted, 1 rejected');
+    });
+
+    it('prints the next batch as JSON with the requested filters', async () => {
+      mockSendRequest.mockResolvedValue({ id: '1', result: { mode: 'compress', items: [] } });
+      await handleDescribe(SOCKET, 'next', { mode: 'compress', limit: 5, server: 'gh', tool: 'gh/x', all: true });
+
+      expect(mockSendRequest).toHaveBeenCalledWith(SOCKET, 'describe', {
+        action: 'next',
+        mode: 'compress',
+        limit: 5,
+        server: 'gh',
+        tool: 'gh/x',
+        all: true,
+      });
+      expect(JSON.parse(stdoutLines.join('\n')).mode).toBe('compress');
+    });
+
+    it('reviews without saving and applies with an undo hint', async () => {
+      mockSendRequest.mockResolvedValue({ id: '1', result: review });
+      await handleDescribe(SOCKET, 'review', { proposals: '[{"server":"gh","tool":"list_issues"}]' });
+      expect(mockSendRequest).toHaveBeenCalledWith(SOCKET, 'describe', {
+        action: 'review',
+        mode: 'rewrite',
+        proposals: [{ server: 'gh', tool: 'list_issues' }],
+      });
+      expect(stdoutLines.join('\n')).toContain('Nothing was saved');
+
+      mockSendRequest.mockResolvedValue({ id: '1', result: { ...review, applied: ['gh/list_issues'] } });
+      await handleDescribe(SOCKET, 'apply', { proposals: '[]' });
+      expect(stdoutLines.join('\n')).toContain('Applied 1. Originals are kept');
+    });
+
+    it('reverts one tool or all of them', async () => {
+      mockSendRequest.mockResolvedValue({ id: '1', result: { reverted: ['gh/list_issues'] } });
+      await handleDescribe(SOCKET, 'revert', { tool: 'gh/list_issues' });
+      expect(mockSendRequest).toHaveBeenCalledWith(SOCKET, 'describe', {
+        action: 'revert',
+        mode: 'rewrite',
+        tool: 'gh/list_issues',
+      });
+      expect(stdoutLines.join('\n')).toContain('Reverted 1 tool(s)');
+
+      mockSendRequest.mockResolvedValue({ id: '1', result: { reverted: [] } });
+      await handleDescribe(SOCKET, 'revert', { all: true });
+      expect(stdoutLines.join('\n')).toContain('Nothing to revert.');
+    });
+
+    it.each([
+      ['a bad mode', 'next', { mode: 'shorten' }],
+      ['review without proposals', 'review', {}],
+      ['proposals that are not JSON', 'apply', { proposals: '[oops' }],
+      ['revert without a target', 'revert', {}],
+      ['an unknown action', 'polish', {}],
+    ])('exits with 1 on %s', async (_label, action, options) => {
+      await expect(handleDescribe(SOCKET, action, options)).rejects.toThrow('process.exit(1)');
+      expect(mockSendRequest).not.toHaveBeenCalled();
+    });
+
+    it('exits with 1 when the daemon reports an error', async () => {
+      mockSendRequest.mockResolvedValue({ id: '1', error: { code: -1, message: 'Unknown describe action' } });
+      await expect(handleDescribe(SOCKET, 'next')).rejects.toThrow('process.exit(1)');
+    });
+
+    it('installs the bundled skill, leaves an identical copy alone, and protects local edits', () => {
+      const root = mkdtempSync(join(tmpdir(), 'skill-'));
+      try {
+        const source = join(process.cwd(), 'skills', 'mcp-cli');
+        const target = join(root, 'skills', 'mcp-cli');
+
+        expect(installSkill(source, target).status).toBe('installed');
+        expect(readFileSync(join(target, 'SKILL.md'), 'utf-8')).toContain('name: mcp-cli');
+        expect(existsSync(join(target, 'DESCRIBE.md'))).toBe(true);
+        expect(installSkill(source, target).status).toBe('unchanged');
+
+        writeFileSync(join(target, 'SKILL.md'), 'my edits');
+        expect(() => installSkill(source, target)).toThrow('--force');
+        expect(installSkill(source, target, { force: true }).status).toBe('updated');
+        expect(readFileSync(join(target, 'SKILL.md'), 'utf-8')).toContain('name: mcp-cli');
+
+        expect(() => installSkill(join(root, 'nowhere'), target)).toThrow('Bundled skill not found');
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  });
 
   describe('shaping, suggest, audit and compress', () => {
     it('parses --want, --where and --limit out of call arguments', () => {

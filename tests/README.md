@@ -4,16 +4,16 @@ This directory contains comprehensive test suites for the MCP Compression Proxy 
 
 ## Test Summary
 
-**✅ 587 Tests Passing**
+**✅ 615 Tests Passing**
 
 | Category | Test Suites | Tests | Description |
 |----------|-------------|-------|-------------|
-| **Unit** | 34 | 522 | Individual module testing |
-| **Integration** | 11 | 52 | Module interaction testing |
+| **Unit** | 35 | 548 | Individual module testing |
+| **Integration** | 11 | 54 | Module interaction testing |
 | **E2E** | 2 | 13 | Complete workflow testing |
-| **Total** | **47** | **587** | Comprehensive coverage |
+| **Total** | **48** | **615** | Comprehensive coverage |
 
-**Coverage: 95.3% statements, 87.1% branches, 97.4% functions, 95.7% lines**
+**Coverage: 95.6% statements, 88.1% branches, 97.6% functions, 96.0% lines**
 
 No test needs Python or model weights: `__mocks__/fake-model-bridge.js`
 speaks the same JSON-lines protocol as `python/needle_bridge.py`.
@@ -37,7 +37,7 @@ tests/
 │   └── fake-model-bridge.js   # Stand-in for python/needle_bridge.py
 ├── fixtures/
 │   └── search-catalog.ts   # 43 tools and 30 labelled queries for search quality
-├── unit/                   # Unit tests for individual modules (34 files)
+├── unit/                   # Unit tests for individual modules (35 files)
 │   ├── auth-confirmer.test.ts             # Model second opinion on auth errors
 │   ├── call-script.test.ts
 │   ├── call-suggester.test.ts             # Proposals and the --run gates
@@ -52,6 +52,7 @@ tests/
 │   ├── compression-sampler.test.ts        # Host-LLM compression via sampling
 │   ├── config-loader.test.ts
 │   ├── config-schema.test.ts              # Validates servers.json.example too
+│   ├── description-rewrite.test.ts        # describe next/review/apply, parameter rewrites
 │   ├── env-expansion.test.ts              # ${VAR}, ${VAR:-default}, $${VAR}
 │   ├── env-inheritance.test.ts            # What backend servers inherit
 │   ├── file-exchange.test.ts
@@ -70,7 +71,7 @@ tests/
 │   └── version.test.ts                    # Fails if version drifts
 ├── integration/            # Integration tests for module interactions (11 files)
 │   ├── cli-daemon-lifecycle.test.ts          # ⭐ Drives the built mcp-cli binary
-│   ├── cli-search.test.ts                    # Search, exclusion, shaping, suggest via the daemon
+│   ├── cli-search.test.ts                    # Search, exclusion, shaping, suggest, describe, install-skill
 │   ├── lazy-mode.test.ts                     # Native proxy with toolExposure: lazy
 │   ├── compression-session-integration.test.ts
 │   ├── comprehensive-nocompress.test.ts      # ⭐ Complete noCompress workflow

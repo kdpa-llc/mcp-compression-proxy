@@ -45,6 +45,7 @@
     "!dist/**/*.spec.js",
     "!dist/**/*.spec.d.ts",
     "python/needle_bridge.py",
+    "skills/mcp-cli/*.md",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"

@@ -1,4 +1,8 @@
-import type { CompressedToolCache, CompressionStats } from '../types/compression.js';
+import type {
+  CachedDescription,
+  CompressedToolCache,
+  CompressionStats,
+} from '../types/compression.js';
 import type { CacheMetrics } from '../types/compression.js';
 import type { Logger } from 'pino';
 import { CompressionPersistence } from './compression-persistence.js';
@@ -95,7 +99,8 @@ export class CompressionCache {
     serverName: string,
     toolName: string,
     compressedDescription: string,
-    originalDescription?: string
+    originalDescription?: string,
+    options: { kind?: CachedDescription['kind']; parameters?: Record<string, string> } = {}
   ): void {
     const key = this.getKey(serverName, toolName);
 
@@ -103,6 +108,10 @@ export class CompressionCache {
       original: originalDescription,
       compressed: compressedDescription,
       compressedAt: new Date().toISOString(),
+      ...(options.kind ? { kind: options.kind } : {}),
+      ...(options.parameters && Object.keys(options.parameters).length > 0
+        ? { parameters: { ...options.parameters } }
+        : {}),
     };
 
     this.logger.debug(
@@ -172,6 +181,48 @@ export class CompressionCache {
     if (!entry.original || !liveOriginal) return false;
 
     return entry.original !== liveOriginal;
+  }
+
+  /** The whole cached entry for a tool, if any. */
+  getEntry(serverName: string, toolName: string): CachedDescription | undefined {
+    const entry = this.cache[this.getKey(serverName, toolName)];
+    return entry ? { ...entry, ...(entry.parameters ? { parameters: { ...entry.parameters } } : {}) } : undefined;
+  }
+
+  /**
+   * An input schema with rewritten parameter descriptions applied.
+   *
+   * Only `description` of existing top-level properties changes; the schema
+   * is copied, never mutated, and nothing is added, removed or retyped - a
+   * backend validates arguments against its own schema. Follows noCompress
+   * patterns like descriptions do, and serves the original schema for a
+   * stale entry, whose rewrite describes parameters that may have changed.
+   */
+  applySchemaDescriptions<T>(
+    serverName: string,
+    toolName: string,
+    schema: T,
+    liveOriginal?: string
+  ): T {
+    const parameters = this.cache[this.getKey(serverName, toolName)]?.parameters;
+    if (
+      !parameters ||
+      this.shouldBypassCompression(`${serverName}__${toolName}`) ||
+      this.isStale(serverName, toolName, liveOriginal)
+    ) {
+      return schema;
+    }
+    const properties = (schema as { properties?: Record<string, unknown> } | undefined)?.properties;
+    if (!properties || typeof properties !== 'object') return schema;
+
+    const rewritten: Record<string, unknown> = { ...properties };
+    for (const [name, description] of Object.entries(parameters)) {
+      const property = properties[name];
+      if (property && typeof property === 'object' && !Array.isArray(property)) {
+        rewritten[name] = { ...(property as Record<string, unknown>), description };
+      }
+    }
+    return { ...(schema as object), properties: rewritten } as T;
   }
 
   /**

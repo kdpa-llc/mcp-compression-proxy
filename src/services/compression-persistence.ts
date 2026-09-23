@@ -2,6 +2,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import type { Logger } from 'pino';
+import type { CachedDescription } from '../types/compression.js';
 
 /**
  * Persistent storage format for compressed tool descriptions
@@ -15,6 +16,9 @@ interface PersistedCompressionCache {
     originalDescription?: string;
     compressedDescription: string;
     compressedAt: string;
+    // Optional and additive, so version 1 files from older releases still load.
+    kind?: CachedDescription['kind'];
+    parameters?: Record<string, string>;
   }>;
 }
 
@@ -36,8 +40,8 @@ export class CompressionPersistence {
   /**
    * Load cached compressions from disk
    */
-  async load(): Promise<Map<string, { original?: string; compressed: string; compressedAt: string }>> {
-    const cache = new Map<string, { original?: string; compressed: string; compressedAt: string }>();
+  async load(): Promise<Map<string, CachedDescription>> {
+    const cache = new Map<string, CachedDescription>();
 
     try {
       // Check if cache file exists
@@ -63,6 +67,8 @@ export class CompressionPersistence {
           original: comp.originalDescription,
           compressed: comp.compressedDescription,
           compressedAt: comp.compressedAt,
+          ...(comp.kind ? { kind: comp.kind } : {}),
+          ...(comp.parameters ? { parameters: comp.parameters } : {}),
         });
       }
 
@@ -84,7 +90,7 @@ export class CompressionPersistence {
   /**
    * Save compressions to disk
    */
-  async save(cache: Map<string, { original?: string; compressed: string; compressedAt: string }>): Promise<void> {
+  async save(cache: Map<string, CachedDescription>): Promise<void> {
     try {
       // Ensure cache directory exists
       await fs.mkdir(this.cacheDir, { recursive: true });
@@ -98,6 +104,8 @@ export class CompressionPersistence {
           originalDescription: value.original,
           compressedDescription: value.compressed,
           compressedAt: value.compressedAt,
+          ...(value.kind ? { kind: value.kind } : {}),
+          ...(value.parameters ? { parameters: value.parameters } : {}),
         };
       });
 
