@@ -5,6 +5,7 @@ import type { CompressionPersistence } from '../../src/services/compression-pers
 import { CompressionCache } from '../../src/services/compression-cache.js';
 import { SessionManager } from '../../src/services/session-manager.js';
 import { StatsService } from '../../src/services/stats-service.js';
+import { fakeBackends, tool } from '../helpers/fake-backends.js';
 
 describe('StatsService', () => {
   let mockLogger: Logger;
@@ -167,5 +168,17 @@ describe('StatsService', () => {
     expect(stats.servers[0].connected).toBe(false);
     expect(stats.servers[0].error).toBe('Connection failed');
     expect(stats.summary.serversWithErrors).toBe(1);
+  });
+
+  it('counts a tool with no description at all, and a compression made under another server name', async () => {
+    cache.saveCompressed('github', 'search', 'Search.', 'Search code everywhere.');
+    const backends = fakeBackends({
+      gh: [tool('search', 'Search code everywhere.'), tool('bare')],
+    });
+    const service = new StatsService(mockLogger, backends, cache, sessionManager, () => null);
+
+    const stats = await service.getStats();
+    expect(stats.servers[0]).toMatchObject({ name: 'gh', toolsTotal: 2, toolsCompressed: 1 });
+    expect(stats.summary.originalChars).toBe('Search code everywhere.'.length);
   });
 });

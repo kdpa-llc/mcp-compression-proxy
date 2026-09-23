@@ -86,7 +86,7 @@ function round(value: number): number {
 export async function auditCompression(
   tools: CatalogTool[],
   compression: {
-    getCompressedDescription(serverName: string, toolName: string): string | undefined;
+    getCompressedDescription(serverName: string, toolName: string, liveOriginal?: string): string | undefined;
   },
   model?: Pick<ModelBackend, 'embed'>,
   options: { margin?: number } = {}
@@ -100,7 +100,7 @@ export async function auditCompression(
   const compressedIndexes = tools
     .map((tool, index) => ({
       index,
-      text: compression.getCompressedDescription(tool.serverName, tool.toolName),
+      text: compression.getCompressedDescription(tool.serverName, tool.toolName, tool.description),
     }))
     .filter((entry): entry is { index: number; text: string } => !!entry.text);
   const compressedTexts = compressedIndexes.map(

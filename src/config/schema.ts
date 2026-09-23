@@ -99,6 +99,18 @@ export const serverConfigSchema = {
               minLength: 1,
             },
           },
+          cwd: {
+            type: 'string',
+            description:
+              'Working directory for a spawned server. A relative path resolves against the directory the client runs in, which is also the default.',
+            minLength: 1,
+          },
+          share: {
+            type: 'string',
+            enum: ['session', 'project', 'global'],
+            description:
+              "Which clients of one daemon may share this server's process or connection, when their settings for it match. 'session': none, each client gets its own. 'project' (default for spawned servers): clients in the same directory. 'global' (default for remote servers): every client; a spawned server then runs in its cwd, or the home directory.",
+          },
           type: {
             type: 'string',
             description: 'Ignored. Kept for compatibility with existing configs.',
@@ -211,6 +223,12 @@ export const serverConfigSchema = {
       description:
         "Default environment inheritance for all servers (can be overridden per-server). true = pass the proxy's full environment to every backend server (default), false = pass only the transport's safe defaults (PATH, HOME, ...), or an array of variable names to pass through.",
       oneOf: [{ type: 'boolean' }, { type: 'array', items: { type: 'string' } }],
+    },
+    shareIgnoreEnv: {
+      type: 'array',
+      description:
+        "Environment variables (wildcards allowed) that do not stop two clients of one daemon sharing a spawned server. Shell bookkeeping such as PWD, SHLVL and *_SESSION_ID is always ignored; any other difference in a server's environment starts a separate process, so clients with different credentials never share one.",
+      items: { type: 'string', minLength: 1 },
     },
     toolExposure: {
       type: 'string',
@@ -340,6 +358,9 @@ export type CompressionFallbackBehavior = 'original' | 'blank';
 /** How the native proxy presents backend tools. */
 export type ToolExposure = 'full' | 'lazy';
 
+/** Which clients of one daemon may share a backend. */
+export type ShareScope = 'session' | 'project' | 'global';
+
 export interface SearchConfig {
   limit?: number;
   learnFromUsage?: boolean;
@@ -380,9 +401,12 @@ export type ServerConfigJSON = {
     maxConnectionAgeSeconds?: number;
     authErrorPatterns?: string[];
     authRetryTools?: string[];
+    cwd?: string;
+    share?: ShareScope;
     type?: string;
     autoApprove?: string[];
   }>;
+  shareIgnoreEnv?: string[];
   excludeTools?: string[];
   noCompressTools?: string[];
   defaultTimeout?: number;

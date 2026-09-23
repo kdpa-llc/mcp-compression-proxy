@@ -60,7 +60,11 @@ export class ToolSearch {
   constructor(
     private readonly catalog: { list(): Promise<CatalogTool[]> },
     private readonly compression: {
-      getCompressedDescription(serverName: string, toolName: string): string | undefined;
+      getCompressedDescription(
+        serverName: string,
+        toolName: string,
+        liveOriginal?: string
+      ): string | undefined;
     },
     private readonly options: { usage?: UsageLog; semantic?: SemanticScorer } = {}
   ) {}
@@ -87,7 +91,7 @@ export class ToolSearch {
         id: toolKey(tool.serverName, tool.toolName),
         name: `${tool.serverName} ${tool.toolName} ${tool.title ?? ''}`,
         text: `${tool.description ?? ''} ${
-          this.compression.getCompressedDescription(tool.serverName, tool.toolName) ?? ''
+          this.compression.getCompressedDescription(tool.serverName, tool.toolName, tool.description) ?? ''
         }`,
       }))
     );
@@ -133,7 +137,7 @@ export class ToolSearch {
     const hits = ranked.slice(0, Math.max(1, limit)).map(([key, score]) => {
       const tool = byKey.get(key) as CatalogTool;
       const description =
-        this.compression.getCompressedDescription(tool.serverName, tool.toolName) ||
+        this.compression.getCompressedDescription(tool.serverName, tool.toolName, tool.description) ||
         tool.description ||
         '';
       return {

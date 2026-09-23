@@ -570,6 +570,22 @@ describe('Config Loader', () => {
       });
     });
 
+    it('appends shareIgnoreEnv patterns from both files', async () => {
+      mkdirSync(join(testDir, '.mcp-compression-proxy'), { recursive: true });
+      writeFileSync(
+        join(testDir, '.mcp-compression-proxy', 'servers.json'),
+        JSON.stringify({ shareIgnoreEnv: ['TERM_*'], mcpServers: [] })
+      );
+      writeFileSync(
+        join(testDir, 'servers.json'),
+        JSON.stringify({ shareIgnoreEnv: ['EDITOR'], mcpServers: [{ name: 'p', command: 'x', share: 'global', cwd: 'tools' }] })
+      );
+      const { loadJSONServers } = await importLoader();
+      const result = loadJSONServers();
+      expect(result?.shareIgnoreEnv).toEqual(['TERM_*', 'EDITOR']);
+      expect(result?.servers[0]).toMatchObject({ share: 'global', cwd: 'tools' });
+    });
+
     it('leaves the newer sections unset when neither file has them', async () => {
       writeFileSync(join(testDir, 'servers.json'), JSON.stringify({
         mcpServers: [{ name: 'plain', command: 'npx' }],
@@ -719,13 +735,14 @@ describe('Config Loader', () => {
       expect(() => loadJSONServers()).toThrow('Invalid server configuration');
     });
 
-    it.each(['args', 'env', 'inheritEnv'])(
+    it.each(['args', 'env', 'inheritEnv', 'cwd'])(
       'should reject url combined with %s, naming the field',
       async (field) => {
         const stdioOnly: Record<string, unknown> = {
           args: ['--flag'],
           env: { TOKEN: 'x' },
           inheritEnv: false,
+          cwd: '/srv',
         };
 
         writeProjectConfig({

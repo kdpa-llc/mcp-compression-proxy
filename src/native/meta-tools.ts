@@ -130,7 +130,7 @@ export interface MetaToolDeps {
   search: ToolSearch;
   usage?: UsageLog;
   compression: {
-    getCompressedDescription(serverName: string, toolName: string): string | undefined;
+    getCompressedDescription(serverName: string, toolName: string, liveOriginal?: string): string | undefined;
     applySchemaDescriptions?<T>(serverName: string, toolName: string, schema: T, liveOriginal?: string): T;
     invalidate(serverName: string, toolName: string): boolean;
     saveToDisk(): Promise<void>;

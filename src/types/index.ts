@@ -32,6 +32,10 @@ export interface MCPServerConfig {
   authErrorPatterns?: string[];
   /** Tool-name wildcard patterns that are safe to retry once after auth recovery. */
   authRetryTools?: string[];
+  /** Working directory of a spawned server. */
+  cwd?: string;
+  /** Which clients of one daemon may share this backend. */
+  share?: 'session' | 'project' | 'global';
 }
 
 export interface MCPClientConnection {

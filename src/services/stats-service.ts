@@ -152,12 +152,12 @@ export class StatsService {
         let compressedChars = 0;
 
         for (const tool of filtered) {
-          const original = this.compressionCache.getOriginalDescription(status.name, tool.name) ??
+          const original = this.compressionCache.getOriginalDescription(status.name, tool.name, tool.description) ??
             tool.description ??
             '';
-          const hasCompression = this.compressionCache.hasCompressed(status.name, tool.name);
+          const hasCompression = this.compressionCache.hasCompressed(status.name, tool.name, tool.description);
           const compressed =
-            this.compressionCache.getCompressedDescription(status.name, tool.name) ??
+            this.compressionCache.getCompressedDescription(status.name, tool.name, tool.description) ??
             (hasCompression ? '' : tool.description ?? '');
 
           if (hasCompression) {
@@ -282,12 +282,14 @@ export class StatsService {
     for (const tool of tools) {
       const cachedOriginal = this.compressionCache.getOriginalDescription(
         tool.serverName,
-        tool.toolName
+        tool.toolName,
+        tool.description
       );
       const original = cachedOriginal ?? tool.description ?? '';
       const compressed = this.compressionCache.getCompressedDescription(
         tool.serverName,
-        tool.toolName
+        tool.toolName,
+        tool.description
       );
 
       originalChars += original.length;

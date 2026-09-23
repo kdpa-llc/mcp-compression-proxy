@@ -25,6 +25,8 @@ export interface DisplayPolicy {
  */
 export class CompressionCache {
   private cache: CompressedToolCache = {};
+  /** Entries by tool name and original description; rebuilt after any change. */
+  private byContent: Map<string, CachedDescription> | undefined;
   private logger: Logger;
   private persistence: CompressionPersistence;
   private noCompressPatterns: string[] = [];
@@ -102,6 +104,32 @@ export class CompressionCache {
   }
 
   /**
+   * The entry for a tool as its backend describes it now.
+   *
+   * Entries are keyed by server name, and clients of one daemon may name the
+   * same server differently. When this tool's own entry is missing or was
+   * made from another description, an entry for the same tool name and the
+   * same original description - the same tool under another server name -
+   * serves instead, so compressing it once covers every name it goes by.
+   */
+  private entryFor(
+    serverName: string,
+    toolName: string,
+    liveOriginal?: string
+  ): CachedDescription | undefined {
+    const own = this.cache[this.getKey(serverName, toolName)];
+    if (liveOriginal === undefined || (own && (!own.original || own.original === liveOriginal))) {
+      return own;
+    }
+    this.byContent ??= new Map(
+      Object.entries(this.cache).flatMap(([key, entry]) =>
+        entry.original ? [[`${key.slice(key.indexOf(':') + 1)}\0${entry.original}`, entry] as const] : []
+      )
+    );
+    return this.byContent.get(`${toolName}\0${liveOriginal}`) ?? own;
+  }
+
+  /**
    * Save compressed description for a tool
    * Always saves compression to cache regardless of noCompress patterns
    */
@@ -113,6 +141,7 @@ export class CompressionCache {
     options: { kind?: CachedDescription['kind']; parameters?: Record<string, string> } = {}
   ): void {
     const key = this.getKey(serverName, toolName);
+    this.byContent = undefined;
 
     this.cache[key] = {
       original: originalDescription,
@@ -145,7 +174,7 @@ export class CompressionCache {
     policy?: DisplayPolicy
   ): string | undefined {
     const fullToolName = `${serverName}__${toolName}`;
-    const key = this.getKey(serverName, toolName);
+    const entry = this.entryFor(serverName, toolName, originalDescription);
 
     // Always bypass compression for noCompress patterns
     if (this.shouldBypassCompression(fullToolName, policy)) {
@@ -154,10 +183,10 @@ export class CompressionCache {
 
     // If tool is expanded in session, use original description
     if (isExpandedInSession) {
-      return this.cache[key]?.original || originalDescription;
+      return entry?.original || originalDescription;
     }
 
-    const compressed = this.cache[key]?.compressed;
+    const compressed = entry?.compressed;
     if (compressed) {
       return compressed;
     }
@@ -170,9 +199,8 @@ export class CompressionCache {
   /**
    * Check if a tool has compressed description
    */
-  hasCompressed(serverName: string, toolName: string): boolean {
-    const key = this.getKey(serverName, toolName);
-    return !!this.cache[key]?.compressed;
+  hasCompressed(serverName: string, toolName: string, liveOriginal?: string): boolean {
+    return !!this.entryFor(serverName, toolName, liveOriginal)?.compressed;
   }
 
   /**
@@ -186,7 +214,7 @@ export class CompressionCache {
    * never exit.
    */
   isStale(serverName: string, toolName: string, liveOriginal?: string): boolean {
-    const entry = this.cache[this.getKey(serverName, toolName)];
+    const entry = this.entryFor(serverName, toolName, liveOriginal);
 
     if (!entry?.compressed) return false;
     if (!entry.original || !liveOriginal) return false;
@@ -195,8 +223,8 @@ export class CompressionCache {
   }
 
   /** The whole cached entry for a tool, if any. */
-  getEntry(serverName: string, toolName: string): CachedDescription | undefined {
-    const entry = this.cache[this.getKey(serverName, toolName)];
+  getEntry(serverName: string, toolName: string, liveOriginal?: string): CachedDescription | undefined {
+    const entry = this.entryFor(serverName, toolName, liveOriginal);
     return entry ? { ...entry, ...(entry.parameters ? { parameters: { ...entry.parameters } } : {}) } : undefined;
   }
 
@@ -216,7 +244,7 @@ export class CompressionCache {
     liveOriginal?: string,
     policy?: DisplayPolicy
   ): T {
-    const parameters = this.cache[this.getKey(serverName, toolName)]?.parameters;
+    const parameters = this.entryFor(serverName, toolName, liveOriginal)?.parameters;
     if (
       !parameters ||
       this.shouldBypassCompression(`${serverName}__${toolName}`, policy) ||
@@ -249,6 +277,7 @@ export class CompressionCache {
     if (!this.cache[key]) return false;
 
     delete this.cache[key];
+    this.byContent = undefined;
     this.logger.debug({ serverName, toolName }, 'Invalidated compressed description');
 
     return true;
@@ -259,10 +288,10 @@ export class CompressionCache {
    */
   getOriginalDescription(
     serverName: string,
-    toolName: string
+    toolName: string,
+    liveOriginal?: string
   ): string | undefined {
-    const key = this.getKey(serverName, toolName);
-    return this.cache[key]?.original;
+    return this.entryFor(serverName, toolName, liveOriginal)?.original;
   }
 
   /**
@@ -270,10 +299,10 @@ export class CompressionCache {
    */
   getCompressedDescription(
     serverName: string,
-    toolName: string
+    toolName: string,
+    liveOriginal?: string
   ): string | undefined {
-    const key = this.getKey(serverName, toolName);
-    return this.cache[key]?.compressed;
+    return this.entryFor(serverName, toolName, liveOriginal)?.compressed;
   }
 
   /**
@@ -349,6 +378,7 @@ export class CompressionCache {
    */
   clear(): void {
     this.cache = {};
+    this.byContent = undefined;
     this.logger.info('Cleared compression cache');
   }
 
@@ -372,6 +402,7 @@ export class CompressionCache {
     for (const [key, value] of loadedCache.entries()) {
       this.cache[key] = value;
     }
+    this.byContent = undefined;
 
     this.logger.info(
       { count: Object.keys(this.cache).length },

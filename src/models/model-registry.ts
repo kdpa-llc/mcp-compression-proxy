@@ -1,17 +1,9 @@
 import type { Logger } from 'pino';
 import type { ModelConfig } from '../config/schema.js';
+import type { AuthFailureConfirmer } from '../mcp/client-manager.js';
+import { stableJson } from '../utils/stable-json.js';
+import { modelAuthConfirmer } from './auth-confirmer.js';
 import { createLocalModel, type LocalModel } from './local-model.js';
-
-/** JSON with object keys sorted, so equal settings written in another order match. */
-export function stableJson(value: unknown): string {
-  return JSON.stringify(value, (_key, entry: unknown) =>
-    entry !== null && typeof entry === 'object' && !Array.isArray(entry)
-      ? Object.fromEntries(
-          Object.entries(entry as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : 1))
-        )
-      : entry
-  );
-}
 
 /**
  * Local models by the `model` section that asked for them.
@@ -46,6 +38,15 @@ export class ModelRegistry {
     });
     if (model) this.models.set(key, model);
     return model;
+  }
+
+  /**
+   * The auth-failure second opinion for a `model` section that opted in with
+   * confirmAuthFailures, or undefined; see modelAuthConfirmer.
+   */
+  authConfirmer(config: ModelConfig | undefined): AuthFailureConfirmer | undefined {
+    const model = config?.confirmAuthFailures ? this.get(config) : undefined;
+    return model ? modelAuthConfirmer(model.backend) : undefined;
   }
 
   async closeAll(): Promise<void> {

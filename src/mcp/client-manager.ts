@@ -23,7 +23,7 @@ export const DEFAULT_HARD_MAX_CONNECTION_AGE_SECONDS = 28_800;
 
 type ManagedConnectionState = 'ready' | 'draining' | 'closed';
 
-type ResolvedServerConfig = MCPServerConfig & {
+export type ResolvedServerConfig = MCPServerConfig & {
   softMaxConnectionAgeSeconds: number;
   hardMaxConnectionAgeSeconds: number;
   authErrorPatterns: string[];
@@ -95,6 +95,7 @@ function configFingerprint(config: MCPServerConfig): string {
     inheritEnv,
     url,
     headers,
+    cwd,
     softMaxConnectionAgeSeconds,
     hardMaxConnectionAgeSeconds,
     maxConnectionAgeSeconds,
@@ -109,6 +110,7 @@ function configFingerprint(config: MCPServerConfig): string {
     inheritEnv,
     url,
     headers,
+    cwd,
     softMaxConnectionAgeSeconds,
     hardMaxConnectionAgeSeconds,
     maxConnectionAgeSeconds,
@@ -141,6 +143,63 @@ function describeError(error: unknown): string {
   if (typeof message === 'string' && message !== '') return message;
 
   return 'Unknown error';
+}
+
+/**
+ * Build the environment handed to a spawned server.
+ *
+ * The stdio transport only inherits a small allowlist of "safe" variables
+ * (PATH, HOME, ...), so anything else the user exported - API tokens, base
+ * URLs - never reaches the child unless it is passed explicitly. `baseEnv` is
+ * the environment the server inherits from: the proxy's own, or in a daemon
+ * the environment of the client that asked for the server.
+ */
+export function buildServerEnv(
+  config: MCPServerConfig,
+  baseEnv: NodeJS.ProcessEnv = process.env
+): Record<string, string> | undefined {
+  const inherit = config.inheritEnv ?? true;
+
+  if (inherit === false) {
+    return config.env;
+  }
+
+  const names = Array.isArray(inherit) ? inherit : Object.keys(baseEnv);
+  const inherited: Record<string, string> = {};
+
+  for (const name of names) {
+    const value = baseEnv[name];
+    if (value === undefined || value.startsWith('()')) continue;
+    inherited[name] = value;
+  }
+
+  return { ...inherited, ...config.env };
+}
+
+/** A server entry with the config-wide defaults it did not override filled in. */
+export function resolveServerConfig(
+  server: MCPServerConfig,
+  defaultTimeout: number | undefined,
+  defaultInheritEnv: boolean | string[] | undefined,
+  defaults: ConnectionLifecycleDefaults
+): ResolvedServerConfig {
+  return {
+    ...server,
+    timeout: server.timeout ?? defaultTimeout,
+    inheritEnv: server.inheritEnv ?? defaultInheritEnv,
+    softMaxConnectionAgeSeconds:
+      server.softMaxConnectionAgeSeconds ??
+      server.maxConnectionAgeSeconds ??
+      defaults.softMaxConnectionAgeSeconds ??
+      defaults.maxConnectionAgeSeconds ??
+      DEFAULT_SOFT_MAX_CONNECTION_AGE_SECONDS,
+    hardMaxConnectionAgeSeconds:
+      server.hardMaxConnectionAgeSeconds ??
+      defaults.hardMaxConnectionAgeSeconds ??
+      DEFAULT_HARD_MAX_CONNECTION_AGE_SECONDS,
+    authErrorPatterns: [...(server.authErrorPatterns ?? defaults.authErrorPatterns ?? [])],
+    authRetryTools: [...(server.authRetryTools ?? defaults.authRetryTools ?? [])],
+  };
 }
 
 /**
@@ -190,55 +249,13 @@ export class MCPClientManager {
     }
   }
 
-  /**
-   * Build the environment handed to a spawned server.
-   *
-   * The stdio transport only inherits a small allowlist of "safe" variables
-   * (PATH, HOME, ...), so anything else the user exported - API tokens, base
-   * URLs - never reaches the child unless it is passed explicitly.
-   */
-  private buildEnv(config: MCPServerConfig): Record<string, string> | undefined {
-    const inherit = config.inheritEnv ?? true;
-
-    if (inherit === false) {
-      return config.env;
-    }
-
-    const names = Array.isArray(inherit) ? inherit : Object.keys(process.env);
-    const inherited: Record<string, string> = {};
-
-    for (const name of names) {
-      const value = process.env[name];
-      if (value === undefined || value.startsWith('()')) continue;
-      inherited[name] = value;
-    }
-
-    return { ...inherited, ...config.env };
-  }
-
   private resolveConfig(
     server: MCPServerConfig,
     defaultTimeout: number | undefined,
     defaultInheritEnv: boolean | string[] | undefined,
     defaults: ConnectionLifecycleDefaults
   ): ResolvedServerConfig {
-    return {
-      ...server,
-      timeout: server.timeout ?? defaultTimeout,
-      inheritEnv: server.inheritEnv ?? defaultInheritEnv,
-      softMaxConnectionAgeSeconds:
-        server.softMaxConnectionAgeSeconds ??
-        server.maxConnectionAgeSeconds ??
-        defaults.softMaxConnectionAgeSeconds ??
-        defaults.maxConnectionAgeSeconds ??
-        DEFAULT_SOFT_MAX_CONNECTION_AGE_SECONDS,
-      hardMaxConnectionAgeSeconds:
-        server.hardMaxConnectionAgeSeconds ??
-        defaults.hardMaxConnectionAgeSeconds ??
-        DEFAULT_HARD_MAX_CONNECTION_AGE_SECONDS,
-      authErrorPatterns: [...(server.authErrorPatterns ?? defaults.authErrorPatterns ?? [])],
-      authRetryTools: [...(server.authRetryTools ?? defaults.authRetryTools ?? [])],
-    };
+    return resolveServerConfig(server, defaultTimeout, defaultInheritEnv, defaults);
   }
 
   /**
@@ -266,7 +283,8 @@ export class MCPClientManager {
     return new StdioClientTransport({
       command,
       args: config.args,
-      env: this.buildEnv(config),
+      env: buildServerEnv(config),
+      ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
     });
   }
 
