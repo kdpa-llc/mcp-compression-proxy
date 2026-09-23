@@ -13,8 +13,16 @@ Two binaries ship:
 - `mcp-cli` (`src/cli/`) — progressive tool discovery backed by a daemon that
   holds warm connections to the backends
 
-Backend connections live in `src/mcp/client-manager.ts`, and the shared,
-exclusion-filtered tool list in `src/mcp/tool-catalog.ts`; compression state,
+The MCP server's handlers live in `src/proxy/session.ts` (`ProxySession`),
+built from one client's view (`src/proxy/client-view.ts`: its config, backends
+and tool catalog) and shared services; `src/index.ts` only wires a session to
+stdio, or attaches to the daemon with `backendMode: "daemon"`. The daemon
+(`src/cli/daemon.ts`) hosts one session per attached proxy
+(`src/daemon/session-host.ts`) and answers mcp-cli from the view of the shell
+each request came from (`src/daemon/cli-requests.ts`). Backend connections are
+pooled in `src/mcp/backend-pool.ts`, keyed by what a backend runs rather than
+its name, over `src/mcp/client-manager.ts`; the shared, exclusion-filtered tool
+list is `src/mcp/tool-catalog.ts`; compression state,
 output shaping (`--want`/`--where`), call suggestions and the compression
 audit in `src/services/`; ranked search and usage learning in `src/search/`;
 the optional local model (Cactus Needle 3 through `python/needle_bridge.py`)
@@ -41,7 +49,7 @@ missing build fails them with `MODULE_NOT_FOUND`.
 
 | Location | Covers |
 |---|---|
-| `tests/unit/` | modules in isolation, 35 suites |
+| `tests/unit/` | modules in isolation, 41 suites |
 | `tests/integration/` | spawns the built binaries over stdio |
 | `tests/e2e/` | full workflows against mocked clients |
 | `tests/e2e-real/` | real Ollama, and real Needle when `NEEDLE_PYTHON` is set; excluded from the default run |
@@ -117,6 +125,16 @@ synced automatically; `tests/unit/version.test.ts` fails CI if it drifts.
   stdio transport only passes a six-variable safe list on its own, so
   anything else the user exported never reaches the child. `inheritEnv`
   narrows it per server.
+- **Anything per client goes through the view, never process state.** A
+  daemon serves many clients from one process: config comes from
+  `view.config()` (read from the client's directory and environment), backends
+  from `view.backends`, relative paths resolve against `view.cwd`, and cache
+  display settings are passed as a `DisplayPolicy`. `process.cwd()`,
+  `process.env` or `loadJSONServersCached()` inside a session is a bug.
+- **A backend's identity is what it runs, not its name.** `backendSpec`
+  hashes command, args, cwd, environment (less `VOLATILE_ENV`), URL, headers
+  and lifecycle settings; anything that changes a backend's behaviour must be
+  in that hash, or two clients will share a backend they should not.
 - **Tool names split on the first `__` only.** Backend tools may contain `__`
   in their own names.
 - **Every backend call goes through `callToolWithAuthRecovery`.** It refuses

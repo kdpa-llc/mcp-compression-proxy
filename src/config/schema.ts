@@ -216,8 +216,20 @@ export const serverConfigSchema = {
           enum: ['debug', 'info', 'warn', 'error'],
           default: 'info',
         },
+        daemonIdleTimeout: {
+          type: 'number',
+          description:
+            'Seconds the daemon waits with no attached session and no mcp-cli request before exiting. 0 (default) keeps it running. A daemon started by the proxy (backendMode "daemon") uses 1800 unless MCP_DAEMON_IDLE_TIMEOUT says otherwise.',
+          minimum: 0,
+        },
       },
       additionalProperties: false,
+    },
+    backendMode: {
+      type: 'string',
+      enum: ['local', 'daemon'],
+      description:
+        "Where the MCP proxy runs backend servers. 'local' (default): in its own process. 'daemon': in the shared mcp-cli daemon, started if needed, so every client and mcp-cli share one set of servers; the proxy falls back to 'local' when the daemon cannot be reached. MCP_PROXY_BACKEND_MODE overrides it.",
     },
     inheritEnv: {
       description:
@@ -361,6 +373,9 @@ export type ToolExposure = 'full' | 'lazy';
 /** Which clients of one daemon may share a backend. */
 export type ShareScope = 'session' | 'project' | 'global';
 
+/** Where the MCP proxy runs backend servers. */
+export type BackendMode = 'local' | 'daemon';
+
 export interface SearchConfig {
   limit?: number;
   learnFromUsage?: boolean;
@@ -419,7 +434,9 @@ export type ServerConfigJSON = {
     payloadThreshold?: number;
     autoStartDaemon?: boolean;
     daemonLogLevel?: string;
+    daemonIdleTimeout?: number;
   };
+  backendMode?: BackendMode;
   inheritEnv?: InheritEnv;
   compressionFallbackBehavior?: CompressionFallbackBehavior;
   toolExposure?: ToolExposure;

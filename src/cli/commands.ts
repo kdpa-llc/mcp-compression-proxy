@@ -622,6 +622,8 @@ export async function handleDaemonStatus(socketPath: string): Promise<void> {
     cachedToolCount: number;
     socketPath: string;
     servers: ServerStatus[];
+    backends?: Array<ServerStatus & { holders: number }>;
+    sessions?: Array<{ id: string; cwd: string }>;
   };
 
   const hours = Math.floor(status.uptime / 3600);
@@ -639,6 +641,11 @@ export async function handleDaemonStatus(socketPath: string): Promise<void> {
     `Servers: ${status.connectedServers} connected, ${inactive.length} inactive, ${failed.length} failed`
   );
   console.log(`Tools: ${status.cachedToolCount} cached`);
+  if (status.backends && status.sessions) {
+    console.log(
+      `Shared: ${status.backends.length} backend(s) for every client, ${status.sessions.length} MCP session(s) attached`
+    );
+  }
   console.log(`Socket: ${status.socketPath}`);
 
   if (status.servers.length > 0) {

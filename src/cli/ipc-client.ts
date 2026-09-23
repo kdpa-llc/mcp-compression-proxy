@@ -1,8 +1,18 @@
 import net from 'net';
 import { randomUUID } from 'crypto';
-import type { IPCRequest, IPCResponse, IPCMethod } from '../types/index.js';
+import type { IPCRequest, IPCResponse, IPCMethod, RequestContext } from '../types/index.js';
+import { stringEnv } from '../daemon/protocol.js';
 
 const DEFAULT_TIMEOUT_MS = 30000;
+
+/**
+ * Where this process runs, sent with each request so the daemon answers from
+ * the configuration this directory and environment produce - the servers.json
+ * of the project the command ran in, with the variables exported in its shell.
+ */
+export function currentContext(): RequestContext {
+  return { cwd: process.cwd(), env: stringEnv(process.env) };
+}
 
 /**
  * Sends a request to the daemon via Unix domain socket
@@ -12,12 +22,14 @@ export async function sendRequest(
   socketPath: string,
   method: IPCMethod,
   params?: Record<string, unknown>,
-  timeoutMs = DEFAULT_TIMEOUT_MS
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  context: RequestContext = currentContext()
 ): Promise<IPCResponse> {
   const request: IPCRequest = {
     id: randomUUID(),
     method,
     params,
+    context,
   };
 
   return new Promise((resolve, reject) => {
@@ -85,7 +97,7 @@ export async function sendRequest(
  */
 export async function isDaemonRunning(socketPath: string): Promise<boolean> {
   try {
-    const response = await sendRequest(socketPath, 'daemon-status', undefined, 3000);
+    const response = await sendRequest(socketPath, 'daemon-status', { ping: true }, 3000);
     return !response.error;
   } catch {
     return false;

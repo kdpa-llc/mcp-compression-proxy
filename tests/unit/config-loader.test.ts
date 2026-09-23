@@ -570,6 +570,18 @@ describe('Config Loader', () => {
       });
     });
 
+    it('caches the process config until a file changes, and reads another directory on request', async () => {
+      writeFileSync(join(testDir, 'servers.json'), JSON.stringify({ mcpServers: [{ name: 'here', command: 'x' }] }));
+      const { loadJSONServersCached, createConfigLoader, clearConfigCache } = await importLoader();
+      clearConfigCache();
+      const first = loadJSONServersCached();
+      expect(loadJSONServersCached()).toBe(first);
+      expect(first?.servers.map((server: { name: string }) => server.name)).toEqual(['here']);
+
+      const elsewhere = createConfigLoader({ cwd: join(testDir, 'nowhere'), env: {} });
+      expect(elsewhere()?.servers ?? []).toEqual([]);
+    });
+
     it('appends shareIgnoreEnv patterns from both files', async () => {
       mkdirSync(join(testDir, '.mcp-compression-proxy'), { recursive: true });
       writeFileSync(

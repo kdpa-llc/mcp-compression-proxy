@@ -8,6 +8,7 @@ import {
   type InheritEnv,
   type CompressionFallbackBehavior,
   type ToolExposure,
+  type BackendMode,
   type SearchConfig,
   type ModelConfig,
   type CompressorConfig,
@@ -36,7 +37,7 @@ function homedir(): string {
  * `unresolved` so the caller can warn instead of silently injecting an empty
  * string (a common cause of confusing downstream 401s).
  */
-function expandEnvVars(value: string, unresolved: Set<string>): string {
+function expandEnvVars(value: string, unresolved: Set<string>, env: NodeJS.ProcessEnv): string {
   return value.replace(
     /(\$?)\$\{([^}]+)\}/g,
     (match, escape: string, expression: string) => {
@@ -51,7 +52,7 @@ function expandEnvVars(value: string, unresolved: Set<string>): string {
       const defaultValue =
         separatorIndex === -1 ? undefined : expression.slice(separatorIndex + 2);
 
-      const resolved = process.env[varName];
+      const resolved = env[varName];
       if (resolved) {
         return resolved;
       }
@@ -74,17 +75,17 @@ function expandEnvVars(value: string, unresolved: Set<string>): string {
  * ServerConfigJSON at the one call site that needs it most - the value that
  * has just been schema-validated.
  */
-function expandEnvVarsInObject<T>(obj: T, unresolved: Set<string>): T {
+function expandEnvVarsInObject<T>(obj: T, unresolved: Set<string>, env: NodeJS.ProcessEnv): T {
   if (typeof obj === 'string') {
-    return expandEnvVars(obj, unresolved) as T;
+    return expandEnvVars(obj, unresolved, env) as T;
   }
   if (Array.isArray(obj)) {
-    return obj.map((item) => expandEnvVarsInObject(item, unresolved)) as T;
+    return obj.map((item) => expandEnvVarsInObject(item, unresolved, env)) as T;
   }
   if (obj !== null && typeof obj === 'object') {
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj)) {
-      result[key] = expandEnvVarsInObject(value, unresolved);
+      result[key] = expandEnvVarsInObject(value, unresolved, env);
     }
     return result as T;
   }
@@ -169,7 +170,7 @@ function validateConfig(config: unknown): ServerConfigJSON {
 /**
  * Load and parse JSON config from a file
  */
-function loadJSONConfig(filePath: string): ServerConfigJSON | null {
+function loadJSONConfig(filePath: string, env: NodeJS.ProcessEnv): ServerConfigJSON | null {
   if (!existsSync(filePath)) {
     return null;
   }
@@ -181,7 +182,7 @@ function loadJSONConfig(filePath: string): ServerConfigJSON | null {
 
     // Expand environment variables
     const unresolved = new Set<string>();
-    const expanded = expandEnvVarsInObject(validated, unresolved);
+    const expanded = expandEnvVarsInObject(validated, unresolved, env);
 
     if (unresolved.size > 0) {
       console.error(
@@ -204,14 +205,28 @@ function loadJSONConfig(filePath: string): ServerConfigJSON | null {
 }
 
 /**
+ * Whose configuration to read. Each field defaults to this process's own;
+ * a daemon passes each client's, so a client started in another project, or
+ * with other variables exported, gets the configuration it would have read
+ * itself. The user-level file is always this user's: a daemon only serves
+ * clients of the user it runs as.
+ */
+export interface ConfigContext {
+  /** Directory holding the project-level servers.json. */
+  cwd?: string;
+  /** Variables `${VAR}` references expand from. */
+  env?: NodeJS.ProcessEnv;
+}
+
+/**
  * Get config file paths
  * User-level: ~/.mcp-compression-proxy/servers.json
  * Project-level: ./servers.json
  */
-function getConfigPaths(): { user: string; project: string } {
+function getConfigPaths(context: ConfigContext): { user: string; project: string } {
   return {
     user: join(homedir(), '.mcp-compression-proxy', 'servers.json'),
-    project: join(process.cwd(), 'servers.json'),
+    project: join(context.cwd ?? process.cwd(), 'servers.json'),
   };
 }
 
@@ -255,7 +270,9 @@ export type ConfigResult = {
     payloadThreshold?: number;
     autoStartDaemon?: boolean;
     daemonLogLevel?: string;
+    daemonIdleTimeout?: number;
   };
+  backendMode?: BackendMode;
   inheritEnv?: InheritEnv;
   compressionFallbackBehavior?: CompressionFallbackBehavior;
   toolExposure?: ToolExposure;
@@ -272,8 +289,9 @@ export type ConfigResult = {
  * 2. Load project-level config and append servers
  * 3. Aggregate exclude and noCompress patterns from both configs
  */
-export function loadJSONServers(): ConfigResult {
-  const paths = getConfigPaths();
+export function loadJSONServers(context: ConfigContext = {}): ConfigResult {
+  const paths = getConfigPaths(context);
+  const env = context.env ?? process.env;
   let aggregatedServers: MCPServerConfig[] = [];
   let aggregatedExcludePatterns: string[] = [];
   let aggregatedNoCompressPatterns: string[] = [];
@@ -282,7 +300,8 @@ export function loadJSONServers(): ConfigResult {
   let hardMaxConnectionAgeSeconds: number | undefined;
   let authErrorPatterns: string[] | undefined;
   let authRetryTools: string[] | undefined;
-  let cliConfig: { payloadThreshold?: number; autoStartDaemon?: boolean; daemonLogLevel?: string } | undefined;
+  let cliConfig: NonNullable<ConfigResult>['cli'];
+  let backendMode: BackendMode | undefined;
   let inheritEnv: InheritEnv | undefined;
   let compressionFallbackBehavior: CompressionFallbackBehavior = 'original';
   let toolExposure: ToolExposure | undefined;
@@ -294,7 +313,7 @@ export function loadJSONServers(): ConfigResult {
   let hasAnyConfig = false;
 
   // Step 1: Load user-level config
-  const userConfig = loadJSONConfig(paths.user);
+  const userConfig = loadJSONConfig(paths.user, env);
   if (userConfig) {
     hasAnyConfig = true;
     console.error(`[Config] Loaded user-level configuration from: ${paths.user}`);
@@ -335,6 +354,7 @@ export function loadJSONServers(): ConfigResult {
       compressionFallbackBehavior = userConfig.compressionFallbackBehavior;
     }
     toolExposure = userConfig.toolExposure ?? toolExposure;
+    backendMode = userConfig.backendMode ?? backendMode;
     pinnedTools = [...(userConfig.pinnedTools ?? [])];
     shareIgnoreEnv = [...(userConfig.shareIgnoreEnv ?? [])];
     search = userConfig.search ? { ...userConfig.search } : search;
@@ -345,7 +365,7 @@ export function loadJSONServers(): ConfigResult {
   }
 
   // Step 2: Load project-level config and append
-  const projectConfig = loadJSONConfig(paths.project);
+  const projectConfig = loadJSONConfig(paths.project, env);
   if (projectConfig) {
     hasAnyConfig = true;
     console.error(`[Config] Loaded project-level configuration from: ${paths.project}`);
@@ -397,6 +417,7 @@ export function loadJSONServers(): ConfigResult {
     }
     // Scalars and sections override field by field, like cli; patterns append.
     toolExposure = projectConfig.toolExposure ?? toolExposure;
+    backendMode = projectConfig.backendMode ?? backendMode;
     pinnedTools = [...pinnedTools, ...(projectConfig.pinnedTools ?? [])];
     shareIgnoreEnv = [...shareIgnoreEnv, ...(projectConfig.shareIgnoreEnv ?? [])];
     if (projectConfig.search) {
@@ -496,6 +517,7 @@ export function loadJSONServers(): ConfigResult {
     authErrorPatterns,
     authRetryTools,
     cli: cliConfig,
+    backendMode,
     inheritEnv,
     compressionFallbackBehavior,
     toolExposure,
@@ -511,8 +533,8 @@ export function loadJSONServers(): ConfigResult {
  * Fingerprint of the config files, used to detect edits between reads.
  * Missing files are part of the fingerprint so creating one invalidates too.
  */
-function configSignature(): string {
-  const paths = getConfigPaths();
+function configSignature(context: ConfigContext): string {
+  const paths = getConfigPaths(context);
 
   return [paths.user, paths.project]
     .map((path) => {
@@ -536,7 +558,7 @@ let configCache: { signature: string; result: ConfigResult } | null = null;
  * on file mtime/size, so edits are still picked up without a restart.
  */
 export function loadJSONServersCached(): ConfigResult {
-  const signature = configSignature();
+  const signature = configSignature({});
 
   if (configCache && configCache.signature === signature) {
     return configCache.result;
@@ -545,6 +567,22 @@ export function loadJSONServersCached(): ConfigResult {
   const result = loadJSONServers();
   configCache = { signature, result };
   return result;
+}
+
+/**
+ * A cached loader for one client's configuration, re-read only when its
+ * files change; see {@link loadJSONServersCached}. Like it, it returns the
+ * same object while nothing changed, so callers can compare by identity.
+ */
+export function createConfigLoader(context: ConfigContext): () => ConfigResult {
+  let cache: { signature: string; result: ConfigResult } | undefined;
+  return () => {
+    const signature = configSignature(context);
+    if (cache?.signature !== signature) {
+      cache = { signature, result: loadJSONServers(context) };
+    }
+    return cache.result;
+  };
 }
 
 /**

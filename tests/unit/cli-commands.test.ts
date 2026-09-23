@@ -831,6 +831,28 @@ describe('CLI commands', () => {
       expect(stdoutLines.some(l => l.includes('git'))).toBe(true);
     });
 
+    it('reports the shared pool and attached sessions of a newer daemon', async () => {
+      mockIsDaemonRunning.mockResolvedValue(true);
+      mockSendRequest.mockResolvedValue({
+        id: '1',
+        result: {
+          pid: 7,
+          uptime: 60,
+          connectedServers: 1,
+          totalServers: 1,
+          cachedToolCount: 0,
+          socketPath: SOCKET,
+          servers: [{ name: 'fs', connected: true }],
+          backends: [{ name: 'fs#abc', connected: true, holders: 2 }, { name: 'git#def', connected: true, holders: 1 }],
+          sessions: [{ id: 's1', cwd: '/p' }],
+        },
+      });
+
+      await handleDaemonStatus(SOCKET);
+
+      expect(stdoutLines).toContain('Shared: 2 backend(s) for every client, 1 MCP session(s) attached');
+    });
+
     it('exits with 1 on error response', async () => {
       mockIsDaemonRunning.mockResolvedValue(true);
       mockSendRequest.mockResolvedValue({
