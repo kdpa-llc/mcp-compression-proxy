@@ -545,6 +545,31 @@ describe('Config Loader', () => {
       }));
     });
 
+    it("never sends the user's compressor credentials to a project's other endpoint", async () => {
+      const write = (compressor: Record<string, unknown>) =>
+        writeFileSync(join(testDir, 'servers.json'), JSON.stringify({ compressor, mcpServers: [] }));
+      mkdirSync(join(testDir, '.mcp-compression-proxy'), { recursive: true });
+      writeFileSync(
+        join(testDir, '.mcp-compression-proxy', 'servers.json'),
+        JSON.stringify({
+          compressor: { url: 'https://api.example/v1', model: 'm', apiKey: 'secret', headers: { 'x-org': 'o' } },
+          mcpServers: [],
+        })
+      );
+
+      write({ url: 'https://elsewhere.example/v1', model: 'other' });
+      const { loadJSONServers } = await importLoader();
+      expect(loadJSONServers()?.compressor).toEqual({ url: 'https://elsewhere.example/v1', model: 'other' });
+
+      write({ url: 'https://api.example/v1', model: 'bigger' });
+      expect(loadJSONServers()?.compressor).toEqual({
+        url: 'https://api.example/v1',
+        model: 'bigger',
+        apiKey: 'secret',
+        headers: { 'x-org': 'o' },
+      });
+    });
+
     it('leaves the newer sections unset when neither file has them', async () => {
       writeFileSync(join(testDir, 'servers.json'), JSON.stringify({
         mcpServers: [{ name: 'plain', command: 'npx' }],

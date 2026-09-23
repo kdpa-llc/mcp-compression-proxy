@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
 import { tmpdir } from 'os';
@@ -239,6 +239,42 @@ describe('EmbeddingIndex', () => {
     expect(reloaded.embed).toHaveBeenCalledWith(['send mail']);
   });
 
+  it('ignores a cache written for another model', async () => {
+    const cacheFile = join(dir, 'embeddings.json');
+    await new EmbeddingIndex(wordModel(), makeLogger(), cacheFile, 'base').score('list', tools);
+
+    const same = wordModel();
+    await new EmbeddingIndex(same, makeLogger(), cacheFile, 'base').score('list', tools);
+    expect(same.embed).toHaveBeenCalledTimes(1);
+
+    const tuned = wordModel();
+    await new EmbeddingIndex(tuned, makeLogger(), cacheFile, 'fine-tuned').score('list', tools);
+    expect(tuned.embed).toHaveBeenCalledTimes(2);
+    expect(tuned.embed).toHaveBeenNthCalledWith(1, tools.map(embeddingText));
+
+    // A cache from before vectors were tagged with their model only serves an untagged index.
+    await new EmbeddingIndex(wordModel(), makeLogger(), cacheFile).score('list', tools);
+    const { model: _model, ...legacy } = JSON.parse(readFileSync(cacheFile, 'utf-8'));
+    writeFileSync(cacheFile, JSON.stringify(legacy));
+    const untagged = wordModel();
+    await new EmbeddingIndex(untagged, makeLogger(), cacheFile).score('list', tools);
+    expect(untagged.embed).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-indexes instead of comparing vectors of another size', async () => {
+    const logger = makeLogger();
+    let size = 4;
+    const model = { embed: jest.fn(async (texts: string[]) => texts.map(() => new Float32Array(size).fill(1))) };
+    const index = new EmbeddingIndex(model, logger);
+    expect(await index.score('list', tools)).toBeDefined();
+
+    size = 8;
+    expect(await index.score('list', tools)).toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith('Cached tool embeddings do not match the model; re-indexing');
+    const rescored = await index.score('list', tools);
+    expect([...rescored!.values()].every(Number.isFinite)).toBe(true);
+  });
+
   it('answers lexically while a large catalog indexes in the background', async () => {
     const model = wordModel();
     const index = new EmbeddingIndex(model, makeLogger());
@@ -415,6 +451,20 @@ describe('NeedleBridge process edges', () => {
     say(child, { id: two, result: { vectors: [] } });
     await expect(second).resolves.toEqual([]);
     expect(child.unref).toHaveBeenCalled();
+    await model.close();
+  });
+
+  it('survives EPIPE on a dying bridge and rejects the request when it exits', async () => {
+    const child = fakeChild();
+    const { model } = bridgeWith(child);
+    const pending = model.embed(['x']);
+    say(child, { ready: true });
+    await tick();
+
+    // Without a listener this emit throws, which in production is an uncaught exception.
+    expect(() => child.stdin.emit('error', new Error('write EPIPE'))).not.toThrow();
+    child.emit('exit', null, 'SIGKILL');
+    await expect(pending).rejects.toThrow('Local model bridge exited (SIGKILL)');
     await model.close();
   });
 

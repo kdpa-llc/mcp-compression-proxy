@@ -296,6 +296,7 @@ export async function reviewProposals(
     }
 
     const afterParameters = { ...beforeParameters };
+    const proposedParameters: Record<string, string> = {};
     if (entry.parameters) {
       if (mode === 'compress') {
         problems.push('parameters can only be changed in rewrite mode');
@@ -310,6 +311,7 @@ export async function reviewProposals(
           problems.push(`parameter "${name}" description is over ${MAX_PARAMETER_CHARS} chars`);
         } else {
           afterParameters[name] = text.trim();
+          proposedParameters[name] = text.trim();
         }
       }
     }
@@ -340,7 +342,9 @@ export async function reviewProposals(
               server: entry.server,
               tool: entry.tool,
               description,
-              ...(entry.parameters ? { parameters: entry.parameters } : {}),
+              // What review showed is what gets saved: trimmed, and only
+              // parameters that passed the checks.
+              ...(entry.parameters ? { parameters: proposedParameters } : {}),
             },
           }
         : {}),

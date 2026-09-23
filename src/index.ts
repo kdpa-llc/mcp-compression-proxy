@@ -1366,7 +1366,10 @@ async function main() {
   if (localModel?.embeddings && config?.toolExposure === 'lazy') {
     // Lazy mode searches on every discovery; index before the first one.
     const embeddings = localModel.embeddings;
-    void toolCatalog.list().then((tools) => embeddings.warm(tools));
+    toolCatalog
+      .list()
+      .then((tools) => embeddings.warm(tools))
+      .catch((error) => logger.warn({ error: String(error) }, 'Could not index tool embeddings'));
   }
 
   // Outside the branch above on purpose: the fingerprint the watch polls counts
