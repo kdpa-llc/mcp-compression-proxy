@@ -1,4 +1,4 @@
-import { describe, it, expect, jest, afterEach } from '@jest/globals';
+import { describe, it, expect, jest, afterEach, afterAll } from '@jest/globals';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { PayloadStore } from '../../src/cli/payload-interceptor.js';
 import { MetaTools, META_TOOLS, LAZY_KEPT_MANAGEMENT_TOOLS } from '../../src/native/meta-tools.js';
@@ -194,3 +194,75 @@ describe('MetaTools', () => {
     expect((await meta.call('mcp-compression-proxy__unknown', {})).isError).toBe(true);
   });
 });
+
+describe('MetaTools edges', () => {
+  const store = new PayloadStore();
+  afterAll(() => store.destroy());
+
+  function metaWith(overrides: Record<string, unknown> = {}) {
+    const compression = {
+      getCompressedDescription: () => undefined,
+      invalidate: jest.fn((_server: string, _tool: string) => false),
+      saveToDisk: jest.fn(async () => undefined),
+    };
+    const catalog = {
+      list: async () => tools,
+      find: async (server: string, tool: string) =>
+        tools.find((entry) => entry.serverName === server && entry.toolName === tool),
+      ...overrides,
+    };
+    return {
+      compression,
+      meta: new MetaTools({
+        catalog,
+        search: new ToolSearch(catalog, compression),
+        compression,
+        payloadStore: store,
+        threshold: () => 10_000,
+        model: () => undefined,
+        callBackend: async () => ({ content: [] }),
+        executeText: async () => ({ output: '' }),
+      }),
+    };
+  }
+
+  it('rejects missing names and ids', async () => {
+    const { meta } = metaWith();
+    expect((await meta.call(META_TOOLS.getTool, {})).isError).toBe(true);
+    expect((await meta.call(META_TOOLS.callTool, { server: 'gh' })).isError).toBe(true);
+    expect((await meta.call(META_TOOLS.shapeOutput, { where: 'x' })).isError).toBe(true);
+  });
+
+  it('turns a thrown non-Error into a tool error', async () => {
+    const { meta } = metaWith({
+      find: async () => {
+        throw 'catalog offline';
+      },
+    });
+    const result = await meta.call(META_TOOLS.getTool, { server: 'gh', tool: 'x' });
+    expect(result.isError).toBe(true);
+    expect(text(result)).toBe('Error: catalog offline');
+  });
+
+  it('counts only compressions it could actually re-queue', async () => {
+    const { meta, compression } = metaWith();
+    compression.getCompressedDescription = ((_server: string, tool: string) =>
+      tool === 'list_issues' ? 'Create a new issue.' : undefined) as never;
+
+    const audit = JSON.parse(text(await meta.call(META_TOOLS.auditCompression, { requeue: true })));
+    expect(audit.confusable).toHaveLength(1);
+    expect(audit.requeued).toBe(0);
+    expect(compression.invalidate).toHaveBeenCalledWith('gh', 'list_issues');
+  });
+
+  it('audits without re-queueing unless asked, and saves nothing when nothing was re-queued', async () => {
+    const { meta, compression } = metaWith();
+    const plain = JSON.parse(text(await meta.call(META_TOOLS.auditCompression, {})));
+    expect(plain.requeued).toBe(0);
+
+    const asked = JSON.parse(text(await meta.call(META_TOOLS.auditCompression, { requeue: true })));
+    expect(asked.requeued).toBe(0);
+    expect(compression.saveToDisk).not.toHaveBeenCalled();
+  });
+});
+

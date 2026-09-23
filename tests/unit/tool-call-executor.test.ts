@@ -228,6 +228,24 @@ describe('callToolWithAuthRecovery', () => {
       expect(manager.getAuthFailureConfirmer()).toBe(confirmer);
     });
 
+    it('reads only the text parts of a result for the confirmer', async () => {
+      const client = clientWithCall(
+        jest.fn<Client['callTool']>().mockResolvedValue({
+          content: [
+            { type: 'image', data: 'AAAA', mimeType: 'image/png' },
+            { type: 'text', text: quoted },
+          ],
+        })
+      );
+      await initializeWithClients([client]);
+      const confirmer = jest.fn(async (_text: string) => false);
+      manager.setAuthFailureConfirmer(confirmer);
+
+      await callToolWithAuthRecovery(manager, logger, 'builder-mcp', 'InternalSearch', {});
+
+      expect(confirmer).toHaveBeenCalledWith(quoted);
+    });
+
     it('lets the pattern stand when the confirmer fails', async () => {
       await initializeWithClients([contentClient(), contentClient(), contentClient()]);
       manager.setAuthFailureConfirmer(async () => {

@@ -42,3 +42,17 @@ describe('shaped calls', () => {
     expect(shaped.meta.notes.join(' ')).toContain('stored as a payload');
   });
 });
+
+describe('shaped call edges', () => {
+  it('stores no source for an empty output', async () => {
+    const payloads = new PayloadStore();
+    try {
+      const shaped = await shapeAndStore('', { where: 'x' }, payloads, 10_000);
+      expect(shaped.source).toBeUndefined();
+      expect(shaped).not.toHaveProperty('source');
+    } finally {
+      payloads.destroy();
+    }
+  });
+});
+

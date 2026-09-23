@@ -104,3 +104,10 @@ describe('openAiSamplingHost', () => {
     ]);
   });
 });
+
+describe('openAiSamplingHost defaults', () => {
+  it('uses the global fetch when none is given', () => {
+    expect(openAiSamplingHost({ url: 'http://h', model: 'm' }).getClientCapabilities()).toEqual({ sampling: {} });
+  });
+});
+

@@ -294,3 +294,72 @@ describe('UsageLog', () => {
     expect(readFileSync(file, 'utf-8').trim().split('\n')).toHaveLength(MAX_USAGE_RECORDS);
   });
 });
+
+describe('search edges', () => {
+  it('ignores a query with no words, and ranks ties by name', async () => {
+    const tools: CatalogTool[] = [
+      { serverName: 'b', toolName: 'y', description: 'Read files.', inputSchema: { type: 'object' } },
+      { serverName: 'a', toolName: 'x', description: 'Read files.', inputSchema: { type: 'object' } },
+      { serverName: 'c', toolName: 'z', inputSchema: { type: 'object' } },
+    ];
+    const search = searchOver(tools);
+
+    expect((await search.search('!!!')).hits).toEqual([]);
+    expect(keys(await search.search('read'))).toEqual(['a/x', 'b/y']);
+    expect((await search.search('c/z')).hits[0]).toMatchObject({ tool: 'z', description: '' });
+  });
+
+  it('orders several usage-boosted tools by strength', async () => {
+    const usage = {
+      scores: () => new Map([['filesystem/read_file', 0.2], ['git/git_log', 0.9]]),
+      recordSearch: () => undefined,
+    } as unknown as UsageLog;
+    const result = await searchOver(catalogTools, { usage }).search('zzz unmatched');
+    expect(keys(result).slice(0, 2)).toEqual(['git/git_log', 'filesystem/read_file']);
+  });
+
+  it('scores documents that have no words at all', () => {
+    expect(new Bm25Index([{ id: 'a', name: '', text: '' }, { id: 'b', name: 'read', text: '' }]).search('read'))
+      .toEqual([{ id: 'b', score: expect.any(Number) }]);
+  });
+});
+
+describe('UsageLog edges', () => {
+  it('keeps only recent searches, skips records it cannot use, and ignores empty queries', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'usage-edges-'));
+    try {
+      const file = join(dir, 'usage.jsonl');
+      writeFileSync(file, `${JSON.stringify({ tool: 'x' })}\n`);
+      let clock = 0;
+      const log = new UsageLog(file, () => true, () => clock);
+
+      expect(log.load()).toEqual([]);
+      for (let index = 0; index < 21; index++) log.recordSearch(`q${index}`, [`s/t${index}`]);
+      clock += 1000;
+      // The oldest search fell out, so its result can no longer be attributed.
+      expect(log.recordSelection('s', 't0')).toMatchObject({ rank: null });
+      expect(log.recordSelection('s', 't20')).toMatchObject({ rank: 1 });
+      expect(log.scores('the of').size).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('search tie-breaks', () => {
+  it('orders equal matches by name', async () => {
+    const tools: CatalogTool[] = ['xyz_two', 'xyz_one'].map((toolName) => ({
+      serverName: 'aa',
+      toolName,
+      description: 'Unrelated words.',
+      inputSchema: { type: 'object' },
+    }));
+    // "yz" is no token of either, only a substring of both names.
+    expect(keys(await searchOver(tools).search('yz_'))).toEqual(['aa/xyz_one', 'aa/xyz_two']);
+  });
+
+  it('scores an index whose documents have no words', () => {
+    expect(new Bm25Index([{ id: 'a', name: '', text: '' }]).search('read')).toEqual([]);
+  });
+});
+

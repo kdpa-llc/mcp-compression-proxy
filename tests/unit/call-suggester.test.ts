@@ -146,3 +146,26 @@ describe('CallSuggester', () => {
     expect(failed.notes.join(' ')).toContain('bridge down');
   });
 });
+
+describe('CallSuggester edges', () => {
+  it('drops a search hit the catalog no longer has, and reports a non-Error failure', async () => {
+    const search = new ToolSearch(catalog, { getCompressedDescription: () => undefined });
+    const gone = { find: async (server: string, tool: string) => (tool === 'delete_file' ? undefined : catalog.find(server, tool)) };
+    const selectTool = jest.fn<ModelBackend['selectTool']>(async () => Promise.reject('bridge gone'));
+
+    const result = await new CallSuggester(search, gone, { selectTool }).suggest('delete or list files');
+
+    expect(result.candidates.map((candidate) => candidate.tool)).not.toContain('delete_file');
+    expect(result.notes.join(' ')).toContain('bridge gone');
+  });
+
+  it('reports an ungrounded path that names the whole call', async () => {
+    const { instance } = suggester({
+      calls: [{ name: 'fs__list_directory', arguments: {} }],
+      ungrounded: ['fs__list_directory'],
+    });
+    const result = await instance.suggest('list the files in a folder');
+    expect(result.proposal?.ungrounded).toEqual(['fs__list_directory']);
+  });
+});
+

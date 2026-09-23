@@ -409,6 +409,72 @@ describe('CLI commands', () => {
     });
   });
 
+  describe('output edges', () => {
+    const quality = { top1: 1, top5: 1, misses: 0, top1Rate: 100, top5Rate: 100, missRate: 0 };
+
+    it('shows counts after learning was switched off, with no top tools', async () => {
+      mockSendRequest.mockResolvedValue({ id: '1', result: { ...quality, enabled: false, selections: 1, topTools: [] } });
+      await handleSearchQuality(SOCKET);
+      const out = stdoutLines.join('\n');
+      expect(out).toContain('Recorded choices: 1 (learning is now off)');
+      expect(out).not.toContain('Most chosen tools');
+    });
+
+    it('explains a refused run without a reason', async () => {
+      mockSendRequest.mockResolvedValue({ id: '1', result: { suggestion: { runnable: false } } });
+      await handleSuggest(SOCKET, 'x', { run: true });
+      expect(stderrLines.join('\n')).toContain('Not run: no runnable proposal');
+    });
+
+    it('shows only what changed in a review, marking empty text', () => {
+      const text = formatReview({
+        mode: 'rewrite',
+        method: 'semantic',
+        accepted: 0,
+        rejected: 1,
+        reviewed: [
+          {
+            server: 's',
+            tool: 't',
+            accepted: false,
+            problems: ['description is empty'],
+            warnings: [],
+            before: { description: 'Same.', parameters: { kept: 'unchanged' } },
+            after: { description: '', parameters: { kept: 'unchanged', added: 'new text' } },
+            chars: { before: 5, after: 0 },
+          },
+          {
+            server: 's',
+            tool: 'u',
+            accepted: true,
+            problems: [],
+            warnings: [],
+            before: { description: 'Same.', parameters: {} },
+            after: { description: 'Same.', parameters: {} },
+            chars: { before: 5, after: 5 },
+          },
+        ],
+      });
+      expect(text).toContain('+ (none)');
+      expect(text).not.toContain('kept:');
+      expect(text).toContain('added:');
+      expect(text).toContain('      - (none)');
+      expect(text).toContain('distinctness checked by meaning');
+      expect(text.split('\n').filter((line) => line.includes('Same.'))).toHaveLength(1);
+    });
+
+    it('applies with a zero count when nothing is reported, and gives no hint when nothing passed', async () => {
+      const empty = { mode: 'rewrite', method: 'lexical', reviewed: [], accepted: 0, rejected: 0 };
+      mockSendRequest.mockResolvedValue({ id: '1', result: empty });
+      await handleDescribe(SOCKET, 'apply', { proposals: '[]' });
+      expect(stdoutLines.join('\n')).toContain('Applied 0.');
+
+      stdoutLines.length = 0;
+      await handleDescribe(SOCKET, 'review', { proposals: '[]' });
+      expect(stdoutLines.join('\n')).not.toContain('Nothing was saved');
+    });
+  });
+
   describe('shaping, suggest, audit and compress', () => {
     it('parses --want, --where and --limit out of call arguments', () => {
       expect(

@@ -337,3 +337,126 @@ describe('helpers', () => {
     expect(ranked.indexes).toEqual([]);
   });
 });
+
+describe('shapeOutput edge cases', () => {
+  const report = () => ({ missing: [] as string[], mismatched: [] as string[] });
+
+  it('reports top-level problems at the root path', () => {
+    const issues = report();
+    expect(project(null, 'string', '', issues)).toBeNull();
+    expect(project(5, 'string', '', issues)).toBe(5);
+    expect(project(null, ['string'], '', issues)).toBeNull();
+    expect(project(null, { a: 'string' }, '', issues)).toBeNull();
+    expect(project(5, { a: 'string' }, '', issues)).toBeNull();
+    expect(project({}, { a: { b: 'string' } }, '', issues)).toEqual({ a: null });
+    expect(issues.missing).toEqual(['/', '/', '/', '/a']);
+    expect(issues.mismatched).toEqual(['/', '/']);
+  });
+
+  it('checks object and any types, and dotted paths that stop early', () => {
+    const issues = report();
+    expect(
+      project(
+        { o: { x: 1 }, n: 'anything', a: { b: 'text' }, s: 'str' },
+        { o: 'object', n: 'any', 'a.b.c': 'string?', 's.t': 'string?' },
+        '',
+        issues
+      )
+    ).toEqual({ o: { x: 1 }, n: 'anything', 'a.b.c': null, 's.t': null });
+    expect(issues).toEqual({ missing: [], mismatched: [] });
+  });
+
+  it('filters a list of plain strings', async () => {
+    const result = await shapeOutput(JSON.stringify(['alpha login', 'beta', 'gamma']), { where: 'login' });
+    expect(result.data).toEqual(['alpha login']);
+  });
+
+  it('applies an item shape to a filtered top-level list', async () => {
+    const result = await shapeOutput(JSON.stringify(issues), { want: { number: 'integer' }, where: 'readme' });
+    expect(result.data).toEqual([{ number: 4 }]);
+  });
+
+  it('applies a list shape to a value with no list, without mentioning where', async () => {
+    const result = await shapeOutput(JSON.stringify({ a: 1 }), { want: [{ a: 'number' }] });
+    expect(result.data).toEqual([{ a: 1 }]);
+    expect(result.meta.notes).toEqual([]);
+  });
+
+  it('treats JSON-looking text that does not parse as text', async () => {
+    const result = await shapeOutput('{not json', { want: { a: 'string' } });
+    expect(result.meta.method).toBe('none');
+  });
+
+  it('keeps ties in their original order', async () => {
+    const result = await shapeOutput(JSON.stringify(['same words', 'same words']), { where: 'same' });
+    expect(result.meta.items?.sourceIndexes).toEqual([0, 1]);
+  });
+
+  it('ranks several items that are all close in meaning, best first', async () => {
+    const vectors: Record<string, number[]> = {
+      login: [1, 0, 0],
+      'login token': [1, 1, 0],
+      dark: [0, 0, 1],
+      readme: [0, 0, 1],
+      query: [1, 1, 0],
+    };
+    const embed = jest.fn(async (texts: string[]) =>
+      texts.map((text) => new Float32Array(vectors[JSON.parse(`"${text.replace(/^"|"$/g, '')}"`)] ?? vectors.query))
+    );
+    const ranked = await rankItems(['login', 'login token', 'dark', 'readme'], 'unrelated', 5, { embed });
+    expect(ranked.indexes).toEqual([1, 0]);
+  });
+
+  it('skips meaning-based ranking when the model returns the wrong number of vectors', async () => {
+    const embed = jest.fn(async () => [new Float32Array([1])]);
+    const ranked = await rankItems(['a', 'b'], 'a', 5, { embed });
+    expect(ranked.ranking).toBe('lexical');
+  });
+
+  it('reports a model failure that is not an Error', async () => {
+    const embed = jest.fn(async () => Promise.reject('bridge gone'));
+    const ranked = await rankItems(['a'], 'a', 5, { embed });
+    expect(ranked.notes[0]).toContain('bridge gone');
+  });
+
+  it('notes when only some items were compared by meaning', async () => {
+    const items = Array.from({ length: 301 }, (_unused, index) => `item ${index}`);
+    const embed = jest.fn(async (texts: string[]) => texts.map(() => new Float32Array([1, 0])));
+    const ranked = await rankItems(items, 'item', 3, { embed });
+    expect(ranked.notes[0]).toContain('Only the first 300');
+  });
+
+  it('chunks text with no line breaks at fixed size', () => {
+    const chunks = chunkText('x'.repeat(500), 200, 20);
+    expect(chunks.every((chunk) => chunk.length <= 200)).toBe(true);
+    expect(chunks.length).toBe(3);
+  });
+
+  it('caps text extraction at the limit without where, and accepts unknown confidence', async () => {
+    const model = stubModel([
+      { value: { title: 'one' }, confidence: null },
+      { value: { title: 'two' }, confidence: null },
+    ]);
+    const blocks = ['title: one', 'title: two', 'title: three'].join('\n\n');
+    const result = await shapeOutput(blocks, { want: [{ title: 'string' }], limit: 2 }, model);
+
+    expect(model.extract).toHaveBeenCalledTimes(2);
+    expect(result.meta.notes.join(' ')).toContain('Only the first 2 of 3 blocks');
+    expect(result.meta.confidence).toBeNull();
+  });
+
+  it('marks a single withheld record', async () => {
+    const model = stubModel([{ value: { title: 'x' }, withheld: true, confidence: null }]);
+    const result = await shapeOutput('title: x', { want: { title: 'string' } }, model);
+    expect(result.data).toEqual({ title: 'x' });
+    expect(result.meta.notes.join(' ')).toContain('withheld this extraction');
+  });
+});
+
+describe('dotted paths', () => {
+  it('stops at a missing step', () => {
+    const issues = { missing: [] as string[], mismatched: [] as string[] };
+    expect(project({ a: { b: 1 } }, { 'a.x': 'number?' }, '', issues)).toEqual({ 'a.x': null });
+  });
+});
+
