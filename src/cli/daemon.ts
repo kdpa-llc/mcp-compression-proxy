@@ -121,6 +121,9 @@ async function startDaemon(): Promise<void> {
     semantic: localModel?.embeddings,
   });
   const suggester = new CallSuggester(toolSearch, toolCatalog, localModel?.backend);
+  // Audits compare the whole catalog; the embeddings cache spares re-embedding
+  // every unchanged description each time.
+  const auditEmbedder = localModel?.embeddings ?? localModel?.backend;
   if (localModel?.config.confirmAuthFailures) {
     clientManager.setAuthFailureConfirmer(modelAuthConfirmer(localModel.backend));
   }
@@ -386,7 +389,7 @@ async function startDaemon(): Promise<void> {
           const audit = await auditCompression(
             await toolCatalog.list(),
             compressionCache,
-            localModel?.backend
+            auditEmbedder
           );
           let requeued = 0;
           if (params?.requeue === true) {
@@ -422,7 +425,7 @@ async function startDaemon(): Promise<void> {
           if (action === 'review' || action === 'apply') {
             const review = await reviewProposals(params?.proposals, tools, compressionCache, {
               mode,
-              model: localModel?.backend,
+              model: auditEmbedder,
             });
             if (action === 'review') return { id, result: review };
             const outcome = applyReview(review, tools, compressionCache);

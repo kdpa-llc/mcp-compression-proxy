@@ -271,6 +271,31 @@ describe('MetaTools edges', () => {
     expect(compression.invalidate).toHaveBeenCalledWith('gh', 'list_issues');
   });
 
+  it('audits with the cached embedder when one is given', async () => {
+    const embed = jest.fn(async (texts: string[]) => texts.map((text) => new Float32Array([text.length, 1])));
+    const compression = {
+      getCompressedDescription: () => undefined,
+      invalidate: () => false,
+      saveToDisk: async () => undefined,
+    };
+    const catalog = { list: async () => tools, find: async () => undefined };
+    const meta = new MetaTools({
+      catalog,
+      search: new ToolSearch(catalog, compression),
+      compression,
+      payloadStore: store,
+      threshold: () => 10_000,
+      model: () => undefined,
+      embedder: () => ({ embed }),
+      callBackend: async () => ({ content: [] }),
+      executeText: async () => ({ output: '' }),
+    });
+
+    const audit = JSON.parse(text(await meta.call(META_TOOLS.auditCompression, {})));
+    expect(audit.method).toBe('semantic');
+    expect(embed).toHaveBeenCalled();
+  });
+
   it('audits without re-queueing unless asked, and saves nothing when nothing was re-queued', async () => {
     const { meta, compression } = metaWith();
     const plain = JSON.parse(text(await meta.call(META_TOOLS.auditCompression, {})));

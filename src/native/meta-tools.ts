@@ -63,7 +63,10 @@ const DEFINITIONS: Record<string, Tool> = {
       properties: {
         server: { type: 'string' },
         tool: { type: 'string' },
-        arguments: { type: 'object' },
+        arguments: {
+          type: 'object',
+          description: "The tool's arguments, as get_tool's inputSchema describes them.",
+        },
         ...SHAPE_PROPERTIES,
       },
       required: ['server', 'tool'],
@@ -135,6 +138,8 @@ export interface MetaToolDeps {
   payloadStore: PayloadStore;
   threshold(): number;
   model(): ModelBackend | undefined;
+  /** Embeddings for the audit, cached when the model has an index; defaults to model(). */
+  embedder?(): Pick<ModelBackend, 'embed'> | undefined;
   /** A backend call as the client would see it, payload capture applied. */
   callBackend(server: string, tool: string, args: Record<string, unknown>): Promise<CallToolResult>;
   /** A backend call's joined text, for shaping. */
@@ -301,7 +306,7 @@ export class MetaTools {
     const audit = await auditCompression(
       await this.deps.catalog.list(),
       this.deps.compression,
-      this.deps.model()
+      this.deps.embedder?.() ?? this.deps.model()
     );
     let requeued = 0;
     if (args.requeue === true) {

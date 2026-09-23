@@ -1,5 +1,7 @@
 import { describe, it, expect, jest } from '@jest/globals';
+import type { Logger } from 'pino';
 import { auditCompression } from '../../src/services/compression-audit.js';
+import { EmbeddingIndex } from '../../src/models/embedding-index.js';
 import type { CatalogTool } from '../../src/mcp/tool-catalog.js';
 
 function tool(serverName: string, toolName: string, description: string): CatalogTool {
@@ -68,6 +70,26 @@ describe('auditCompression', () => {
 
     expect(audit.method).toBe('semantic');
     expect(audit.confusable.map((finding) => finding.tool)).toEqual(['fs/read_file']);
+  });
+
+  it('re-embeds only changed descriptions when given the embeddings cache', async () => {
+    const embed = jest.fn(async (texts: string[]) =>
+      texts.map((text) => new Float32Array([text.length, text.split(' ').length, text.includes('several') ? 1 : 0]))
+    );
+    const logger = { debug: jest.fn(), info: jest.fn(), warn: jest.fn() } as unknown as Logger;
+    const index = new EmbeddingIndex({ embed }, logger);
+    const cache = { 'fs/read_file': 'Read one file.' };
+
+    expect((await auditCompression(tools, cacheOf(cache), index)).method).toBe('semantic');
+    const firstRun = embed.mock.calls.flatMap(([texts]) => texts).length;
+    // Three distinct originals (two tools share one text) and one compression.
+    expect(firstRun).toBe(4);
+
+    await auditCompression(tools, cacheOf(cache), index);
+    expect(embed.mock.calls.flatMap(([texts]) => texts)).toHaveLength(firstRun);
+
+    await auditCompression(tools, cacheOf({ 'fs/read_file': 'Read a single file.' }), index);
+    expect(embed).toHaveBeenLastCalledWith(['read file. Read a single file.']);
   });
 
   it('falls back to shared words when the model fails', async () => {
