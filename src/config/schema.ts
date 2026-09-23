@@ -212,6 +212,114 @@ export const serverConfigSchema = {
         "Default environment inheritance for all servers (can be overridden per-server). true = pass the proxy's full environment to every backend server (default), false = pass only the transport's safe defaults (PATH, HOME, ...), or an array of variable names to pass through.",
       oneOf: [{ type: 'boolean' }, { type: 'array', items: { type: 'string' } }],
     },
+    toolExposure: {
+      type: 'string',
+      description:
+        "How the native proxy presents backend tools. 'full' (default) lists every tool with its schema. 'lazy' lists only search_tools, get_tool and call_tool (plus pinnedTools), so schemas are loaded on demand like mcp-cli does.",
+      enum: ['full', 'lazy'],
+    },
+    pinnedTools: {
+      type: 'array',
+      description:
+        "Tool name patterns ('server__tool', wildcards allowed) still listed directly when toolExposure is 'lazy'.",
+      items: { type: 'string', minLength: 1 },
+    },
+    search: {
+      type: 'object',
+      description: 'Tool search settings for mcp-cli search and the lazy-mode search_tools tool.',
+      properties: {
+        limit: {
+          type: 'number',
+          description: 'Results returned by default. Default: 15.',
+          minimum: 1,
+        },
+        learnFromUsage: {
+          type: 'boolean',
+          description:
+            'Record which tool an agent uses after a search (locally, owner-only) to rank those tools higher for similar queries and to report search quality. Default: false.',
+        },
+      },
+      additionalProperties: false,
+    },
+    model: {
+      type: 'object',
+      description:
+        'Optional local model (Cactus Needle 3) used for semantic search, call suggestions, text extraction and compression checks. Runs as a local subprocess; nothing is sent to a hosted service.',
+      properties: {
+        provider: {
+          type: 'string',
+          enum: ['needle'],
+          description: 'Model provider. Only "needle" is supported.',
+        },
+        command: {
+          type: 'string',
+          description:
+            'Interpreter that runs the bridge. Default: "python3". Point it at a virtualenv with cactus-needle installed.',
+          minLength: 1,
+        },
+        args: {
+          type: 'array',
+          description: 'Arguments for the command. Default: the bundled needle_bridge.py.',
+          items: { type: 'string' },
+        },
+        env: {
+          type: 'object',
+          description:
+            'Extra environment variables for the bridge. Telemetry is always disabled (NEEDLE_TELEMETRY=0, DO_NOT_TRACK=1).',
+          additionalProperties: { type: 'string' },
+        },
+        timeout: {
+          type: 'number',
+          description: 'Seconds to wait for one model request. Default: 60.',
+          minimum: 1,
+        },
+        idleTimeout: {
+          type: 'number',
+          description: 'Seconds of inactivity before the bridge process is stopped. Default: 600. 0 keeps it running.',
+          minimum: 0,
+        },
+        semanticSearch: {
+          type: 'boolean',
+          description: 'Blend model similarity into tool search. Default: true.',
+        },
+        confirmAuthFailures: {
+          type: 'boolean',
+          description:
+            'When an auth error pattern appears inside a long, successful tool result, ask the model whether it is really an authentication failure before dropping the connection. Default: false.',
+        },
+      },
+      required: ['provider'],
+      additionalProperties: false,
+    },
+    compressor: {
+      type: 'object',
+      description:
+        'An OpenAI-compatible chat completions endpoint (Ollama, LM Studio, vLLM, a hosted API) that writes compressed descriptions when the MCP client cannot lend its model through sampling.',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'Base URL, e.g. "http://localhost:11434/v1". /chat/completions is appended.',
+          minLength: 1,
+        },
+        model: { type: 'string', description: 'Model name, e.g. "llama3.2".', minLength: 1 },
+        apiKey: {
+          type: 'string',
+          description: 'Bearer token, usually "${OPENAI_API_KEY}". Omit for local servers.',
+        },
+        headers: {
+          type: 'object',
+          description: 'Extra HTTP headers.',
+          additionalProperties: { type: 'string' },
+        },
+        timeout: {
+          type: 'number',
+          description: 'Seconds to wait for one completion. Default: 120.',
+          minimum: 1,
+        },
+      },
+      required: ['url', 'model'],
+      additionalProperties: false,
+    },
     compressionFallbackBehavior: {
       type: 'string',
       description:
@@ -228,6 +336,33 @@ export type InheritEnv = boolean | string[];
 
 /** How to describe a tool that has no compressed description cached yet. */
 export type CompressionFallbackBehavior = 'original' | 'blank';
+
+/** How the native proxy presents backend tools. */
+export type ToolExposure = 'full' | 'lazy';
+
+export interface SearchConfig {
+  limit?: number;
+  learnFromUsage?: boolean;
+}
+
+export interface ModelConfig {
+  provider: 'needle';
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  timeout?: number;
+  idleTimeout?: number;
+  semanticSearch?: boolean;
+  confirmAuthFailures?: boolean;
+}
+
+export interface CompressorConfig {
+  url: string;
+  model: string;
+  apiKey?: string;
+  headers?: Record<string, string>;
+  timeout?: number;
+}
 
 export type ServerConfigJSON = {
   mcpServers: Array<{
@@ -263,4 +398,9 @@ export type ServerConfigJSON = {
   };
   inheritEnv?: InheritEnv;
   compressionFallbackBehavior?: CompressionFallbackBehavior;
+  toolExposure?: ToolExposure;
+  pinnedTools?: string[];
+  search?: SearchConfig;
+  model?: ModelConfig;
+  compressor?: CompressorConfig;
 };
