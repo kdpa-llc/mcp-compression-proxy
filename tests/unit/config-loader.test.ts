@@ -509,6 +509,56 @@ describe('Config Loader', () => {
       }));
     });
 
+    it('merges search, exposure, model and compressor across user and project config', async () => {
+      const userConfig = {
+        toolExposure: 'lazy',
+        pinnedTools: ['user__tool'],
+        search: { limit: 10, learnFromUsage: true },
+        model: { provider: 'needle', command: '/user/python', timeout: 30 },
+        compressor: { url: 'http://user/v1', model: 'small' },
+        mcpServers: [{ name: 'user-server', command: 'npx' }],
+      };
+      const projectConfig = {
+        pinnedTools: ['project__tool'],
+        search: { limit: 5 },
+        model: { provider: 'needle', command: '/project/python' },
+        compressor: { url: 'http://project/v1', model: 'large' },
+        mcpServers: [{ name: 'project-server', command: 'npx' }],
+      };
+
+      mkdirSync(join(testDir, '.mcp-compression-proxy'), { recursive: true });
+      writeFileSync(
+        join(testDir, '.mcp-compression-proxy', 'servers.json'),
+        JSON.stringify(userConfig)
+      );
+      writeFileSync(join(testDir, 'servers.json'), JSON.stringify(projectConfig));
+
+      const { loadJSONServers } = await importLoader();
+      const result = loadJSONServers();
+
+      expect(result).toEqual(expect.objectContaining({
+        toolExposure: 'lazy',
+        pinnedTools: ['user__tool', 'project__tool'],
+        search: { limit: 5, learnFromUsage: true },
+        model: { provider: 'needle', command: '/project/python', timeout: 30 },
+        compressor: { url: 'http://project/v1', model: 'large' },
+      }));
+    });
+
+    it('leaves the newer sections unset when neither file has them', async () => {
+      writeFileSync(join(testDir, 'servers.json'), JSON.stringify({
+        mcpServers: [{ name: 'plain', command: 'npx' }],
+      }));
+
+      const { loadJSONServers } = await importLoader();
+      const result = loadJSONServers();
+
+      expect(result?.toolExposure).toBeUndefined();
+      expect(result?.pinnedTools).toEqual([]);
+      expect(result?.model).toBeUndefined();
+      expect(result?.compressor).toBeUndefined();
+    });
+
     it('uses maxConnectionAgeSeconds as a legacy soft-age alias', async () => {
       writeFileSync(join(testDir, 'servers.json'), JSON.stringify({
         maxConnectionAgeSeconds: 1800,

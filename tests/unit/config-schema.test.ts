@@ -155,4 +155,48 @@ describe('server config schema', () => {
       expect(validate({ ...base, maxConnectionAgeSeconds: 3600 })).toBe(true);
     });
   });
+
+  describe('search, exposure, model and compressor', () => {
+    it('accepts a full set of the newer sections', () => {
+      expect(
+        validate({
+          ...base,
+          toolExposure: 'lazy',
+          pinnedTools: ['srv__read'],
+          search: { limit: 10, learnFromUsage: true },
+          model: {
+            provider: 'needle',
+            command: '/venv/bin/python',
+            args: ['bridge.py'],
+            env: { HF_HUB_OFFLINE: '1' },
+            timeout: 30,
+            idleTimeout: 0,
+            semanticSearch: false,
+            confirmAuthFailures: true,
+          },
+          compressor: {
+            url: 'http://localhost:11434/v1',
+            model: 'llama3.2',
+            apiKey: '',
+            headers: { 'x-org': 'a' },
+            timeout: 60,
+          },
+        })
+      ).toBe(true);
+    });
+
+    it.each([
+      { toolExposure: 'minimal' },
+      { pinnedTools: [''] },
+      { search: { limit: 0 } },
+      { search: { rank: 'bm25' } },
+      { model: { command: 'python3' } },
+      { model: { provider: 'openai' } },
+      { model: { provider: 'needle', idleTimeout: -1 } },
+      { compressor: { url: 'http://h' } },
+      { compressor: { url: 'http://h', model: 'm', temperature: 1 } },
+    ])('rejects %j', (settings) => {
+      expect(validate({ ...base, ...settings })).toBe(false);
+    });
+  });
 });
