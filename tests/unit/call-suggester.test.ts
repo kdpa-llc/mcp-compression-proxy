@@ -167,5 +167,22 @@ describe('CallSuggester edges', () => {
     const result = await instance.suggest('list the files in a folder');
     expect(result.proposal?.ungrounded).toEqual(['fs__list_directory']);
   });
-});
 
+  it('describes an undescribed tool by name, and treats a call without arguments as empty', async () => {
+    const bare: CatalogTool = { serverName: 'fs', toolName: 'stat', inputSchema: { type: 'object' } };
+    const bareCatalog = { list: async () => [bare], find: async () => bare };
+    const search = new ToolSearch(bareCatalog, { getCompressedDescription: () => undefined });
+    const selectTool = jest.fn<ModelBackend['selectTool']>(async () => ({
+      calls: [{ name: 'fs__stat' } as never],
+      suppressed: [],
+      confidence: 0.95,
+      ungrounded: [],
+    }));
+
+    const result = await new CallSuggester(search, bareCatalog, { selectTool }).suggest('stat');
+
+    expect(result.candidates[0].description).toBe('');
+    expect(selectTool.mock.calls[0][1][0].description).toBe('stat');
+    expect(result.proposal?.arguments).toEqual({});
+  });
+});

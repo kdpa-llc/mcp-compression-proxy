@@ -146,6 +146,19 @@ describe('NeedleBridge', () => {
     expect((model as unknown as { child?: { pid?: number } }).child?.pid).not.toBe(first);
   });
 
+  it('fills in defaults when a selection or extraction leaves fields out', async () => {
+    const model = track(bridge({ FAKE_BRIDGE_MODE: 'sparse' }));
+    const empty = { calls: [], suppressed: [], confidence: null, ungrounded: [] };
+    const spec = { name: 'fs__list', description: 'List files.', parameters: {} };
+
+    expect(await model.selectTool('list files', [spec])).toEqual(empty);
+    expect(await model.extract('path: /tmp', spec)).toEqual({
+      ...empty,
+      value: null,
+      withheld: false,
+    });
+  });
+
   it('refuses work after close', async () => {
     const model = bridge();
     await model.close();

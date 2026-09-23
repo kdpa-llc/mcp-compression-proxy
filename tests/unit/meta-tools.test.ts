@@ -264,5 +264,15 @@ describe('MetaTools edges', () => {
     expect(asked.requeued).toBe(0);
     expect(compression.saveToDisk).not.toHaveBeenCalled();
   });
-});
 
+  it('searches with the default limit, and describes a tool with no description, title or annotations', async () => {
+    const { meta } = metaWith();
+    const found = JSON.parse(text(await meta.call(META_TOOLS.searchTools, { query: 'issue', limit: 0 })));
+    expect(found.shown).toBe(2);
+
+    const bare = { serverName: 'gh', toolName: 'bare', inputSchema: { type: 'object' as const } };
+    const { meta: bareMeta } = metaWith({ find: async () => bare });
+    const described = JSON.parse(text(await bareMeta.call(META_TOOLS.getTool, { server: 'gh', tool: 'bare' })));
+    expect(described).toEqual({ server: 'gh', tool: 'bare', description: '', inputSchema: { type: 'object' } });
+  });
+});

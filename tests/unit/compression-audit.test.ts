@@ -98,5 +98,10 @@ describe('auditCompression edges', () => {
     expect(audit.checked).toBe(1);
     expect(audit.duplicates).toEqual([]);
   });
-});
 
+  it('reports a model that fails with a non-Error', async () => {
+    const embed = jest.fn(async () => Promise.reject('bridge gone'));
+    const audit = await auditCompression(tools, cacheOf({}), { embed });
+    expect(audit.notes[0]).toContain('(bridge gone)');
+  });
+});

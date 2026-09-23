@@ -57,6 +57,7 @@ export async function shapeAndStore(
   // shapeOutput's data is parsed JSON, text or null - never undefined.
   const serialized = JSON.stringify(shaped.data);
   if (serialized.length > threshold) {
+    // Over the threshold, capture always stores it, so this has a reference.
     const stored = handle(payloadStore.capture(serialized, threshold).reference);
     return {
       meta: {
@@ -67,7 +68,7 @@ export async function shapeAndStore(
         ],
       },
       ...(source ? { source } : {}),
-      ...(stored ? { shapedPayload: stored } : {}),
+      shapedPayload: stored,
     };
   }
 

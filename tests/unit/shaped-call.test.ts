@@ -54,5 +54,15 @@ describe('shaped call edges', () => {
       payloads.destroy();
     }
   });
-});
 
+  it('stores an over-threshold answer even when there was no source to keep', async () => {
+    const payloads = new PayloadStore();
+    try {
+      const shaped = await shapeAndStore('', { where: 'x' }, payloads, -1);
+      expect(shaped).not.toHaveProperty('source');
+      expect(shaped.shapedPayload?.id).toBeDefined();
+    } finally {
+      payloads.destroy();
+    }
+  });
+});

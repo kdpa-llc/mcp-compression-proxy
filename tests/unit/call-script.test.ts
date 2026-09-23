@@ -229,4 +229,21 @@ describe('runCallScript', () => {
       store.destroy();
     }
   });
+
+  it('reports a shaped step with no data as empty output', async () => {
+    const store = new PayloadStore();
+    try {
+      const result = await runCallScript(
+        [{ id: 'a', server: 's', tool: 't', where: 'x' }],
+        async () => ({ output: 'big' }),
+        store,
+        10_000,
+        async () => ({ meta: { notes: [] } as never, shapedPayload: { id: 'p', chars: 3 } })
+      );
+      expect(result.steps[0].output).toBe('');
+      expect(result.steps[0].shaped?.shapedPayload?.id).toBe('p');
+    } finally {
+      store.destroy();
+    }
+  });
 });

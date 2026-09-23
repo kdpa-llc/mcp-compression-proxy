@@ -12,7 +12,8 @@
  * - extract: each schema property filled from a `property: value` line
  *
  * FAKE_BRIDGE_MODE switches in failure modes: fatal, crash-on-request,
- * silent (never answers), slow-start.
+ * silent (never answers), slow-start, sparse (select and extract answer
+ * with an empty object).
  */
 
 import { createInterface } from 'readline';
@@ -56,6 +57,7 @@ function argumentsFrom(text) {
 
 function handle(method, params) {
   if (method === 'ping') return { model: 'fake' };
+  if (mode === 'sparse' && (method === 'select' || method === 'extract')) return {};
   if (method === 'embed') {
     return { dim: DIM, vectors: params.texts.map(embed) };
   }

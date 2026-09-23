@@ -309,5 +309,19 @@ describe('description rewrite edges', () => {
     ]);
     expect(review.reviewed[1].problems).toContain('parameter "a" is not in the tool\'s schema');
   });
-});
 
+  it('uses default options, and shows untyped parameters with their current rewrite', () => {
+    const cache = newCache();
+    const loose: CatalogTool = {
+      serverName: 'x',
+      toolName: 'loose',
+      description: 'Does a thing.',
+      inputSchema: { type: 'object', properties: { query: { description: 'q' } } },
+    };
+    cache.saveCompressed('x', 'loose', 'Does it.', 'Does a thing.', { kind: 'rewritten', parameters: { query: 'Search text' } });
+
+    const batch = nextBatch([loose], cache, { all: true });
+    expect(batch.items[0].parameters).toEqual({ query: { required: false, description: 'q', current: 'Search text' } });
+    expect(nextBatch([bare], newCache()).items).toHaveLength(1);
+  });
+});
