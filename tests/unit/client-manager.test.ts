@@ -1564,6 +1564,23 @@ describe('MCPClientManager', () => {
         expect(onConfigLoaded).toHaveBeenCalledWith(withPatterns);
       });
 
+      it('should pick up edited excludeTools on a tick', async () => {
+        // The daemon used to keep the exclusions it read at startup, so an
+        // edit to excludeTools changed nothing until a restart.
+        await clientConstructor();
+        const loadConfig = jest
+          .fn<() => ConfigResult>()
+          .mockReturnValue({ ...loaded, excludePatterns: ['a__drop_*'] });
+
+        expect(clientManager.isToolExcluded('a', 'drop_table')).toBe(false);
+        clientManager.startConfigWatch(loadConfig, 1000);
+        await jest.advanceTimersByTimeAsync(1000);
+
+        expect(clientManager.isToolExcluded('a', 'drop_table')).toBe(true);
+        expect(clientManager.isToolExcluded('a', 'read')).toBe(false);
+        expect(clientManager.getExcludePatterns()).toEqual(['a__drop_*']);
+      });
+
       it('should keep reconciling when the config hook throws', async () => {
         await clientConstructor();
         const loadConfig = jest.fn<() => ConfigResult>().mockReturnValue(loaded);

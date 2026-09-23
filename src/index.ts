@@ -16,11 +16,12 @@ import { loadJSONServersCached, matchesIgnorePattern } from './config/loader.js'
 import { writeFileSync, readFileSync } from 'fs';
 import { resolve } from 'path';
 import pino from 'pino';
-import { StatsService, type ObservedTool } from './services/stats-service.js';
+import { StatsService } from './services/stats-service.js';
 import { CompressionSampler } from './services/compression-sampler.js';
 import { SERVER_NAME, VERSION } from './version.js';
 import { DEFAULT_PAYLOAD_THRESHOLD, PayloadStore } from './cli/payload-interceptor.js';
 import { runCallScript, type CallScriptStep } from './mcp/call-script.js';
+import { ToolCatalog, type CatalogTool } from './mcp/tool-catalog.js';
 import { getDaemonRuntimePaths } from './cli/runtime-paths.js';
 
 /**
@@ -74,9 +75,6 @@ const compressionSampler = new CompressionSampler(logger, {
   createMessage: (params) => server.createMessage(params),
 });
 
-/** A backend tool plus the metadata needed to namespace and compress it. */
-type BackendTool = ObservedTool & { inputSchema: Tool['inputSchema'] };
-
 function toolResultText(result: CallToolResult): string {
   return result.content
     .flatMap((item) => (item.type === 'text' && item.text ? [item.text] : []))
@@ -102,63 +100,19 @@ async function executeBackendTool(
  */
 const TOOL_CACHE_TTL_MS = 3000;
 
-let toolCache: { expiresAt: number; key: string; tools: BackendTool[] } | undefined;
+const toolCatalog = new ToolCatalog(clientManager, logger, TOOL_CACHE_TTL_MS);
+
+/** A backend tool plus the metadata needed to namespace and compress it. */
+type BackendTool = CatalogTool;
 
 /**
- * Fetch every tool from every connected backend server, once.
- *
- * Callers that need both the tool list and derived counts should reuse a single
- * snapshot rather than calling `listTools` per tool.
- *
- * Excluded tools are dropped here rather than only at the `tools/list` edge:
- * every consumer of this snapshot - the compression tools included - must agree
- * on which tools exist, or the proxy asks the model to spend calls compressing
- * tools it will never advertise and reports coverage percentages that disagree
- * with what the client actually sees.
+ * Every tool from every connected backend, once, with excluded tools already
+ * dropped: every consumer of this snapshot - the compression tools included -
+ * must agree on which tools exist, or the proxy asks the model to spend calls
+ * compressing tools it will never advertise.
  */
-async function fetchAllBackendTools(): Promise<BackendTool[]> {
-  const serverNames = clientManager.getConfiguredServerNames();
-
-  const excludePatterns = loadJSONServersCached()?.excludePatterns || [];
-
-  // Keyed on the connected set and the exclude patterns as well as the clock.
-  // Hot-reload can add or drop a backend between ticks and an edited
-  // servers.json can change what is filtered; serving either from a stale
-  // snapshot would contradict what tools/list reports.
-  const cacheKey = JSON.stringify([excludePatterns, [...serverNames].sort()]);
-
-  if (toolCache && toolCache.expiresAt > Date.now() && toolCache.key === cacheKey) {
-    return toolCache.tools;
-  }
-
-  const perServer = await Promise.all(
-    serverNames.map(async (name): Promise<BackendTool[]> => {
-      try {
-        const result = await clientManager.withClient(name, async ({ client }) =>
-          client.listTools()
-        );
-        return result.tools.map((tool) => ({
-          serverName: name,
-          toolName: tool.name,
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-        }));
-      } catch (error) {
-        logger.error({ server: name, error }, 'Failed to list tools from server');
-        return [];
-      }
-    })
-  );
-
-  const tools = perServer
-    .flat()
-    .filter(
-      (tool) => !matchesIgnorePattern(`${tool.serverName}__${tool.toolName}`, excludePatterns)
-    );
-
-  toolCache = { expiresAt: Date.now() + TOOL_CACHE_TTL_MS, key: cacheKey, tools };
-
-  return tools;
+function fetchAllBackendTools(): Promise<BackendTool[]> {
+  return toolCatalog.list();
 }
 
 /**
@@ -476,18 +430,24 @@ server.setRequestHandler(ListToolsRequestSchema, async (request) => {
       isExpanded
     );
 
+    // title and annotations pass through: clients use hints such as
+    // readOnlyHint to decide what may run without asking. outputSchema does
+    // not - a result over the payload threshold is replaced by a payload
+    // reference, which would fail the client's validation against it.
     return {
       name: `${tool.serverName}__${tool.toolName}`,
       description,
       inputSchema: tool.inputSchema,
+      ...(tool.title !== undefined ? { title: tool.title } : {}),
+      ...(tool.annotations !== undefined ? { annotations: tool.annotations } : {}),
     };
   });
 
   const allTools = [...aggregatorTools, ...aggregatedTools];
 
-  // Apply exclude patterns to filter out tools
-  const config = loadJSONServersCached();
-  const excludePatterns = config?.excludePatterns || [];
+  // Backend tools are already filtered; this also lets excludeTools hide the
+  // proxy's own management tools.
+  const excludePatterns = clientManager.getExcludePatterns();
   const filteredTools = allTools.filter((tool) => {
     const isExcluded = matchesIgnorePattern(tool.name, excludePatterns);
     if (isExcluded) {
@@ -1269,6 +1229,7 @@ async function main() {
     // Continue with empty configuration - server will only provide management tools
   } else {
     // Configure noCompress patterns and uncompressed-tool fallback
+    clientManager.setExcludePatterns(config.excludePatterns);
     compressionCache.setNoCompressPatterns(config.noCompressPatterns);
     compressionCache.setFallbackBehavior(config.compressionFallbackBehavior ?? 'original');
 

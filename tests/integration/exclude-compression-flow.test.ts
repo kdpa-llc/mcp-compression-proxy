@@ -124,4 +124,36 @@ describe('excludeTools in the compression flow', () => {
     expect(multi?.toolsTotal).toBe(2);
     expect(multi?.toolsExcluded).toBe(1);
   });
+
+  it('refuses to call an excluded tool that the client names directly', async () => {
+    // Hiding alone left an excluded tool one guessed name away from running.
+    const result = await mcpClient.callTool({ name: 'multi__tool_000', arguments: {} });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('excluded by the excludeTools configuration');
+    expect(textOf(result)).not.toContain('executed successfully');
+  });
+
+  it('refuses an excluded tool inside a call script', async () => {
+    const result = await mcpClient.callTool({
+      name: 'mcp-compression-proxy__run_script',
+      arguments: { steps: [{ id: 'x', server: 'multi', tool: 'tool_000' }] },
+    });
+
+    const script = JSON.parse(textOf(result)) as {
+      steps: Array<{ isError?: boolean; output: string }>;
+      stoppedAt?: string;
+    };
+    expect(script.stoppedAt).toBe('x');
+    expect(script.steps[0].isError).toBe(true);
+    expect(script.steps[0].output).toContain('excluded');
+  });
+
+  it('forwards a backend tool title and annotations', async () => {
+    const { tools } = await mcpClient.listTools();
+    const one = tools.find((tool) => tool.name === 'multi__tool_001');
+
+    expect(one?.title).toBe('Tool One');
+    expect(one?.annotations).toEqual({ readOnlyHint: true });
+  });
 });

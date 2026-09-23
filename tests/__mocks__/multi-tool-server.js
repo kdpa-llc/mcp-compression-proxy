@@ -33,8 +33,15 @@ function toolName(index) {
   return `tool_${String(index).padStart(3, '0')}`;
 }
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: Array.from({ length: TOOL_COUNT }, (_unused, index) => ({
+/**
+ * MOCK_PAGE_SIZE makes the backend itself paginate tools/list, so the proxy's
+ * cursor handling toward its backends is exercised, not just its own paging.
+ */
+const pageParsed = Number.parseInt(process.env.MOCK_PAGE_SIZE ?? '', 10);
+const PAGE_SIZE = Number.isInteger(pageParsed) && pageParsed > 0 ? pageParsed : TOOL_COUNT;
+
+function tool(index) {
+  return {
     name: toolName(index),
     description: `Original verbose description for ${toolName(index)}, long enough that compressing it would visibly change the character count reported by the coverage numbers.`,
     inputSchema: {
@@ -43,8 +50,25 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         input: { type: 'string', description: 'Test input parameter' },
       },
     },
-  })),
-}));
+    // tool_001 carries metadata so the proxy's passthrough can be checked.
+    ...(index === 1
+      ? { title: 'Tool One', annotations: { readOnlyHint: true } }
+      : {}),
+  };
+}
+
+server.setRequestHandler(ListToolsRequestSchema, async (request) => {
+  const offset = Number.parseInt(request.params?.cursor ?? '0', 10) || 0;
+  const end = Math.min(offset + PAGE_SIZE, TOOL_COUNT);
+  const tools = [];
+  for (let index = offset; index < end; index++) {
+    tools.push(tool(index));
+  }
+  return {
+    tools,
+    ...(end < TOOL_COUNT ? { nextCursor: String(end) } : {}),
+  };
+});
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name } = request.params;

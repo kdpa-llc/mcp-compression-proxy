@@ -5,6 +5,7 @@ import type { CompressionCache } from './compression-cache.js';
 import type { SessionManager } from './session-manager.js';
 import type { ConfigResult } from '../config/loader.js';
 import { matchesIgnorePattern, loadJSONServersCached } from '../config/loader.js';
+import { listAllTools } from '../mcp/tool-catalog.js';
 
 type DetailLevel = 'summary' | 'full';
 
@@ -139,12 +140,12 @@ export class StatsService {
       try {
         const result = await this.clientManager.withClient(
           status.name,
-          async ({ client }) => client.listTools()
+          async ({ client }) => listAllTools(client)
         );
-        const filtered = result.tools.filter(
+        const filtered = result.filter(
           (tool) => !matchesIgnorePattern(`${status.name}__${tool.name}`, excludePatterns)
         );
-        const excludedCount = result.tools.length - filtered.length;
+        const excludedCount = result.length - filtered.length;
 
         let toolsCompressed = 0;
         let originalChars = 0;
