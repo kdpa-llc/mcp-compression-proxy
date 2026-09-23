@@ -4,7 +4,8 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import type { Logger } from 'pino';
 import { matchesIgnorePattern } from '../config/loader.js';
-import type { AuthFailureConfirmer, MCPClientManager } from './client-manager.js';
+import type { AuthFailureConfirmer } from './client-manager.js';
+import type { BackendAccess } from './backend-access.js';
 
 /** Raised for a call to a tool matched by `excludeTools`. */
 export class ToolExcludedError extends Error {
@@ -99,7 +100,7 @@ function isRetrySafe(
 }
 
 async function attemptToolCall(
-  manager: MCPClientManager,
+  manager: BackendAccess,
   logger: Logger,
   serverName: string,
   toolName: string,
@@ -162,7 +163,7 @@ async function attemptToolCall(
  * Automatic replay is restricted to explicitly configured read-only tools.
  */
 export async function callToolWithAuthRecovery(
-  manager: MCPClientManager,
+  manager: BackendAccess,
   logger: Logger,
   serverName: string,
   toolName: string,

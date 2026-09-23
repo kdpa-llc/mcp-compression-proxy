@@ -1,5 +1,5 @@
 import type { Logger } from 'pino';
-import type { MCPClientManager } from '../mcp/client-manager.js';
+import type { BackendAccess } from '../mcp/backend-access.js';
 import type { ConnectionLifecycleState } from '../types/index.js';
 import type { CompressionCache } from './compression-cache.js';
 import type { SessionManager } from './session-manager.js';
@@ -89,14 +89,14 @@ function compact(value: number): string {
 
 export class StatsService {
   private logger: Logger;
-  private clientManager: MCPClientManager;
+  private clientManager: BackendAccess;
   private compressionCache: CompressionCache;
   private sessionManager: SessionManager;
   private configLoader: () => ConfigResult;
 
   constructor(
     logger: Logger,
-    clientManager: MCPClientManager,
+    clientManager: BackendAccess,
     compressionCache: CompressionCache,
     sessionManager: SessionManager,
     configLoader: () => ConfigResult = loadJSONServersCached

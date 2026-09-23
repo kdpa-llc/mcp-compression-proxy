@@ -1,7 +1,7 @@
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { Logger } from 'pino';
-import type { MCPClientManager } from './client-manager.js';
+import type { BackendAccess } from './backend-access.js';
 
 /**
  * Upper bound on `tools/list` pages read from one backend. A server that
@@ -74,7 +74,7 @@ export class ToolCatalog {
   private inflight: { key: string; promise: Promise<CatalogTool[]> } | undefined;
 
   constructor(
-    private readonly manager: MCPClientManager,
+    private readonly manager: BackendAccess,
     private readonly logger: Logger,
     private readonly ttlMs = 3000
   ) {}
