@@ -4,16 +4,21 @@ This directory contains comprehensive test suites for the MCP Compression Proxy 
 
 ## Test Summary
 
-**✅ 297 Tests Passing**
+**✅ 587 Tests Passing**
 
 | Category | Test Suites | Tests | Description |
 |----------|-------------|-------|-------------|
-| **Unit** | 18 | 262 | Individual module testing |
-| **Integration** | 5 | 22 | Module interaction testing |
+| **Unit** | 34 | 522 | Individual module testing |
+| **Integration** | 11 | 52 | Module interaction testing |
 | **E2E** | 2 | 13 | Complete workflow testing |
-| **Total** | **25** | **297** | Comprehensive coverage |
+| **Total** | **47** | **587** | Comprehensive coverage |
 
-**Coverage: 93.9% statements, 85.0% branches, 94.8% functions, 93.9% lines**
+**Coverage: 95.3% statements, 87.1% branches, 97.4% functions, 95.7% lines**
+
+No test needs Python or model weights: `__mocks__/fake-model-bridge.js`
+speaks the same JSON-lines protocol as `python/needle_bridge.py`.
+`e2e-real/needle-model.test.ts` runs the real Needle 3 model when
+`NEEDLE_PYTHON` names an interpreter with `cactus-needle` installed.
 
 Two entry points are excluded from coverage in `jest.config.js` because they
 require a real process rather than a module import: `src/index.ts` (covered by
@@ -27,8 +32,15 @@ built binary as a subprocess).
 tests/
 ├── __mocks__/              # Mock implementations and test helpers
 │   ├── mcp-mocks.ts        # Mock MCP clients and utilities
-│   └── single-tool-server.js  # Minimal real MCP server for subprocess tests
-├── unit/                   # Unit tests for individual modules (18 files)
+│   ├── single-tool-server.js  # Minimal real MCP server for subprocess tests
+│   ├── multi-tool-server.js   # N tools; paginates, carries annotations, echoes JSON
+│   └── fake-model-bridge.js   # Stand-in for python/needle_bridge.py
+├── fixtures/
+│   └── search-catalog.ts   # 43 tools and 30 labelled queries for search quality
+├── unit/                   # Unit tests for individual modules (34 files)
+│   ├── auth-confirmer.test.ts             # Model second opinion on auth errors
+│   ├── call-script.test.ts
+│   ├── call-suggester.test.ts             # Proposals and the --run gates
 │   ├── client-manager.test.ts
 │   ├── cli-commands.test.ts
 │   ├── cli-ipc-client.test.ts
@@ -36,6 +48,7 @@ tests/
 │   ├── compression-cache.test.ts
 │   ├── compression-fallback.test.ts       # Uncached-tool fallback behavior
 │   ├── compression-persistence.test.ts
+│   ├── compression-audit.test.ts          # Confusable compressions, duplicates
 │   ├── compression-sampler.test.ts        # Host-LLM compression via sampling
 │   ├── config-loader.test.ts
 │   ├── config-schema.test.ts              # Validates servers.json.example too
@@ -44,11 +57,21 @@ tests/
 │   ├── file-exchange.test.ts
 │   ├── ignore-patterns.test.ts
 │   ├── live-coverage.test.ts              # Coverage stats and formatting
+│   ├── local-model.test.ts                # Needle bridge client, embedding index
+│   ├── meta-tools.test.ts                 # search/get/call/suggest/shape/audit tools
+│   ├── openai-compressor.test.ts          # Compressor endpoint
+│   ├── output-shaper.test.ts              # --want / --where
 │   ├── session-manager.test.ts
+│   ├── shaped-call.test.ts
 │   ├── stats-service.test.ts
+│   ├── tool-call-executor.test.ts         # Auth recovery, exclusion
+│   ├── tool-catalog.test.ts               # Paging, caching, exclusion
+│   ├── tool-search.test.ts                # BM25, fusion, usage learning
 │   └── version.test.ts                    # Fails if version drifts
-├── integration/            # Integration tests for module interactions (5 files)
+├── integration/            # Integration tests for module interactions (11 files)
 │   ├── cli-daemon-lifecycle.test.ts          # ⭐ Drives the built mcp-cli binary
+│   ├── cli-search.test.ts                    # Search, exclusion, shaping, suggest via the daemon
+│   ├── lazy-mode.test.ts                     # Native proxy with toolExposure: lazy
 │   ├── compression-session-integration.test.ts
 │   ├── comprehensive-nocompress.test.ts      # ⭐ Complete noCompress workflow
 │   ├── nocompress-pattern-matching.test.ts  # Pattern matching validation
@@ -58,6 +81,7 @@ tests/
 │   └── user-journey.test.ts              # ⭐ Comprehensive user journey
 ├── e2e-real/               # 🚀 Real LLM integration tests (optional)
 │   ├── real-llm-integration.test.ts      # Tests with actual Ollama/LLM
+│   ├── needle-model.test.ts              # Real Needle 3 (needs NEEDLE_PYTHON)
 │   ├── ollama-client.ts                  # Ollama integration utilities
 │   └── README.md                         # Real LLM testing guide
 ├── FEATURE_COVERAGE.md     # Feature test coverage analysis

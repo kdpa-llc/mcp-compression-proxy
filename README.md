@@ -22,18 +22,19 @@ MCP Compression Proxy combines local stdio and remote Streamable HTTP servers be
 - 🔍 **Discover tools on demand** with `mcp-cli`.
 - 🔌 **Connect through one MCP endpoint** when native MCP compatibility is required.
 - 📦 **Keep large results local** and read only the relevant portions.
+- 🎯 **Ask for only what you need** from a tool call: named fields, relevant items.
 - ♻️ **Reuse warm backends** and refresh stale or unhealthy connections.
 - 🏠 **Keep control local** without a hosted gateway or control plane.
 
 > [!IMPORTANT]
-> `mcp-cli` provides the largest context reduction because it defers full tool schemas until an agent requests one. Native proxy mode shortens tool descriptions, but MCP clients still receive each tool's input schema during discovery.
+> `mcp-cli` provides the largest context reduction because it defers full tool schemas until an agent requests one. Native proxy mode shortens tool descriptions, but MCP clients still receive each tool's input schema during discovery, unless you switch it to [lazy exposure](#lazy-tool-exposure).
 
 ## 🧭 Choose a mode
 
-| Your client                   | Start with                  | Context behavior                                                                  |
-| ----------------------------- | --------------------------- | --------------------------------------------------------------------------------- |
-| ⌨️ Shell-capable coding agent | **`mcp-cli` (recommended)** | Search compact summaries, inspect one schema, then call the tool                  |
-| 🔌 Native MCP client          | **`mcp-compression-proxy`** | Connect through one endpoint and use shorter descriptions; schemas remain exposed |
+| Your client                   | Start with                  | Context behavior                                                                                                    |
+| ----------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| ⌨️ Shell-capable coding agent | **`mcp-cli` (recommended)** | Search compact summaries, inspect one schema, then call the tool                                                    |
+| 🔌 Native MCP client          | **`mcp-compression-proxy`** | Connect through one endpoint and use shorter descriptions; schemas remain exposed unless `toolExposure` is `"lazy"` |
 
 Both modes use the same server configuration and support local stdio and remote Streamable HTTP backends.
 
@@ -122,7 +123,25 @@ mcp-compression-proxy__compress_via_sampling
 
 The proxy asks the client's existing model to shorten a batch of descriptions and saves the results in `~/.mcp-compression-proxy/cache.json`. No separate model provider or API key is required. Sampling is deprecated in the 2026-07-28 MCP specification, so new clients may omit it.
 
-If sampling is unavailable, use `mcp-compression-proxy__get_uncompressed_tools` and then `mcp-compression-proxy__cache_compressed_tools`. Updated backend descriptions are detected as stale and queued for compression again.
+If sampling is unavailable, configure a [compressor endpoint](#compressor-endpoint) and the same tool uses it instead; or use `mcp-compression-proxy__get_uncompressed_tools` and then `mcp-compression-proxy__cache_compressed_tools`. Updated backend descriptions are detected as stale and queued for compression again.
+
+Check the result with `mcp-compression-proxy__audit_compression` (or `mcp-cli audit`): it lists compressed descriptions that now read more like another tool than their own, and tools that look duplicated across servers. `requeue: true` sends the flagged ones back for compression.
+
+### Lazy tool exposure
+
+Set `"toolExposure": "lazy"` to list a few discovery tools instead of every backend schema:
+
+| Tool                                  | Does                                                        |
+| ------------------------------------- | ----------------------------------------------------------- |
+| `mcp-compression-proxy__search_tools` | Ranked search over every backend tool                       |
+| `mcp-compression-proxy__get_tool`     | One tool's description, input schema and annotations        |
+| `mcp-compression-proxy__call_tool`    | Call it, optionally with `want`/`where` to shape the result |
+| `mcp-compression-proxy__suggest_tool` | Candidate tools, and a proposed call with the local model   |
+| `mcp-compression-proxy__shape_output` | Shape a saved large output                                  |
+
+`read_output`, `find_output`, `run_script` and `stats` stay listed. Tools matching `pinnedTools` (for example `"filesystem__read_file"`) are still listed directly, so frequent ones need no lookup. This is the `mcp-cli` flow over plain MCP, for clients that cannot run shell commands.
+
+In the default full exposure, `call_tool` and `shape_output` are also listed, so any client can ask for a shaped result.
 
 ## 🧠 Where the context savings come from
 
@@ -130,6 +149,7 @@ If sampling is unavailable, use `mcp-compression-proxy__get_uncompressed_tools` 
 | ---------------- | ---------------------------------------------------------- | ------------------------------------------ |
 | Eager MCP client | Every advertised name, description, and input schema       | Nothing additional                         |
 | Native proxy     | Names, shorter cached descriptions, and every input schema | Full description on request                |
+| Native, lazy     | A handful of discovery tools and any pinned tools          | The selected tool's description and schema |
 | Progressive CLI  | A small command vocabulary and compact search results      | The selected tool's description and schema |
 
 Exact savings depend on the number of servers, their schema sizes, and which tools a task uses. The project intentionally does not claim a universal percentage: measure the complete tool definitions in your own stack rather than description text alone.
@@ -137,13 +157,15 @@ Exact savings depend on the number of servers, their schema sizes, and which too
 ## ✨ What it handles
 
 - **One configuration:** Aggregate any number of local stdio and remote Streamable HTTP servers.
-- **Progressive discovery:** Search tools and fetch only the schema needed for the next call.
+- **Progressive discovery:** Ranked search (BM25 over names and descriptions, optionally blended with a local model) and only the schema needed for the next call.
+- **Shaped results:** `--want` a shape and `--where` a topic to get back only the fields and items you need, with the full output kept for checking.
 - **Large-output control:** Store results above a configurable threshold in private local files, then search or page through them.
 - **Warm, replaceable connections:** Reuse backend processes while draining old generations without interrupting active calls.
 - **Authentication recovery:** Reconnect after configured authentication failures and retry only tools explicitly marked safe.
 - **Declarative call chains:** Run dependent MCP calls with JSON Pointer references and no arbitrary shell or JavaScript execution.
 - **Operational visibility:** Inspect live server state, connection age, active calls, retries, failures, and compression coverage.
-- **Tool policy:** Exclude tools entirely or preserve selected original descriptions with case-insensitive wildcard patterns.
+- **Tool policy:** Exclude tools entirely (hidden and refused) or preserve selected original descriptions with case-insensitive wildcard patterns.
+- **Optional local model:** Cactus Needle 3, run as a local subprocess, for search by meaning, call suggestions and text extraction. Nothing requires it.
 
 ## 🏗️ How it works
 
@@ -160,20 +182,26 @@ flowchart TD
 
 ## ⌨️ CLI reference
 
-| Command                                           | Purpose                                           |
-| ------------------------------------------------- | ------------------------------------------------- |
-| `mcp-cli search <query>`                          | Search tool names and descriptions                |
-| `mcp-cli info <server>/<tool>`                    | Load the full schema for one tool                 |
-| `mcp-cli call <server>/<tool> '<json>'`           | Execute a tool                                    |
-| `mcp-cli tools`                                   | List compact summaries for every available tool   |
-| `mcp-cli output find <id> <query>`                | Search a cached large output                      |
-| `mcp-cli output read <id> [offset] [length\|all]` | Read a bounded page or the remainder of an output |
-| `mcp-cli script '<json>'`                         | Run a declarative sequence of calls               |
-| `mcp-cli stats`                                   | Show server and compression statistics            |
-| `mcp-cli doctor`                                  | Validate configuration and backend health         |
-| `mcp-cli daemon status`                           | Show daemon and connection lifecycle state        |
-| `mcp-cli daemon logs [-n N] [-f]`                 | Read or follow daemon logs                        |
-| `mcp-cli daemon restart`                          | Restart the local daemon                          |
+| Command                                              | Purpose                                            |
+| ---------------------------------------------------- | -------------------------------------------------- |
+| `mcp-cli search <query> [--limit N]`                 | Ranked search over tool names and descriptions     |
+| `mcp-cli info <server>/<tool>`                       | Load the full schema for one tool                  |
+| `mcp-cli call <server>/<tool> '<json>'`              | Execute a tool                                     |
+| `mcp-cli call ... --want '<shape>' --where '<text>'` | Execute a tool and return only what you asked for  |
+| `mcp-cli suggest <request> [--run]`                  | Candidate tools and a proposed call                |
+| `mcp-cli tools`                                      | List compact summaries for every available tool    |
+| `mcp-cli output find <id> <query>`                   | Search a cached large output                       |
+| `mcp-cli output read <id> [offset] [length\|all]`    | Read a bounded page or the remainder of an output  |
+| `mcp-cli output shape <id> --want/--where ...`       | Shape a cached output                              |
+| `mcp-cli script '<json>'`                            | Run a declarative sequence of calls                |
+| `mcp-cli stats`                                      | Show server and compression statistics             |
+| `mcp-cli compress [--limit N]`                       | Compress descriptions with the compressor endpoint |
+| `mcp-cli audit [--requeue]`                          | Check compressions and find duplicate tools        |
+| `mcp-cli search-quality`                             | How often search ranked the used tool first        |
+| `mcp-cli doctor`                                     | Validate configuration and backend health          |
+| `mcp-cli daemon status`                              | Show daemon and connection lifecycle state         |
+| `mcp-cli daemon logs [-n N] [-f]`                    | Read or follow daemon logs                         |
+| `mcp-cli daemon restart`                             | Restart the local daemon                           |
 
 Pass call JSON on stdin when shell quoting becomes awkward:
 
@@ -194,6 +222,33 @@ mcp-cli output read <payload-id> 10000 all
 ```
 
 The payload directory is mode `0700` and payload files are mode `0600`. Up to 100 entries are retained by the running process; the oldest are evicted first.
+
+### Return only what you need
+
+`--want` describes the answer you expect; `--where` keeps the list items relevant to a topic:
+
+```bash
+mcp-cli call github/list_issues '{"owner":"o","repo":"r"}' \
+  --want '{"items":[{"number":"integer","title":"string","user.login":"string?"}]}' \
+  --where 'authentication' --limit 10
+```
+
+- Object keys are kept (matched ignoring case, `_` and `-`, or as a dotted path like `user.login`); a one-element list means "a list of these".
+- Leaf types are `string`, `number`, `integer`, `boolean`, `object`, `array` or `any`; `open|closed` means one of those values; a trailing `?` makes a field optional.
+- JSON output is projected with no model: nothing is invented, missing fields come back as `null` and are listed in `meta.missing`.
+- `--where` ranks items by shared words, blended with meaning when the local model is configured, and keeps up to `--limit` (default 20). It can return nothing.
+- Text output needs the local model to extract fields; those answers are labelled `model-extraction` with the model's confidence.
+- The full output is always saved: `source.id` works with `output read`, `output find` and `output shape`.
+
+Script steps accept the same `want`, `where` and `limit` fields; `$ref` references still see the full output.
+
+### Suggest a call
+
+```bash
+mcp-cli suggest "list the open pull requests in octo/repo"
+```
+
+Returns the best-matching tools with their schemas, which saves an `info` round trip. With the local model it also proposes a tool and arguments. `--run` executes the proposal only when the tool declares `readOnlyHint`, the model's confidence is at least 0.9, every argument appears in the request, and there is exactly one call; otherwise it says why not. Treat a proposal as a draft: in testing the small model picked the wrong tool with high confidence.
 
 ### Declarative call chains
 
@@ -277,24 +332,82 @@ Local servers inherit the proxy's environment by default. Set `inheritEnv` to `f
 
 ### Core options
 
-| Option                        | Default      | Purpose                                                     |
-| ----------------------------- | ------------ | ----------------------------------------------------------- |
-| `defaultTimeout`              | `30`         | Backend timeout in seconds; overridable per server          |
-| `excludeTools`                | `[]`         | Hide matching `server__tool` names completely               |
-| `noCompressTools`             | `[]`         | Always show original descriptions for matching tools        |
-| `compressionFallbackBehavior` | `"original"` | Show `"original"` or `"blank"` before compression exists    |
-| `inheritEnv`                  | `true`       | Control which environment variables local servers receive   |
-| `softMaxConnectionAgeSeconds` | `3600`       | Lazily replace a connection on its next use after this age  |
-| `hardMaxConnectionAgeSeconds` | `28800`      | Drain a connection at this age and reopen it on demand      |
-| `authErrorPatterns`           | `[]`         | Identify authentication failures in errors or tool results  |
-| `authRetryTools`              | `[]`         | Name tools safe to retry once after authentication recovery |
-| `cli.payloadThreshold`        | `10000`      | Store larger outputs in private local files                 |
-| `cli.autoStartDaemon`         | `true`       | Start the daemon when a CLI command needs it                |
-| `cli.daemonLogLevel`          | `"info"`     | Set `debug`, `info`, `warn`, or `error` logging             |
+| Option                        | Default      | Purpose                                                            |
+| ----------------------------- | ------------ | ------------------------------------------------------------------ |
+| `defaultTimeout`              | `30`         | Backend timeout in seconds; overridable per server                 |
+| `excludeTools`                | `[]`         | Hide matching `server__tool` names and refuse calls to them        |
+| `noCompressTools`             | `[]`         | Always show original descriptions for matching tools               |
+| `compressionFallbackBehavior` | `"original"` | Show `"original"` or `"blank"` before compression exists           |
+| `inheritEnv`                  | `true`       | Control which environment variables local servers receive          |
+| `softMaxConnectionAgeSeconds` | `3600`       | Lazily replace a connection on its next use after this age         |
+| `hardMaxConnectionAgeSeconds` | `28800`      | Drain a connection at this age and reopen it on demand             |
+| `authErrorPatterns`           | `[]`         | Identify authentication failures in errors or tool results         |
+| `authRetryTools`              | `[]`         | Name tools safe to retry once after authentication recovery        |
+| `cli.payloadThreshold`        | `10000`      | Store larger outputs in private local files                        |
+| `cli.autoStartDaemon`         | `true`       | Start the daemon when a CLI command needs it                       |
+| `cli.daemonLogLevel`          | `"info"`     | Set `debug`, `info`, `warn`, or `error` logging                    |
+| `toolExposure`                | `"full"`     | `"lazy"` lists discovery tools instead of every schema             |
+| `pinnedTools`                 | `[]`         | Tools still listed directly in lazy exposure                       |
+| `search.limit`                | `15`         | Results returned by search                                         |
+| `search.learnFromUsage`       | `false`      | Record which result was used, to rank it higher next time          |
+| `model`                       | none         | Optional [local model](#-optional-local-model)                     |
+| `compressor`                  | none         | [OpenAI-compatible endpoint](#compressor-endpoint) for compression |
 
 Set either connection age to `0` to disable that policy. Lifecycle and authentication options may also be set per server. Authentication failures always replace the backend generation that produced them, but automatic replay occurs only for names matching `authRetryTools`.
 
 See [`servers.json.example`](servers.json.example) for a complete starting point.
+
+`model` settings are read at startup; after changing them run `mcp-cli daemon restart`, or restart the MCP client for the native proxy.
+
+### Search learning
+
+With `"search": { "learnFromUsage": true }`, a search followed by `info` or `call` on one of its results is recorded in `~/.mcp-compression-proxy/search-usage.jsonl` (owner-only, last 5,000 choices). Tools chosen for queries with the same words rank higher, and `mcp-cli search-quality` reports how often the used tool was ranked first, in the top five, or not shown at all: real numbers for your own tool set.
+
+### Compressor endpoint
+
+Any OpenAI-compatible `/chat/completions` endpoint can write compressed descriptions when the MCP client cannot lend its model through sampling (deprecated in the 2026-07-28 MCP specification):
+
+```json
+{
+  "compressor": {
+    "url": "http://localhost:11434/v1",
+    "model": "llama3.2",
+    "apiKey": "${COMPRESSOR_API_KEY:-}"
+  }
+}
+```
+
+Run `mcp-cli compress` repeatedly until nothing remains, or call `mcp-compression-proxy__compress_via_sampling` from a native client. Only tool names and descriptions are sent to the endpoint.
+
+## 🧩 Optional local model
+
+A local [Cactus Needle 3](https://github.com/cactus-compute/needle) model (29-121M parameters, 8-29 MB) adds meaning-based ranking to search and `--where`, proposed calls in `suggest`, and field extraction from text output. Every feature works without it.
+
+```bash
+python3 -m venv ~/.mcp-compression-proxy/needle
+~/.mcp-compression-proxy/needle/bin/pip install cactus-needle
+```
+
+```json
+{
+  "model": {
+    "provider": "needle",
+    "command": "/home/you/.mcp-compression-proxy/needle/bin/python"
+  }
+}
+```
+
+The proxy starts its bundled `needle_bridge.py` with that interpreter on first use, keeps it idle-unreferenced, and stops it after `idleTimeout` seconds (default 600). The first start downloads about 35 MB of weights from Hugging Face; after that it runs offline. Needle's usage telemetry is always switched off. Tool embeddings are cached in `~/.mcp-compression-proxy/embeddings.json`.
+
+What to expect, measured on a 43-tool catalog with 30 labelled queries (`tests/fixtures/search-catalog.ts`):
+
+| Search                   | Right tool first | Right tool in top five |
+| ------------------------ | ---------------- | ---------------------- |
+| Previous substring match | 2 / 30           | 2 / 30                 |
+| BM25, no model           | 17 / 30          | 23 / 30                |
+| BM25 + Needle similarity | 15 / 30          | 26 / 30                |
+
+The model finds paraphrases that share no word with the tool ("remember a fact about a person") at a small cost to first place. Its call proposals and its confidence are less reliable: it chose wrong tools while reporting 0.95-1.0, which is why `suggest --run` requires `readOnlyHint` and grounded arguments as well. `model.confirmAuthFailures` (opt-in) asks it whether a long result matching an auth error pattern is really a failure; the base weights were not accurate enough for that to change anything in testing, so it is meant for fine-tuned weights (`model.args` can point the bridge at them).
 
 <details>
 <summary><strong>🚦 Versioned daemon deployments</strong></summary>
@@ -311,7 +424,10 @@ This allows an external router to canary a candidate, switch new requests atomic
 
 - The proxy runs locally and does not require a hosted control plane.
 - Tool inputs and outputs go only to the backend servers you configure; remote backends naturally receive calls addressed to them.
-- Large outputs are stored in owner-only files and are retrieved by opaque payload ID, not arbitrary path.
+- Large outputs are stored in owner-only files and are retrieved by opaque payload ID, not arbitrary path. Shaped calls store the full output the same way.
+- Tools matching `excludeTools` are refused on every call path, not only hidden from listings.
+- The optional local model runs as a local subprocess with its telemetry disabled; tool data sent to it stays on the machine. A `compressor` endpoint receives tool names and descriptions only, never tool inputs or outputs.
+- Search learning is off by default; when enabled, queries and chosen tool names are kept in an owner-only local file.
 - The daemon's local control socket can execute downstream MCP tools and is kept inside an owner-only directory.
 - Use `inheritEnv: false` or an allowlist when a third-party local server should not receive unrelated environment variables.
 - MCP Compression Proxy is a transport and lifecycle layer, not a sandbox or authorization boundary. Apply normal trust and permission controls to every backend server.
@@ -332,6 +448,7 @@ mcp-cli daemon logs -n 100
 - Clear saved descriptions with `mcp-compression-proxy --clear-cache`.
 - Native MCP logs go to stderr so stdout remains valid JSON-RPC.
 - A restricted agent sandbox may block the daemon's Unix socket. Grant access to `~/.mcp-compression-proxy/` or run the CLI in the host environment.
+- If `suggest` reports "Local model unavailable", or search never uses the model, the daemon log shows why; usually `cactus-needle` is not installed for the interpreter named in `model.command`.
 
 ## 🤝 Contributing
 
