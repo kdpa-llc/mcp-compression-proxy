@@ -14,6 +14,9 @@ import { sendRequest, isDaemonRunning } from '../../src/cli/ipc-client.js';
 import {
   handleTools,
   handleSearch,
+  handleSearchQuality,
+  takeOption,
+  takeLimit,
   handleInfo,
   handleCall,
   handlePayloadRead,
@@ -99,6 +102,79 @@ describe('CLI commands', () => {
     });
   });
 
+  // ── option parsing ──────────────────────────────────────────────────────────
+
+  describe('takeOption / takeLimit', () => {
+    it('extracts --name value and --name=value, keeping other args in order', () => {
+      expect(takeOption(['a', '--want', '{}', 'b'], 'want')).toEqual({ rest: ['a', 'b'], value: '{}' });
+      expect(takeOption(['--want={"x":1}', 'a'], 'want')).toEqual({ rest: ['a'], value: '{"x":1}' });
+      expect(takeOption(['a'], 'want')).toEqual({ rest: ['a'] });
+    });
+
+    it('accepts only a positive integer limit', () => {
+      expect(takeLimit(['q', '--limit', '5'])).toEqual({ rest: ['q'], limit: 5 });
+      expect(takeLimit(['q', '--limit', 'zero']).limit).toBeUndefined();
+      expect(takeLimit(['q', '--limit', '-2']).limit).toBeUndefined();
+      expect(takeLimit(['q']).limit).toBeUndefined();
+    });
+  });
+
+  // ── handleSearchQuality ────────────────────────────────────────────────────
+
+  describe('handleSearchQuality', () => {
+    it('explains how to enable learning when nothing is recorded', async () => {
+      mockSendRequest.mockResolvedValue({
+        id: '1',
+        result: { enabled: false, selections: 0, top1: 0, top5: 0, misses: 0, top1Rate: 0, top5Rate: 0, missRate: 0, topTools: [] },
+      });
+
+      await handleSearchQuality(SOCKET);
+
+      expect(stdoutLines.join('\n')).toContain('learnFromUsage');
+    });
+
+    it('prints rates and the most chosen tools', async () => {
+      mockSendRequest.mockResolvedValue({
+        id: '1',
+        result: {
+          enabled: true,
+          selections: 4,
+          top1: 2,
+          top5: 3,
+          misses: 1,
+          top1Rate: 50,
+          top5Rate: 75,
+          missRate: 25,
+          topTools: [{ tool: 'fs/read_file', selections: 3 }],
+        },
+      });
+
+      await handleSearchQuality(SOCKET);
+
+      const out = stdoutLines.join('\n');
+      expect(out).toContain('Recorded choices: 4');
+      expect(out).toContain('ranked first:  2 (50%)');
+      expect(out).toContain('fs/read_file');
+    });
+
+    it('stops after the count when learning was switched off with nothing recorded since', async () => {
+      mockSendRequest.mockResolvedValue({
+        id: '1',
+        result: { enabled: true, selections: 0, top1: 0, top5: 0, misses: 0, top1Rate: 0, top5Rate: 0, missRate: 0, topTools: [] },
+      });
+
+      await handleSearchQuality(SOCKET);
+
+      expect(stdoutLines.join('\n')).toContain('Recorded choices: 0');
+      expect(stdoutLines.join('\n')).not.toContain('ranked first');
+    });
+
+    it('exits with 1 on a daemon error', async () => {
+      mockSendRequest.mockResolvedValue({ id: '1', error: { code: -1, message: 'boom' } });
+      await expect(handleSearchQuality(SOCKET)).rejects.toThrow('process.exit(1)');
+    });
+  });
+
   // ── handleSearch ─────────────────────────────────────────────────────────────
 
   describe('handleSearch', () => {
@@ -126,6 +202,23 @@ describe('CLI commands', () => {
       await handleSearch(SOCKET, 'xyz');
 
       expect(stdoutLines.some(l => l.includes('No tools matching'))).toBe(true);
+    });
+
+    it('passes a limit and says when more matches exist', async () => {
+      mockSendRequest.mockResolvedValue({
+        id: '1',
+        result: {
+          tools: [{ server: 'fs', tool: 'read_file', description: 'Read' }],
+          count: 1,
+          total: 7,
+          signals: ['lexical'],
+        },
+      });
+
+      await handleSearch(SOCKET, 'read', { limit: 1 });
+
+      expect(mockSendRequest).toHaveBeenCalledWith(SOCKET, 'search', { query: 'read', limit: 1 });
+      expect(stdoutLines.some((l) => l.includes('best 1 of 7 matches'))).toBe(true);
     });
 
     it('exits with 1 when query is empty', async () => {

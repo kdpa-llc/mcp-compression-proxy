@@ -1,6 +1,7 @@
 import { sendRequest, isDaemonRunning } from './ipc-client.js';
 import { loadJSONServers } from '../config/loader.js';
 import type { ServerStatus, ToolEntry, ToolInfoResult } from '../types/index.js';
+import type { SearchQuality } from '../search/usage-log.js';
 
 /**
  * Format tool entries as aligned plain text:
@@ -23,6 +24,36 @@ function formatToolList(tools: ToolEntry[]): string {
 }
 
 /**
+ * Pull `--name value` (or `--name=value`) out of an argument list.
+ *
+ * Kept here rather than in the entry point, which is excluded from coverage.
+ * Returns the remaining arguments in order and the last value given.
+ */
+export function takeOption(args: string[], name: string): { rest: string[]; value?: string } {
+  const rest: string[] = [];
+  let value: string | undefined;
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === `--${name}`) {
+      value = args[index + 1];
+      index++;
+    } else if (arg.startsWith(`--${name}=`)) {
+      value = arg.slice(name.length + 3);
+    } else {
+      rest.push(arg);
+    }
+  }
+  return { rest, value };
+}
+
+/** `--limit N` as a positive integer, or undefined when absent or invalid. */
+export function takeLimit(args: string[]): { rest: string[]; limit?: number } {
+  const { rest, value } = takeOption(args, 'limit');
+  const limit = value === undefined ? NaN : Number.parseInt(value, 10);
+  return { rest, limit: Number.isInteger(limit) && limit > 0 ? limit : undefined };
+}
+
+/**
  * mcp-cli tools — list all available tools with compressed descriptions
  */
 export async function handleTools(socketPath: string): Promise<void> {
@@ -42,22 +73,34 @@ export async function handleTools(socketPath: string): Promise<void> {
 }
 
 /**
- * mcp-cli search <query> — search tools by name or description
+ * mcp-cli search <query> — ranked search over tool names and descriptions
  */
-export async function handleSearch(socketPath: string, query: string): Promise<void> {
+export async function handleSearch(
+  socketPath: string,
+  query: string,
+  options: { limit?: number } = {}
+): Promise<void> {
   if (!query) {
-    console.error('Usage: mcp-cli search <query>');
+    console.error('Usage: mcp-cli search <query> [--limit N]');
     process.exit(1);
   }
 
-  const response = await sendRequest(socketPath, 'search', { query });
+  const response = await sendRequest(socketPath, 'search', {
+    query,
+    ...(options.limit !== undefined ? { limit: options.limit } : {}),
+  });
 
   if (response.error) {
     console.error(`Error: ${response.error.message}`);
     process.exit(1);
   }
 
-  const result = response.result as { tools: ToolEntry[]; count: number };
+  const result = response.result as {
+    tools: ToolEntry[];
+    count: number;
+    total?: number;
+    signals?: string[];
+  };
 
   if (result.count === 0) {
     console.log(`No tools matching "${query}".`);
@@ -65,6 +108,44 @@ export async function handleSearch(socketPath: string, query: string): Promise<v
   }
 
   console.log(formatToolList(result.tools));
+
+  if (result.total !== undefined && result.total > result.count) {
+    console.log(
+      `\n(best ${result.count} of ${result.total} matches; --limit N shows more)`
+    );
+  }
+}
+
+/**
+ * mcp-cli search-quality — how often search ranked the tool the agent used
+ */
+export async function handleSearchQuality(socketPath: string): Promise<void> {
+  const response = await sendRequest(socketPath, 'search-quality');
+
+  if (response.error) {
+    console.error(`Error: ${response.error.message}`);
+    process.exit(1);
+  }
+
+  const quality = response.result as SearchQuality & { enabled: boolean };
+
+  if (!quality.enabled && quality.selections === 0) {
+    console.log('Search learning is off. Enable it with "search": { "learnFromUsage": true }');
+    console.log('in servers.json; searches followed by info/call are then recorded locally.');
+    return;
+  }
+
+  console.log(`Recorded choices: ${quality.selections}${quality.enabled ? '' : ' (learning is now off)'}`);
+  if (quality.selections === 0) return;
+  console.log(`  ranked first:  ${quality.top1} (${quality.top1Rate}%)`);
+  console.log(`  in top five:   ${quality.top5} (${quality.top5Rate}%)`);
+  console.log(`  not shown:     ${quality.misses} (${quality.missRate}%)`);
+  if (quality.topTools.length > 0) {
+    console.log('\nMost chosen tools:');
+    for (const entry of quality.topTools) {
+      console.log(`  ${String(entry.selections).padStart(4)}  ${entry.tool}`);
+    }
+  }
 }
 
 /**

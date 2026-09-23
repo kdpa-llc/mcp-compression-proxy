@@ -7,6 +7,10 @@ import {
   type ServerConfigJSON,
   type InheritEnv,
   type CompressionFallbackBehavior,
+  type ToolExposure,
+  type SearchConfig,
+  type ModelConfig,
+  type CompressorConfig,
 } from './schema.js';
 import Ajv from 'ajv';
 
@@ -254,6 +258,11 @@ export type ConfigResult = {
   };
   inheritEnv?: InheritEnv;
   compressionFallbackBehavior?: CompressionFallbackBehavior;
+  toolExposure?: ToolExposure;
+  pinnedTools?: string[];
+  search?: SearchConfig;
+  model?: ModelConfig;
+  compressor?: CompressorConfig;
 } | null;
 
 /**
@@ -275,6 +284,11 @@ export function loadJSONServers(): ConfigResult {
   let cliConfig: { payloadThreshold?: number; autoStartDaemon?: boolean; daemonLogLevel?: string } | undefined;
   let inheritEnv: InheritEnv | undefined;
   let compressionFallbackBehavior: CompressionFallbackBehavior = 'original';
+  let toolExposure: ToolExposure | undefined;
+  let pinnedTools: string[] = [];
+  let search: SearchConfig | undefined;
+  let model: ModelConfig | undefined;
+  let compressor: CompressorConfig | undefined;
   let hasAnyConfig = false;
 
   // Step 1: Load user-level config
@@ -318,6 +332,11 @@ export function loadJSONServers(): ConfigResult {
     if (userConfig.compressionFallbackBehavior) {
       compressionFallbackBehavior = userConfig.compressionFallbackBehavior;
     }
+    toolExposure = userConfig.toolExposure ?? toolExposure;
+    pinnedTools = [...(userConfig.pinnedTools ?? [])];
+    search = userConfig.search ? { ...userConfig.search } : search;
+    model = userConfig.model ? { ...userConfig.model } : model;
+    compressor = userConfig.compressor ? { ...userConfig.compressor } : compressor;
   } else {
     console.error(`[Config] No user-level config found at: ${paths.user}`);
   }
@@ -372,6 +391,18 @@ export function loadJSONServers(): ConfigResult {
     }
     if (projectConfig.compressionFallbackBehavior) {
       compressionFallbackBehavior = projectConfig.compressionFallbackBehavior;
+    }
+    // Scalars and sections override field by field, like cli; patterns append.
+    toolExposure = projectConfig.toolExposure ?? toolExposure;
+    pinnedTools = [...pinnedTools, ...(projectConfig.pinnedTools ?? [])];
+    if (projectConfig.search) {
+      search = { ...search, ...projectConfig.search };
+    }
+    if (projectConfig.model) {
+      model = { ...model, ...projectConfig.model };
+    }
+    if (projectConfig.compressor) {
+      compressor = { ...compressor, ...projectConfig.compressor };
     }
   } else {
     console.error(`[Config] No project-level config found at: ${paths.project}`);
@@ -432,6 +463,18 @@ export function loadJSONServers(): ConfigResult {
     console.error(`[Config] Compression fallback behavior: ${compressionFallbackBehavior}`);
   }
 
+  if (toolExposure === 'lazy') {
+    console.error(`[Config] Tool exposure: lazy (${pinnedTools.length} pinned pattern(s))`);
+  }
+
+  if (model) {
+    console.error(`[Config] Local model: ${model.provider}`);
+  }
+
+  if (compressor) {
+    console.error(`[Config] Compressor endpoint: ${compressor.url} (${compressor.model})`);
+  }
+
   console.error(`[Config] Total servers after aggregation: ${aggregatedServers.length}`);
 
   return {
@@ -446,6 +489,11 @@ export function loadJSONServers(): ConfigResult {
     cli: cliConfig,
     inheritEnv,
     compressionFallbackBehavior,
+    toolExposure,
+    pinnedTools,
+    search,
+    model,
+    compressor,
   };
 }
 

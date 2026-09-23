@@ -18,6 +18,8 @@ import { isManagedRouterConfigured, managedRouterUnavailableMessage } from './ru
 import {
   handleTools,
   handleSearch,
+  handleSearchQuality,
+  takeLimit,
   handleInfo,
   handleCall,
   handlePayloadRead,
@@ -40,7 +42,8 @@ mcp-cli — Progressive MCP tool discovery for LLMs
 
 Usage:
   mcp-cli tools                        List all tools (compressed)
-  mcp-cli search <query>               Search tools by name/description
+  mcp-cli search <query> [--limit N]   Ranked search over tool names/descriptions
+  mcp-cli search-quality               How often search ranked the used tool first
   mcp-cli info <server>/<tool>         Get full schema for a tool
   mcp-cli call <server>/<tool> <json>  Execute a tool
   mcp-cli output read <id> [offset] [length|all]
@@ -394,8 +397,14 @@ async function main(): Promise<void> {
       await handleTools(SOCKET_PATH);
       break;
 
-    case 'search':
-      await handleSearch(SOCKET_PATH, filteredArgs.slice(1).join(' '));
+    case 'search': {
+      const { rest, limit } = takeLimit(filteredArgs.slice(1));
+      await handleSearch(SOCKET_PATH, rest.join(' '), { limit });
+      break;
+    }
+
+    case 'search-quality':
+      await handleSearchQuality(SOCKET_PATH);
       break;
 
     case 'info':

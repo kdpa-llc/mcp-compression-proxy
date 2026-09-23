@@ -15,6 +15,8 @@ import type { IPCRequest, IPCResponse, CLIConfig } from '../types/index.js';
 import { runCallScript, type CallScriptStep } from '../mcp/call-script.js';
 import { getDaemonRuntimePaths } from './runtime-paths.js';
 import { ToolCatalog } from '../mcp/tool-catalog.js';
+import { ToolSearch } from '../search/tool-search.js';
+import { UsageLog } from '../search/usage-log.js';
 
 const RUNTIME_PATHS = getDaemonRuntimePaths();
 const {
@@ -89,6 +91,11 @@ async function startDaemon(): Promise<void> {
   // Longer-lived than the native proxy's snapshot: CLI commands arrive
   // seconds apart, and each would otherwise list every backend again.
   const toolCatalog = new ToolCatalog(clientManager, logger, 15_000);
+  const usageLog = new UsageLog(
+    path.join(BASE_DIR, 'search-usage.jsonl'),
+    () => loadJSONServersCached()?.search?.learnFromUsage === true
+  );
+  const toolSearch = new ToolSearch(toolCatalog, compressionCache, { usage: usageLog });
 
   // Load compression cache from disk
   try {
@@ -177,26 +184,33 @@ async function startDaemon(): Promise<void> {
         }
 
         case 'search': {
-          const query = String(params?.query || '').toLowerCase();
-          const matches: Array<{ server: string; tool: string; description: string }> = [];
+          const query = String(params?.query || '');
+          const requested = Number(params?.limit);
+          const limit =
+            Number.isInteger(requested) && requested > 0
+              ? requested
+              : (loadJSONServersCached()?.search?.limit ?? undefined);
+          const result = await toolSearch.search(query, limit);
 
-          for (const tool of await toolCatalog.list()) {
-            const desc =
-              compressionCache.getCompressedDescription(tool.serverName, tool.toolName) ||
-              tool.description ||
-              '';
-            const searchText = `${tool.serverName}/${tool.toolName} ${desc}`.toLowerCase();
+          return {
+            id,
+            result: {
+              tools: result.hits,
+              count: result.hits.length,
+              total: result.total,
+              signals: result.signals,
+            },
+          };
+        }
 
-            if (searchText.includes(query)) {
-              matches.push({
-                server: tool.serverName,
-                tool: tool.toolName,
-                description: shortDescription(tool.serverName, tool.toolName, tool.description),
-              });
-            }
-          }
-
-          return { id, result: { tools: matches, count: matches.length } };
+        case 'search-quality': {
+          return {
+            id,
+            result: {
+              enabled: loadJSONServersCached()?.search?.learnFromUsage === true,
+              ...usageLog.quality(),
+            },
+          };
         }
 
         case 'info': {
@@ -205,6 +219,9 @@ async function startDaemon(): Promise<void> {
 
           try {
             const tool = await toolCatalog.find(serverName, toolName);
+            if (tool) {
+              usageLog.recordSelection(serverName, toolName);
+            }
             if (!tool) {
               return {
                 id,
@@ -237,6 +254,10 @@ async function startDaemon(): Promise<void> {
           const toolName = String(params?.tool || '');
           const args = (params?.arguments || {}) as Record<string, unknown>;
           const threshold = cliConfig.payloadThreshold ?? DEFAULT_PAYLOAD_THRESHOLD;
+
+          if (!clientManager.isToolExcluded(serverName, toolName)) {
+            usageLog.recordSelection(serverName, toolName);
+          }
 
           try {
             const result = await callToolWithAuthRecovery(

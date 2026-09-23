@@ -139,6 +139,7 @@ export interface ToolsQueryParams {
 export type IPCMethod =
   | 'tools'
   | 'search'
+  | 'search-quality'
   | 'info'
   | 'call'
   | 'payload-read'
