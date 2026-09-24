@@ -100,7 +100,9 @@ describe('call policy at dispatch', () => {
       expect((await fixture.client.listTools()).tools.map((t) => t.name)).not.toContain(name);
       const result = await fixture.call(name, args);
       expect(result.isError).toBe(true);
-      expect(result.content).toEqual([{ type: 'text', text: expect.stringContaining('excluded') }]);
+      expect(result.content).toEqual([
+        { type: 'text', text: expect.stringContaining('excluded by the excludeTools configuration') },
+      ]);
       expect(fixture.backends.calls).toEqual([]);
       expect(fixture.getModel).not.toHaveBeenCalled();
       expect(createSession).not.toHaveBeenCalled();
@@ -117,7 +119,9 @@ describe('call policy at dispatch', () => {
       await fixture.call(`${prefix}call_tool`, { server: 'fixture', tool: 'read' }),
     ]) {
       expect(result.isError).toBe(true);
-      expect(result.content).toEqual([{ type: 'text', text: expect.stringContaining('excluded') }]);
+      expect(result.content).toEqual([
+        { type: 'text', text: expect.stringContaining('excluded by the excludeTools configuration') },
+      ]);
     }
     expect(fixture.backends.calls).toEqual([]);
   });

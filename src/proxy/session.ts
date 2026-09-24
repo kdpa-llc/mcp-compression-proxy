@@ -365,7 +365,7 @@ export class ProxySession {
     // Exclusion applies to the public name too, before a management tool or
     // wrapper can change state or dispatch a separately allowed backend tool.
     if (matchesIgnorePattern(name, this.view.backends.getExcludePatterns())) {
-      return text(`Tool '${name}' is excluded by configuration`, true);
+      return text(`Tool '${name}' is excluded by the excludeTools configuration`, true);
     }
 
     if (this.metaTools.handles(name)) {
