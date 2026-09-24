@@ -57,12 +57,21 @@ function tool(index) {
   };
 }
 
+/**
+ * MOCK_BARE_TOOL adds `bare`: no description, and a result with an image and
+ * an empty text part, for the paths that handle a tool saying little.
+ */
+const BARE = process.env.MOCK_BARE_TOOL === '1';
+
 server.setRequestHandler(ListToolsRequestSchema, async (request) => {
   const offset = Number.parseInt(request.params?.cursor ?? '0', 10) || 0;
   const end = Math.min(offset + PAGE_SIZE, TOOL_COUNT);
   const tools = [];
   for (let index = offset; index < end; index++) {
     tools.push(tool(index));
+  }
+  if (BARE && end >= TOOL_COUNT) {
+    tools.push({ name: 'bare', inputSchema: { type: 'object', properties: {} } });
   }
   return {
     tools,
@@ -73,6 +82,15 @@ server.setRequestHandler(ListToolsRequestSchema, async (request) => {
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name } = request.params;
   const input = request.params.arguments?.input;
+  if (BARE && name === 'bare') {
+    return {
+      content: [
+        { type: 'image', data: 'AAAA', mimeType: 'image/png' },
+        { type: 'text', text: '' },
+        { type: 'text', text: 'bare done' },
+      ],
+    };
+  }
 
   // A JSON input is echoed back, so shaping can be tested on real output.
   // @pid, @cwd and @env:NAME report on this process, so a test can see which
