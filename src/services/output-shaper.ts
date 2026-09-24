@@ -84,6 +84,41 @@ function parseLeaf(spec: string): Leaf {
   return { optional, type };
 }
 
+/** Accept the same top-level JSON-encoded shape for preflight and projection. */
+function parseWant(want: unknown): unknown {
+  return typeof want === 'string' && /^[[{]/.test(want.trim())
+    ? JSON.parse(want)
+    : want;
+}
+
+/** Check the entire requested shape before a caller performs a backend action. */
+export function validateShapeSpec(spec: ShapeSpec): void {
+  const ancestors = new Set<object>();
+  const visit = (shape: unknown): void => {
+    if (typeof shape === 'string') {
+      const leaf = parseLeaf(shape);
+      if (leaf.options?.length === 0) throw new Error('An enum in want must contain a value');
+      return;
+    }
+    if (shape === null || typeof shape !== 'object') {
+      throw new Error('want must be an object, a one-element list, or a type string');
+    }
+    if (ancestors.has(shape)) throw new Error('want must not contain a circular shape');
+    ancestors.add(shape);
+    if (Array.isArray(shape)) {
+      if (shape.length !== 1) {
+        throw new Error('A list in want must hold exactly one element: the shape of each item');
+      }
+      visit(shape[0]);
+    } else {
+      for (const child of Object.values(shape)) visit(child);
+    }
+    ancestors.delete(shape);
+  };
+  const want = parseWant(spec.want);
+  if (want !== undefined) visit(want);
+}
+
 function normaliseKey(key: string): string {
   return key.toLowerCase().replace(/[_\-\s]/g, '');
 }
@@ -376,9 +411,7 @@ export async function shapeOutput(
   spec: ShapeSpec,
   model?: Pick<ModelBackend, 'embed' | 'extract'>
 ): Promise<ShapeResult> {
-  const want = typeof spec.want === 'string' && /^[[{]/.test(spec.want.trim())
-    ? JSON.parse(spec.want)
-    : spec.want;
+  const want = parseWant(spec.want);
   const where = spec.where?.trim() || undefined;
   const limit = Math.max(1, Math.trunc(spec.limit ?? DEFAULT_WHERE_LIMIT));
   const meta: ShapeMeta = { method: 'none', missing: [], mismatched: [], notes: [] };
