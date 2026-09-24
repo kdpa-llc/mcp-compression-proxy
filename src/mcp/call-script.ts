@@ -4,7 +4,7 @@ import {
   type PayloadStore,
 } from '../cli/payload-interceptor.js';
 import type { ShapeSpec } from '../services/output-shaper.js';
-import { readShapeSpec, type ShapedOutput } from '../services/shaped-call.js';
+import { readShapeSpec, shapeCompletedCall, type ShapedOutput, type CompletedShapedOutput } from '../services/shaped-call.js';
 
 export const MAX_CALL_SCRIPT_STEPS = 20;
 
@@ -29,7 +29,7 @@ export interface CallScriptStepResult {
   isError?: boolean;
   payload?: PayloadReference;
   /** Present when the step asked for want/where. */
-  shaped?: ShapedOutput;
+  shaped?: CompletedShapedOutput;
 }
 
 /** Shapes a step's output; supplied by the caller, which owns the model. */
@@ -154,6 +154,7 @@ export async function runCallScript(
   }
 
   const ids = new Set<string>();
+  const shapes = new Map<string, ShapeSpec | undefined>();
   for (const step of steps) {
     if (!step.id) {
       throw new Error('Every call script step requires a non-empty id');
@@ -162,6 +163,8 @@ export async function runCallScript(
       throw new Error(`Duplicate script step id: "${step.id}"`);
     }
     ids.add(step.id);
+    // Validate every shape before the first step can have an external effect.
+    shapes.set(step.id, readShapeSpec(step as unknown as Record<string, unknown>));
   }
 
   const priorResults = new Map<string, unknown>();
@@ -207,9 +210,11 @@ export async function runCallScript(
       // References always see the full output, so a later step can use any
       // field even when this step's report was narrowed.
       priorResults.set(step.id, parseOutput(callResult.output));
-      const spec = readShapeSpec(step as unknown as Record<string, unknown>);
+      const spec = shapes.get(step.id);
       if (spec && shape && !callResult.isError) {
-        const shaped = await shape(callResult.output, spec);
+        const shaped = await shapeCompletedCall(callResult.output, payloadStore, () =>
+          shape(callResult.output, spec)
+        );
         results.push({
           id: step.id,
           server: step.server,
