@@ -362,6 +362,12 @@ export class ProxySession {
   private async callTool(name: string, args: ToolArgs): Promise<CallToolResult> {
     this.services.logger.debug({ tool: name, args }, 'Handling tools/call request');
 
+    // Exclusion applies to the public name too, before a management tool or
+    // wrapper can change state or dispatch a separately allowed backend tool.
+    if (matchesIgnorePattern(name, this.view.backends.getExcludePatterns())) {
+      return text(`Tool '${name}' is excluded by configuration`, true);
+    }
+
     if (this.metaTools.handles(name)) {
       return this.metaTools.call(name, args);
     }
