@@ -125,6 +125,32 @@ describe('CliRequests', () => {
     expect(requeued.requeued).toBe(requeued.confusable.length);
   }, 20000);
 
+  it('counts only the re-queues that dropped a stored compression', async () => {
+    const { ask, fixture } = setup(mockConfig({ mcpServers: [
+      { name: 'mock', command: process.execPath, args: [MOCK_SERVER], env: { MOCK_TOOL_COUNT: '2' } },
+    ] }));
+    // Stored under another server's name, so the audit matches it by content
+    // but there is nothing under mock/tool_000 to drop.
+    const original =
+      'Original verbose description for tool_000, long enough that compressing it would visibly change the character count reported by the coverage numbers.';
+    fixture.compressionCache.saveCompressed('other', 'tool_000', 'Tool 001 thing.', original);
+
+    const audit = (await ask('audit', { requeue: true })).result as { requeued: number; confusable: unknown[] };
+    expect(audit.confusable.length).toBeGreaterThan(0);
+    expect(audit.requeued).toBe(0);
+  }, 20000);
+
+  it('lists, describes and calls a tool that says little', async () => {
+    const { ask } = setup(mockConfig({ mcpServers: [
+      { name: 'mock', command: process.execPath, args: [MOCK_SERVER], env: { MOCK_TOOL_COUNT: '1', MOCK_BARE_TOOL: '1' } },
+    ] }));
+    const tools = (await ask('tools')).result as { tools: Array<{ tool: string; description: string }> };
+    expect(tools.tools).toContainEqual(expect.objectContaining({ tool: 'bare', description: '' }));
+    expect((await ask('info', { server: 'mock', tool: 'bare' })).result).toMatchObject({ description: '' });
+    const called = (await ask('call', { server: 'mock', tool: 'bare', arguments: {} })).result as { output: string };
+    expect(called.output).toBe('bare done');
+  }, 20000);
+
   it('runs the describe workflow: next, review, apply and revert', async () => {
     const { ask, fixture } = setup();
     const next = (await ask('describe', { action: 'next', limit: 2, mode: 'compress' })).result as {

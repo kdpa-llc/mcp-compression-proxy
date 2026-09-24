@@ -267,6 +267,17 @@ describe('connectToDaemon', () => {
     expect(launch).not.toHaveBeenCalled();
   });
 
+  it('checks for itself that a daemon making way has exited', async () => {
+    const { socketPath, options } = setup();
+    const exiting = await fakeDaemon(socketPath, (_line, socket) => {
+      socket.end('{"type":"refused","code":"version-mismatch","message":"old","daemonVersion":"0","stopping":true}\n');
+      void exiting.close();
+    });
+    const launch = jest.fn(async () => false);
+    expect(await connectToDaemon({ ...options, launch })).toMatchObject({ attached: false });
+    expect(launch).toHaveBeenCalledTimes(1);
+  });
+
   it('waits no longer than it was told for a daemon to exit', async () => {
     const { socketPath, options } = setup();
     servers.push(
@@ -372,6 +383,32 @@ describe('daemon launcher', () => {
   });
 });
 
+describe('daemon launcher, spawning for real', () => {
+  it('runs the script detached and sees it answer', async () => {
+    const dir = tempDir();
+    const socketPath = join(dir, 'd.sock');
+    const script = join(dir, 'daemon.js');
+    // Answers one status request, then exits; exits anyway if none comes.
+    writeFileSync(
+      script,
+      `const net = require('net');
+      setTimeout(() => process.exit(0), 10000).unref();
+      const server = net.createServer((socket) => {
+        socket.once('data', (data) => {
+          const { id } = JSON.parse(String(data).split('\\n')[0]);
+          socket.end(JSON.stringify({ id, result: { running: true } }) + '\\n', () => process.exit(0));
+        });
+      });
+      server.listen(${JSON.stringify(socketPath)});`
+    );
+    try {
+      expect(await launchDaemon({ daemonScript: script, socketPath, timeoutMs: 10_000 })).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 15000);
+});
+
 describe('SessionHost', () => {
   type Fixture = ReturnType<typeof daemonFixture>;
   let fixture: Fixture | undefined;
@@ -470,6 +507,26 @@ describe('SessionHost', () => {
     expect(newer.result).toMatchObject({ attached: false, stopping: true });
     expect(onRetire).toHaveBeenCalledTimes(1);
   });
+
+  it('serves a message sent right behind the attach request', async () => {
+    const { fixture } = await hostOn();
+    const socket = net.createConnection({ path: fixture.socketPath });
+    closers.push(() => void socket.destroy());
+    let received = '';
+    const answered = new Promise<void>((resolve) =>
+      socket.on('data', (data) => {
+        received += String(data);
+        if (received.includes('"id":7')) resolve();
+      })
+    );
+    const attach = { type: 'attach', protocol: ATTACH_PROTOCOL, version: '1.0.0', cwd: fixture.project, env: fixture.env };
+    socket.write(JSON.stringify(attach) + '\n' + JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'ping' }) + '\n');
+    await answered;
+
+    const [reply, response] = received.trim().split('\n').map((line) => JSON.parse(line));
+    expect(reply).toMatchObject({ type: 'attached' });
+    expect(response).toEqual({ jsonrpc: '2.0', id: 7, result: {} });
+  }, 20000);
 
   it('lets go of the backends of a client that leaves while they connect', async () => {
     fixture = daemonFixture();

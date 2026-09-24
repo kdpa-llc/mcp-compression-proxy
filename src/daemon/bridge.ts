@@ -39,16 +39,18 @@ export interface BridgeOptions {
 export function attachToDaemon(options: BridgeOptions): Promise<BridgeResult> {
   return new Promise((resolve) => {
     const socket = net.createConnection({ path: options.socketPath });
-    let settled = false;
+    // Each path below ends the attempt exactly once: a connection error before
+    // connecting, then readLine's own outcome, then the reply's.
     const fail = (reason: string, extra: Partial<Extract<BridgeResult, { attached: false }>> = {}) => {
-      if (settled) return;
-      settled = true;
       socket.destroy();
       resolve({ attached: false, reason, ...extra });
     };
 
-    socket.once('error', (error) => fail(error.message));
+    const onConnectError = (error: Error) => fail(error.message);
+    socket.once('error', onConnectError);
     socket.once('connect', () => {
+      // From here readLine reports errors, and after attaching the relay does.
+      socket.off('error', onConnectError);
       const request: AttachRequest = {
         type: 'attach',
         protocol: ATTACH_PROTOCOL,
@@ -72,7 +74,6 @@ export function attachToDaemon(options: BridgeOptions): Promise<BridgeResult> {
             return;
           }
 
-          settled = true;
           socket.on('error', () => undefined); // 'close' follows and ends the bridge
           const closed = new Promise<void>((done) => socket.once('close', () => done()));
           if (rest.length > 0) options.output.write(rest);

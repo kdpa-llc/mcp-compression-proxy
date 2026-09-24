@@ -4,16 +4,16 @@ This directory contains comprehensive test suites for the MCP Compression Proxy 
 
 ## Test Summary
 
-**✅ 798 Tests Passing**
+**✅ 803 Tests Passing**
 
 | Category | Test Suites | Tests | Description |
 |----------|-------------|-------|-------------|
-| **Unit** | 41 | 727 | Individual module testing |
+| **Unit** | 41 | 732 | Individual module testing |
 | **Integration** | 12 | 58 | Module interaction testing |
 | **E2E** | 2 | 13 | Complete workflow testing |
-| **Total** | **55** | **798** | Comprehensive coverage |
+| **Total** | **55** | **803** | Comprehensive coverage |
 
-**Coverage: 97.9% statements, 95.5% branches, 99.2% functions, 98.0% lines**
+**Coverage: 97.9% statements, 96.0% branches, 99.2% functions, 98.0% lines**
 
 No test needs Python or model weights: `__mocks__/fake-model-bridge.js`
 speaks the same JSON-lines protocol as `python/needle_bridge.py`.
