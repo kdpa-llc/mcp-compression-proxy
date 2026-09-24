@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.3.0](https://github.com/kdpa-llc/mcp-compression-proxy/compare/v1.2.0...v1.3.0) (2026-09-24)
+
+### Features
+
+* a backend pool that shares servers between clients whose settings match ([b6e1c58](https://github.com/kdpa-llc/mcp-compression-proxy/commit/b6e1c58484fdf85cdb4ea62bd0ac064e9bd17c9b))
+* one daemon for every client, each with its own configuration ([3272372](https://github.com/kdpa-llc/mcp-compression-proxy/commit/3272372d3b9b1e59bef8ac72aa75d8feefbe0788))
+
+### Code Refactoring
+
+* move the proxy's MCP handlers into a session class ([f3ead4b](https://github.com/kdpa-llc/mcp-compression-proxy/commit/f3ead4bc19f751aa7c580a8f70e5a2737a5ad986))
+
 ## [1.2.0](https://github.com/kdpa-llc/mcp-compression-proxy/compare/v1.1.2...v1.2.0) (2026-09-23)
 
 ### Features
