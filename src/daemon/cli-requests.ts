@@ -22,7 +22,7 @@ import {
 } from '../services/description-rewrite.js';
 import { openAiSamplingHost } from '../services/openai-compressor.js';
 import { SessionManager } from '../services/session-manager.js';
-import { readShapeSpec, shapeAndStore } from '../services/shaped-call.js';
+import { readShapeSpec, shapeAndStore, shapeCompletedCall } from '../services/shaped-call.js';
 import { StatsService } from '../services/stats-service.js';
 import type { IPCRequest, IPCResponse, RequestContext } from '../types/index.js';
 import { stableJson } from '../utils/stable-json.js';
@@ -313,7 +313,9 @@ export class CliRequests {
         }
         const { output, isError } = await this.executeText(cli, serverName, toolName, args);
         if (spec && !isError) {
-          const shaped = await shapeAndStore(output, spec, payloadStore, cli.threshold(), cli.model()?.backend);
+          const shaped = await shapeCompletedCall(output, payloadStore, () =>
+            shapeAndStore(output, spec, payloadStore, cli.threshold(), cli.model()?.backend)
+          );
           return { result: { output: '', isError, payload: shaped.source, shaped } };
         }
         const captured = payloadStore.capture(output, cli.threshold());

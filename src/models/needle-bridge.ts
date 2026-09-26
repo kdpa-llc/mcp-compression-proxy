@@ -63,6 +63,8 @@ export class NeedleBridge implements ModelBackend {
   readonly name = 'needle';
   private child: ChildProcess | undefined;
   private starting: Promise<ChildProcess> | undefined;
+  private cancelStart: (() => void) | undefined;
+  private closeOutput: (() => void) | undefined;
   private readonly pending = new Map<number, Pending>();
   private nextId = 1;
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -137,14 +139,22 @@ export class NeedleBridge implements ModelBackend {
         return;
       }
 
-      const fail = (message: string) => {
+      const lines = child.stdout ? createInterface({ input: child.stdout }) : undefined;
+      const stopStarting = (error: Error) => {
         if (settled) return;
         settled = true;
         clearTimeout(startTimer);
+        this.cancelStart = undefined;
+        lines?.close();
+        child.stdin?.end();
+        child.kill();
+        reject(error);
+      };
+      const fail = (message: string) => {
+        if (settled) return;
         this.startFailure = { at: this.now(), message };
         this.logger.warn({ reason: message }, 'Local model bridge failed to start');
-        child.kill();
-        reject(new Error(`Local model unavailable: ${message}`));
+        stopStarting(new Error(`Local model unavailable: ${message}`));
       };
 
       const startTimer = setTimeout(
@@ -152,6 +162,9 @@ export class NeedleBridge implements ModelBackend {
         Math.max(this.timeoutMs, START_TIMEOUT_FLOOR_MS)
       );
       startTimer.unref?.();
+      // Keep cancellation available before ready assigns this.child. Closing is
+      // deliberate shutdown, not a failed load that should start a backoff.
+      this.cancelStart = () => stopStarting(new Error('Model bridge is closed'));
 
       child.on('error', (error) => fail(error.message));
       // Writing to a bridge that has just died raises EPIPE on stdin; with no
@@ -162,6 +175,7 @@ export class NeedleBridge implements ModelBackend {
       });
       child.on('exit', (code, signal) => {
         fail(`bridge exited during startup (${signal ?? `code ${code}`})`);
+        lines?.close();
         this.handleExit(child, code, signal);
       });
 
@@ -170,11 +184,10 @@ export class NeedleBridge implements ModelBackend {
         this.logger.debug({ stderr: chunk.slice(0, 2000) }, 'Local model bridge stderr');
       });
 
-      if (!child.stdout) {
+      if (!lines) {
         fail('bridge has no stdout');
         return;
       }
-      const lines = createInterface({ input: child.stdout });
       lines.on('line', (line) => {
         let message: Record<string, unknown>;
         try {
@@ -190,14 +203,18 @@ export class NeedleBridge implements ModelBackend {
           } else if (message.ready === true) {
             settled = true;
             clearTimeout(startTimer);
+            this.cancelStart = undefined;
             this.child = child;
+            this.closeOutput = () => lines?.close();
             this.startFailure = undefined;
             this.logger.info('Local model bridge ready');
             resolve(child);
           }
           return;
         }
-        this.handleResponse(message);
+        // A cancelled, failed or retired child cannot answer a later process's
+        // requests, even if it emits buffered output after being stopped.
+        if (!this.closed && this.child === child) this.handleResponse(message);
       });
     });
   }
@@ -225,6 +242,8 @@ export class NeedleBridge implements ModelBackend {
   ): void {
     if (this.child !== child) return;
     this.child = undefined;
+    this.closeOutput?.();
+    this.closeOutput = undefined;
     clearTimeout(this.idleTimer);
     const error = new Error(`Local model bridge exited (${signal ?? `code ${code}`})`);
     for (const [id, pending] of this.pending) {
@@ -260,6 +279,9 @@ export class NeedleBridge implements ModelBackend {
 
   private async request<T>(method: string, params: Record<string, unknown>): Promise<T> {
     const child = await this.ensureStarted();
+    // Ready resolves a promise: close/exit can run before this continuation.
+    if (this.closed) throw new Error('Model bridge is closed');
+    if (this.child !== child) throw new Error('Local model bridge exited before request');
     clearTimeout(this.idleTimer);
     this.setReferenced(true);
 
@@ -305,12 +327,15 @@ export class NeedleBridge implements ModelBackend {
     const child = this.child;
     if (!child) return;
     this.child = undefined;
+    this.closeOutput?.();
+    this.closeOutput = undefined;
     child.stdin?.end();
     child.kill();
   }
 
   async close(): Promise<void> {
     this.closed = true;
+    this.cancelStart?.();
     clearTimeout(this.idleTimer);
     for (const [id, pending] of this.pending) {
       clearTimeout(pending.timer);
