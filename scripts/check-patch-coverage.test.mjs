@@ -160,7 +160,7 @@ test('CLI exits nonzero for an intentionally uncovered branch and cannot reuse t
   assert.throws(() => execFileSync(process.execPath, args, { cwd: f.cwd, stdio: 'pipe' }), (error) => error.status === 1 && error.stderr.toString().includes('ENOENT'));
 });
 
-test('PR coverage binds the tested merge to both exact event parents', async (t) => {
+test('PR coverage binds the exact head and verifies an advanced target remains descended from the event base', async (t) => {
   const f = fixture(t);
   f.git('switch', '-c', 'candidate');
   f.put('src/example.ts', source.replace('? 1', '? 2'));
@@ -176,8 +176,15 @@ test('PR coverage binds the tested merge to both exact event parents', async (t)
   assert.equal(result.headSha, head);
   assert.equal(result.testedTreeSha, f.git('rev-parse', 'HEAD^{tree}'));
   assert.equal(result.totals.changedLines, 1);
-  await assert.rejects(runCoverage({ ...options, prHead: base }), /exact two parents/);
-  await assert.rejects(runCoverage({ ...options, base: f.base }), /exact two parents/);
+  assert.equal(result.eventBaseSha, base);
+  assert.equal(result.testedBaseSha, base);
+  const advanced = await runCoverage({ ...options, base: f.base });
+  assert.equal(advanced.eventBaseSha, f.base);
+  assert.equal(advanced.testedBaseSha, base);
+  assert.equal(advanced.mergeBase, base);
+  assert.deepEqual(advanced.files, result.files);
+  await assert.rejects(runCoverage({ ...options, prHead: base }), /exact PR head/);
+  await assert.rejects(runCoverage({ ...options, base: prHead }), /ancestor of the actual tested base/);
   f.git('switch', 'candidate');
-  await assert.rejects(runCoverage({ ...options, head: prHead, base: f.base }), /exact two parents/);
+  await assert.rejects(runCoverage({ ...options, head: prHead, base: f.base }), /exactly two parents/);
 });

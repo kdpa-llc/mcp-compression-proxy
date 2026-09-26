@@ -214,8 +214,11 @@ changes in earlier commits. Missing source records, stale reports and invalid ba
 
 The existing required Node 22 test job preserves GitHub's default synthetic PR merge
 checkout and tests the candidate together with its target branch. The gate also records
-the PR head and verifies that the tested commit's two parents are exactly the event base
-and PR head. Pushes compare the previous/current push commits. A first push without a previous
+the PR head and verifies that it is exactly the tested merge's second parent. The event
+base must be an ancestor of the actual tested target (first parent); GitHub can retain
+an older event base after that target advances. Both bases are recorded, and the patch
+is compared with the actual tested target so its unrelated changes do not count as PR
+changes. Pushes compare the previous/current push commits. A first push without a previous
 commit fails with an explicit base requirement; it does not silently compare HEAD to
 itself. Codecov upload and its comment remain useful presentation, but uploader success
 is not coverage acceptance. Inspect both the patch JSON artifact and the Codecov comment

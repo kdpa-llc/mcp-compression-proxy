@@ -105,14 +105,21 @@ export async function runCoverage({ cwd = process.cwd(), base, head = 'HEAD', pr
   if (headSha !== commit('HEAD')) fail('Coverage head must match the checked-out HEAD');
   if (baseSha === headSha) fail('Base and head must be different commits');
   const prHeadSha = prHead ? commit(prHead) : undefined;
+  let testedBaseSha = baseSha;
   if (prHeadSha) {
     const parents = git(cwd, ['rev-list', '--parents', '-n', '1', headSha]).split(' ').slice(1);
-    if (parents.length !== 2 || parents[0] !== baseSha || parents[1] !== prHeadSha) {
-      fail('Tested PR merge must have the event base and PR head as its exact two parents');
+    if (parents.length !== 2 || parents[1] !== prHeadSha) {
+      fail('Tested PR merge must have exactly two parents and the exact PR head as second parent');
     }
+    // GitHub can retain an older event base after advancing the merge ref.
+    // Require that provenance to remain ancestral, then compare the actual
+    // tested target with its merge so unrelated target changes are not charged to the PR.
+    try { git(cwd, ['merge-base', '--is-ancestor', baseSha, parents[0]]); }
+    catch { fail('Event base must be an ancestor of the actual tested base parent'); }
+    testedBaseSha = parents[0];
   }
   const testedTreeSha = git(cwd, ['rev-parse', `${headSha}^{tree}`]);
-  const mergeBase = git(cwd, ['merge-base', baseSha, headSha]);
+  const mergeBase = git(cwd, ['merge-base', testedBaseSha, headSha]);
   const before = snapshot(cwd);
   const { default: config } = await import(pathToFileURL(join(cwd, 'jest.config.js')).href);
   if (!Array.isArray(config.collectCoverageFrom)) fail('Expected explicit Jest collectCoverageFrom patterns');
@@ -148,7 +155,7 @@ export async function runCoverage({ cwd = process.cwd(), base, head = 'HEAD', pr
   else execFileSync(process.execPath, [join(cwd, 'node_modules/jest/bin/jest.js'), '--coverage', '--runInBand'], { cwd, stdio: 'inherit' });
   if (snapshot(cwd) !== before || commit('HEAD') !== headSha) fail('Source, tests, configuration, or HEAD changed during coverage generation');
   const lcov = readFileSync(reportPath, 'utf8');
-  const result = { baseSha, headSha, prHeadSha, testedTreeSha, mergeBase, sourceSha256: before, lcovSha256: digest(lcov),
+  const result = { baseSha, eventBaseSha: prHeadSha ? baseSha : undefined, testedBaseSha, headSha, prHeadSha, testedTreeSha, mergeBase, sourceSha256: before, lcovSha256: digest(lcov),
     generatedAt: new Date().toISOString(), scope: config.collectCoverageFrom, excludedFiles, ...evaluatePatch(changes, parseLcov(lcov, cwd)) };
   mkdirSync(coverageDir, { recursive: true });
   writeFileSync(resultPath, `${JSON.stringify(result, null, 2)}\n`);
