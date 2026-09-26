@@ -145,6 +145,32 @@ describe('completed shaped calls preserve backend outcomes', () => {
     }
   );
 
+  it('rejects a circular shape before CLI or native backend effects', async () => {
+    const want: Record<string, unknown> = { id: 'string' };
+    want.recursive = want;
+    const c = cli({ output: '{}' });
+    const n = native({ output: '{}' });
+    expect((await c.call({ want })).error?.message).toContain('circular shape');
+    expect(c.backends.calls).toHaveLength(0);
+    const result = await n.call({ want });
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'text', text: expect.stringContaining('circular shape') }),
+    ]));
+    expect(n.executeText).not.toHaveBeenCalled();
+  });
+
+  it('preserves a completed backend result when a model getter throws a non-Error value', async () => {
+    const output = 'Created order SYNTHETIC';
+    const c = cli({ output, model: () => { throw 'synthetic non-Error rejection'; } });
+    const shaped = cliShape(await c.call({ want: { id: 'string' } }));
+    expect(c.backends.calls).toHaveLength(1);
+    expect(shaped.execution).toBe('completed');
+    expect(shaped.warning).toContain('synthetic non-Error rejection');
+    expect(shaped.warning).toContain('Do not repeat the backend call');
+    expect(c.payloadStore.read(shaped.source!.id, { all: true }).content).toBe(output);
+  });
+
   it('returns completed plus the full source when model extraction fails in the actual CLI path', async () => {
     const c = cli({ model: () => badModel });
     const shaped = cliShape(await c.call({ want: { id: 'string' } }));

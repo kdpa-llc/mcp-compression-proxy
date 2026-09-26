@@ -31,7 +31,9 @@
     "sync-version": "node scripts/sync-version.mjs",
     "check:release-notes": "node scripts/check-release-notes.mjs",
     "prepare": "husky || true",
-    "prepublishOnly": "npm run build && npm test"
+    "prepublishOnly": "npm run build && npm test",
+    "test:coverage:gate": "node --test scripts/check-patch-coverage.test.mjs",
+    "test:coverage:patch": "npm run test:coverage:gate && npm run build && node scripts/check-patch-coverage.mjs"
   },
   "bin": {
     "mcp-compression-proxy": "./dist/index.js",

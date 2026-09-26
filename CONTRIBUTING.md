@@ -189,6 +189,39 @@ npm run test:e2e           # End-to-end tests only
 npm run test:e2e:real-llm  # Real LLM integration tests (requires Ollama)
 ```
 
+### Required patch coverage
+
+Before requesting review, commit the candidate and run this with an up-to-date target branch:
+
+```bash
+git fetch origin main
+npm run test:coverage:patch -- --base origin/main --head HEAD
+```
+
+Use a current Node 22 or 24 release (the gate needs Node 22.5+). This command builds,
+checks its own regression fixtures, generates fresh full Jest coverage, and requires
+all changed executable lines and branch arms within Jest's existing production-source
+coverage scope to be covered. The existing global 80% floors and entry-point exclusions
+remain in force. Docs-only changes, excluded declarations, and changes with no
+instrumented lines in a reported source file are marked not applicable, rather than
+a coverage percentage. An included source file absent from LCOV fails closed, even
+if it appears to contain only types; inspect that missing evidence before proceeding.
+
+The command requires a clean committed worktree and records the exact base, head,
+merge base, tested tree, source fingerprint, LCOV digest, scope and per-file results in
+`coverage/patch-coverage.json`. It checks the whole PR from its merge base, including
+changes in earlier commits. Missing source records, stale reports and invalid bases fail.
+
+The existing required Node 22 test job preserves GitHub's default synthetic PR merge
+checkout and tests the candidate together with its target branch. The gate also records
+the PR head and verifies that the tested commit's two parents are exactly the event base
+and PR head. Pushes compare the previous/current push commits. A first push without a previous
+commit fails with an explicit base requirement; it does not silently compare HEAD to
+itself. Codecov upload and its comment remain useful presentation, but uploader success
+is not coverage acceptance. Inspect both the patch JSON artifact and the Codecov comment
+before approving the exact PR head. Cover missed outcomes with meaningful tests; do not
+lower thresholds or suppress instrumentation to make a check pass.
+
 ### Writing Tests
 
 - Add unit tests for new functions and modules

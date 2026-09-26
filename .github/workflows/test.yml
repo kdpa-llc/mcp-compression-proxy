@@ -23,6 +23,8 @@ jobs:
       uses: actions/checkout@v7
       with:
         persist-credentials: false
+        # Preserve the default PR merge checkout; retain history for patch coverage.
+        fetch-depth: 0
 
     - name: Setup Node.js ${{ matrix.node-version }}
       uses: actions/setup-node@v7
@@ -59,9 +61,16 @@ jobs:
     # Coverage is identical across the matrix, so generate and upload it once.
     # Running it on every entry produced duplicate Codecov uploads for the
     # same commit and made the project/patch status flaky.
-    - name: Generate coverage report
+    - name: Enforce changed-line and branch coverage
       if: matrix.node-version == '22.x'
-      run: npm run test:coverage
+      env:
+        COVERAGE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        COVERAGE_HEAD: ${{ github.sha }}
+        COVERAGE_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+      run: |
+        args=(--base "$COVERAGE_BASE" --head "$COVERAGE_HEAD")
+        if [[ -n "$COVERAGE_PR_HEAD" ]]; then args+=(--pr-head "$COVERAGE_PR_HEAD"); fi
+        npm run test:coverage:patch -- "${args[@]}"
 
     - name: Upload coverage to Codecov
       if: github.repository == 'kdpa-llc/mcp-compression-proxy' && matrix.node-version == '22.x'

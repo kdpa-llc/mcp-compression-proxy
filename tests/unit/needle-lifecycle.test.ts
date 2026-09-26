@@ -83,6 +83,26 @@ describe('NeedleBridge startup lifecycle', () => {
     expect(spawnFn).toHaveBeenCalledTimes(1);
   });
 
+  it('ignores additional lines already buffered in the same chunk after startup fails', async () => {
+    const process = child();
+    const { model } = bridge(() => process);
+    const waiting = watch(model.embed(['a']));
+    // readline can emit more lines from the current data callback after close().
+    // A fatal message must retire the child even when readiness follows in that chunk.
+    // Even a malformed response from that retired child must be ignored.
+    expect(() => process.stdout?.write(JSON.stringify({ fatal: 'synthetic failed load' }) + '\n' +
+      JSON.stringify({ ready: true }) + '\n' + JSON.stringify({ id: 1, result: { vectors: [] } }) + '\nnull\n'))
+      .not.toThrow();
+    await flush();
+    expect(waiting.status).toBe('rejected');
+    expect(waiting.error?.message).toContain('synthetic failed load');
+    expect(model.unavailableReason()).toBe('synthetic failed load');
+    expect(process.written).toEqual([]);
+    expect(process.kill).toHaveBeenCalledTimes(1);
+    expect(process.stdout?.listenerCount('data')).toBe(0);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
   it('does not dispatch if close follows ready before the awaiting calls resume', async () => {
     const process = child();
     const { model } = bridge(() => process);
