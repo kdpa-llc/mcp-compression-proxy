@@ -35,7 +35,8 @@ loading and `${VAR}` expansion in `src/config/`.
 npm run build          # tsc
 npm test               # full suite (builds first via pretest)
 npm run test:unit      # unit only
-npm run test:coverage  # with coverage
+npm run test:coverage  # global coverage floors
+npm run test:coverage:patch -- --base origin/main --head HEAD # exact committed patch gate
 npm run lint           # eslint, must be 0 problems
 npm run typecheck      # tsc --noEmit
 npm run sync-version   # align src/version.ts with package.json
@@ -57,6 +58,11 @@ missing build fails them with `MODULE_NOT_FOUND`.
 `src/index.ts`, `src/cli/index.ts` and `src/cli/daemon.ts` are excluded from
 coverage — they need a real process, and are covered by the subprocess
 suites instead.
+
+Before handing off a PR, follow CONTRIBUTING.md's required patch coverage procedure.
+Global coverage and a successful Codecov upload do not prove the changed lines or
+branch arms are covered. Include the exact head/base, patch JSON evidence and any
+uncovered outcomes in the handoff; keep real model tests outside this default suite.
 
 ### Rules learned from real failures here
 

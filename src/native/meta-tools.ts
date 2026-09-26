@@ -6,7 +6,7 @@ import type { ToolSearch } from '../search/tool-search.js';
 import type { UsageLog } from '../search/usage-log.js';
 import { CallSuggester } from '../services/call-suggester.js';
 import { auditCompression } from '../services/compression-audit.js';
-import { readShapeSpec, shapeAndStore } from '../services/shaped-call.js';
+import { readShapeSpec, shapeAndStore, shapeCompletedCall } from '../services/shaped-call.js';
 
 const PREFIX = 'mcp-compression-proxy__';
 
@@ -264,7 +264,9 @@ export class MetaTools {
     const { output, isError } = await this.deps.executeText(server, tool, toolArgs);
     if (isError) return errorText(output);
     return json(
-      await shapeAndStore(output, spec, this.deps.payloadStore, this.deps.threshold(), this.deps.model())
+      await shapeCompletedCall(output, this.deps.payloadStore, () =>
+        shapeAndStore(output, spec, this.deps.payloadStore, this.deps.threshold(), this.deps.model())
+      )
     );
   }
 

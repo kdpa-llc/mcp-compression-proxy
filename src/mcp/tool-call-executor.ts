@@ -15,6 +15,9 @@ export class ToolExcludedError extends Error {
   }
 }
 
+/** Internal signal: keep the original auth result when replay permission ends. */
+class RetryAuthorizationRevokedError extends Error {}
+
 type AttemptResult =
   | { result: CallToolResult; authFailure: boolean }
   | { error: unknown; authFailure: boolean };
@@ -105,7 +108,8 @@ async function attemptToolCall(
   serverName: string,
   toolName: string,
   args: Record<string, unknown>,
-  authErrorPatterns: string[]
+  authErrorPatterns: string[],
+  retry = false
 ): Promise<AttemptResult> {
   let authFailure = false;
 
@@ -113,6 +117,18 @@ async function attemptToolCall(
     const result = await manager.withClient(
       serverName,
       async ({ client, invalidate, markFailure }) => {
+        // Acquiring a client (including auth recovery) can outlive a config
+        // change. Recheck every attempt immediately before backend I/O.
+        if (manager.isToolExcluded(serverName, toolName)) {
+          throw new ToolExcludedError(serverName, toolName);
+        }
+        if (
+          retry &&
+          !isRetrySafe(serverName, toolName, manager.getAuthRecoveryPolicy(serverName).authRetryTools)
+        ) {
+          throw new RetryAuthorizationRevokedError();
+        }
+
         try {
           const rawResult = await client.callTool(
             {
@@ -189,7 +205,11 @@ export async function callToolWithAuthRecovery(
     policy.authErrorPatterns
   );
 
-  if (!first.authFailure || !retrySafe) {
+  if (
+    !first.authFailure ||
+    !retrySafe ||
+    !isRetrySafe(serverName, toolName, manager.getAuthRecoveryPolicy(serverName).authRetryTools)
+  ) {
     if (first.authFailure) {
       logger.warn(
         { server: serverName, tool: toolName },
@@ -211,9 +231,16 @@ export async function callToolWithAuthRecovery(
     serverName,
     toolName,
     args,
-    policy.authErrorPatterns
+    policy.authErrorPatterns,
+    true
   );
 
-  if ('error' in second) throw second.error;
+  if ('error' in second) {
+    if (second.error instanceof RetryAuthorizationRevokedError) {
+      if ('error' in first) throw first.error;
+      return first.result;
+    }
+    throw second.error;
+  }
   return second.result;
 }
