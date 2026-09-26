@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.3.1](https://github.com/kdpa-llc/mcp-compression-proxy/compare/v1.3.0...v1.3.1) (2026-09-26)
+
+### Bug Fixes
+
+* preserve call policy, completed results and model shutdown ([#67](https://github.com/kdpa-llc/mcp-compression-proxy/issues/67)) ([1d77121](https://github.com/kdpa-llc/mcp-compression-proxy/commit/1d7712108cec5db8ecd7c056dc4a31c4b3475bae))
+
 ## [1.3.0](https://github.com/kdpa-llc/mcp-compression-proxy/compare/v1.2.0...v1.3.0) (2026-09-24)
 
 ### Features
