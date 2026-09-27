@@ -277,6 +277,9 @@ export class BackendPool {
  */
 export class PooledBackends implements BackendAccess {
   private aliases = new Map<string, string>();
+  private catalogKey = '';
+  private catalogRevision = 0;
+  private catalogReady: Promise<void> = Promise.resolve();
   private excludePatterns: string[] = [];
   private watchTimer: ReturnType<typeof setInterval> | undefined;
   private released = false;
@@ -301,7 +304,13 @@ export class PooledBackends implements BackendAccess {
       : [];
     this.aliases = new Map([...servers.keys()].map((name, index) => [name, specs[index].id]));
     this.excludePatterns = [...(config?.excludePatterns ?? [])];
-    return this.pool.hold(this.context.id, specs);
+    const key = stableJson([[...this.aliases].sort(), this.excludePatterns]);
+    if (key !== this.catalogKey) {
+      this.catalogKey = key;
+      this.catalogRevision += 1;
+    }
+    this.catalogReady = this.pool.hold(this.context.id, specs);
+    return this.catalogReady;
   }
 
   /**
@@ -333,6 +342,24 @@ export class PooledBackends implements BackendAccess {
 
   getConfiguredServerNames(): string[] {
     return [...this.aliases.keys()];
+  }
+
+  /** Per-client configuration epoch; A -> B -> A still retires old listings. */
+  getCatalogRevision(): number {
+    return this.catalogRevision;
+  }
+
+  /** Do not list aliases whose replacement connections are still reconciling. */
+  async waitForCatalogReady(): Promise<void> {
+    let ready: Promise<void>;
+    do {
+      ready = this.catalogReady;
+      try {
+        await ready;
+      } catch (error) {
+        if (ready === this.catalogReady) throw error;
+      }
+    } while (ready !== this.catalogReady);
   }
 
   withClient<T>(
