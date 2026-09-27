@@ -180,9 +180,18 @@ describe('ToolCatalog', () => {
   it('does not let a stale listing clear a newer one in flight', async () => {
     const catalog = new ToolCatalog(manager, logger);
 
+    let finishFirst!: (value: { tools: ReturnType<typeof tool>[] }) => void;
+    const held = new Promise<{ tools: ReturnType<typeof tool>[] }>((resolve) => {
+      finishFirst = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      listA.mockImplementationOnce(() => { resolve(); return held; });
+    });
     const first = catalog.list();
+    await started;
     manager.setExcludePatterns(['a__read']);
     const second = catalog.list();
+    finishFirst({ tools: [tool('read')] });
 
     const [, after] = await Promise.all([first, second]);
     // Exclusion is applied as each listing finishes, so the newer one is right.
