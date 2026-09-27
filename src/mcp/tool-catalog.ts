@@ -119,13 +119,18 @@ export class ToolCatalog {
       return this.inflight.promise;
     }
 
-    const promise = this.fetchAll().then((tools) => {
+    const promise = (async () => {
+      await this.manager.waitForCatalogReady?.();
+      // Readiness can settle for a newer configuration than this request's
+      // key. Join its current snapshot before starting a redundant fan-out.
+      if (key !== this.cacheKey()) return this.list();
+      const tools = await this.fetchAll();
       // A slow response from a replaced backend must neither escape to its
       // caller nor extend the lifetime of an obsolete snapshot.
       if (key !== this.cacheKey()) return this.list();
       this.cache = { expiresAt: Date.now() + this.ttlMs, key, tools };
       return tools;
-    });
+    })();
     this.inflight = { key, promise };
 
     try {
@@ -138,7 +143,6 @@ export class ToolCatalog {
   }
 
   private async fetchAll(): Promise<CatalogTool[]> {
-    await this.manager.waitForCatalogReady?.();
     const perServer = await Promise.all(
       this.manager.getConfiguredServerNames().map(async (name) => {
         try {

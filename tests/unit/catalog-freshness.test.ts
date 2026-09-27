@@ -379,4 +379,27 @@ describe('catalog freshness across backend configuration changes', () => {
     await applying;
     await f.pool.close();
   });
+
+  it('lists the latest backend once when configuration changes while waiting for readiness', async () => {
+    const f = fixture();
+    const a = f.make('a');
+    await a.access.apply(config([server('old')]));
+    const delayed = deferred<void>();
+    f.waitForReconcile(delayed.promise);
+    const middleApply = a.access.apply(config([server('new')]));
+    const first = a.catalog.list();
+    const latestApply = a.access.apply(config([server('extra')]));
+    const second = a.catalog.list();
+    expect(f.lists.get('new')).not.toHaveBeenCalled();
+    expect(f.lists.get('extra')).not.toHaveBeenCalled();
+    delayed.resolve();
+    await Promise.all([middleApply, latestApply]);
+    const [one, two] = await Promise.all([first, second]);
+    expect(one[0].title).toBe('extra');
+    expect(one).toBe(two);
+    expect(await a.catalog.list()).toBe(one);
+    expect(f.lists.get('new')).not.toHaveBeenCalled();
+    expect(f.lists.get('extra')).toHaveBeenCalledTimes(1);
+    await f.pool.close();
+  });
 });
