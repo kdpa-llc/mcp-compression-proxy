@@ -63,6 +63,16 @@ function toCatalogTool(serverName: string, tool: Tool): CatalogTool {
 }
 
 /**
+ * Catalog-specific signals supplied by the production backend implementations.
+ * Lightweight BackendAccess adapters without them retain name/exclusion-based
+ * invalidation and can explicitly invalidate after changing a backend in place.
+ */
+interface CatalogBackends extends BackendAccess {
+  getCatalogRevision?(): number;
+  waitForCatalogReady?(): Promise<void>;
+}
+
+/**
  * The combined, exclusion-filtered tool list of every backend.
  *
  * One snapshot shared by listing, search, compression and stats, so they all
@@ -70,23 +80,26 @@ function toCatalogTool(serverName: string, tool: Tool): CatalogTool {
  * walk makes every search as slow as the sum of all servers.
  */
 export class ToolCatalog {
+  private revision = 0;
   private cache: { expiresAt: number; key: string; tools: CatalogTool[] } | undefined;
   private inflight: { key: string; promise: Promise<CatalogTool[]> } | undefined;
 
   constructor(
-    private readonly manager: BackendAccess,
+    private readonly manager: CatalogBackends,
     private readonly logger: Logger,
     private readonly ttlMs = 3000
   ) {}
 
   /**
-   * Keyed on the connected set and the exclude patterns as well as the clock.
+   * Keyed on backend revisions, the configured set and exclusion patterns.
    * Hot-reload can add or drop a backend between ticks and an edited
    * servers.json can change what is filtered; serving either from a stale
    * snapshot would contradict what the caller is about to act on.
    */
   private cacheKey(): string {
     return JSON.stringify([
+      this.revision,
+      this.manager.getCatalogRevision?.(),
       this.manager.getExcludePatterns(),
       [...this.manager.getConfiguredServerNames()].sort(),
     ]);
@@ -107,6 +120,9 @@ export class ToolCatalog {
     }
 
     const promise = this.fetchAll().then((tools) => {
+      // A slow response from a replaced backend must neither escape to its
+      // caller nor extend the lifetime of an obsolete snapshot.
+      if (key !== this.cacheKey()) return this.list();
       this.cache = { expiresAt: Date.now() + this.ttlMs, key, tools };
       return tools;
     });
@@ -122,10 +138,11 @@ export class ToolCatalog {
   }
 
   private async fetchAll(): Promise<CatalogTool[]> {
+    await this.manager.waitForCatalogReady?.();
     const perServer = await Promise.all(
       this.manager.getConfiguredServerNames().map(async (name) => {
         try {
-          return await this.listServer(name);
+          return await this.fetchServer(name);
         } catch (error) {
           this.logger.error({ server: name, error }, 'Failed to list tools from server');
           return [];
@@ -137,6 +154,21 @@ export class ToolCatalog {
 
   /** One backend's non-excluded tools. Throws when the backend cannot list. */
   async listServer(serverName: string): Promise<CatalogTool[]> {
+    await this.manager.waitForCatalogReady?.();
+    const key = this.cacheKey();
+    try {
+      const tools = await this.fetchServer(serverName);
+      if (key !== this.cacheKey()) return this.listServer(serverName);
+      return tools;
+    } catch (error) {
+      // Closing a replaced connection may reject its outstanding list. Retry
+      // only after configuration changed; real current-backend errors surface.
+      if (key !== this.cacheKey()) return this.listServer(serverName);
+      throw error;
+    }
+  }
+
+  private async fetchServer(serverName: string): Promise<CatalogTool[]> {
     const tools = await this.manager.withClient(serverName, async ({ client }) =>
       listAllTools(client)
     );
@@ -153,7 +185,9 @@ export class ToolCatalog {
     if (this.manager.isToolExcluded(serverName, toolName)) {
       return undefined;
     }
+    const key = this.cacheKey();
     const tools = await this.list();
+    if (key !== this.cacheKey()) return this.find(serverName, toolName);
     const cached = tools.find(
       (tool) => tool.serverName === serverName && tool.toolName === toolName
     );
@@ -171,6 +205,7 @@ export class ToolCatalog {
 
   /** Drop the snapshot so the next read lists every backend again. */
   invalidate(): void {
+    this.revision += 1;
     this.cache = undefined;
   }
 }

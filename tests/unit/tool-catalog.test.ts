@@ -190,5 +190,42 @@ describe('ToolCatalog', () => {
     // Both fan-outs ran; the first finishing did not drop the second's slot.
     expect(listA).toHaveBeenCalledTimes(2);
   });
+
+  it('refreshes a standalone manager after same-name replacement and preserves unchanged config cache', async () => {
+    const catalog = new ToolCatalog(manager, logger, 60_000);
+    await catalog.list();
+    const unchanged = [
+      { name: 'a', command: 'a', softMaxConnectionAgeSeconds: 0, hardMaxConnectionAgeSeconds: 0 },
+      { name: 'b', command: 'b', softMaxConnectionAgeSeconds: 0, hardMaxConnectionAgeSeconds: 0 },
+    ];
+    await manager.reconcile(unchanged); await catalog.list(); expect(listA).toHaveBeenCalledTimes(1);
+    const replacement = jest.fn<ListTools>().mockResolvedValue({ tools: [tool('new_read')] });
+    const { Client: ClientCtor } = await import('@modelcontextprotocol/sdk/client/index.js');
+    (ClientCtor as unknown as jest.Mock).mockImplementation(() => ({
+      connect: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      close: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      listTools: replacement,
+    }));
+    await manager.reconcile([{ ...unchanged[0], command: 'replacement' }, unchanged[1]]);
+    expect((await catalog.list()).map((t) => t.toolName)).toEqual(['send', 'new_read']);
+    await manager.disconnectAll(); expect(await catalog.list()).toEqual([]);
+  });
+
+  it('retains explicit invalidation compatibility for adapters without revision signals', async () => {
+    const catalog = new ToolCatalog({
+      getConfiguredServerNames: () => manager.getConfiguredServerNames(),
+      getExcludePatterns: () => manager.getExcludePatterns(),
+      isToolExcluded: (server, name) => manager.isToolExcluded(server, name),
+      withClient: (server, operation) => manager.withClient(server, operation),
+      getAuthRecoveryPolicy: (server) => manager.getAuthRecoveryPolicy(server),
+      getAuthFailureConfirmer: () => undefined,
+      getServerStatuses: () => [],
+    }, logger, 60_000);
+    const old = await catalog.list(); expect(await catalog.list()).toBe(old);
+    listA.mockResolvedValue({ tools: [tool('fresh')] }); catalog.invalidate();
+    expect((await catalog.list()).map((t) => t.toolName)).toEqual(['fresh', 'send']);
+    manager.setExcludePatterns(undefined); manager.setExcludePatterns([]);
+  });
+
 });
 

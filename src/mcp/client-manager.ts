@@ -218,6 +218,7 @@ export class MCPClientManager {
   private configWatchTimer?: ReturnType<typeof setInterval>;
   private shuttingDown = false;
   private excludePatterns: string[] = [];
+  private catalogRevision = 0;
   private authFailureConfirmer: AuthFailureConfirmer | undefined;
 
   constructor(logger: Logger) {
@@ -299,6 +300,7 @@ export class MCPClientManager {
     lifecycleDefaults: ConnectionLifecycleDefaults = {}
   ): Promise<void> {
     this.logger.info({ count: servers.length }, 'Initializing MCP servers');
+    this.catalogRevision += 1;
 
     const slots = servers.map((server) => {
       const config = this.resolveConfig(
@@ -609,6 +611,7 @@ export class MCPClientManager {
     }
 
     this.logger.info({ removed, changed, added }, 'Applying backend server configuration change');
+    this.catalogRevision += 1;
 
     // Fully drained before a single connect starts. A changed server is a
     // teardown *and* an add, and letting the two overlap would leave two
@@ -641,6 +644,8 @@ export class MCPClientManager {
           }
         })
     );
+    // Reads during teardown may have seen a temporarily incomplete set.
+    this.catalogRevision += 1;
   }
 
   /**
@@ -1020,7 +1025,11 @@ export class MCPClientManager {
    * them one guessed name away from running.
    */
   setExcludePatterns(patterns: string[] | undefined): void {
-    this.excludePatterns = [...(patterns ?? [])];
+    const next = [...(patterns ?? [])];
+    if (JSON.stringify(next) !== JSON.stringify(this.excludePatterns)) {
+      this.catalogRevision += 1;
+    }
+    this.excludePatterns = next;
   }
 
   getExcludePatterns(): string[] {
@@ -1041,6 +1050,10 @@ export class MCPClientManager {
 
   getConfiguredServerNames(): string[] {
     return Array.from(this.slots.keys());
+  }
+
+  getCatalogRevision(): number {
+    return this.catalogRevision;
   }
 
   getAuthRecoveryPolicy(serverName: string): {
@@ -1115,6 +1128,7 @@ export class MCPClientManager {
 
   async disconnectAll(): Promise<void> {
     this.logger.info('Disconnecting from all MCP servers');
+    this.catalogRevision += 1;
     this.shuttingDown = true;
 
     if (this.configWatchTimer) {
