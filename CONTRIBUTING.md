@@ -210,7 +210,15 @@ if it appears to contain only types; inspect that missing evidence before procee
 The command requires a clean committed worktree and records the exact base, head,
 merge base, tested tree, source fingerprint, LCOV digest, scope and per-file results in
 `coverage/patch-coverage.json`. It checks the whole PR from its merge base, including
-changes in earlier commits. Missing source records, stale reports and invalid bases fail.
+changes in earlier commits. Missing changed-source records, stale reports and invalid
+bases fail. Every reported LCOV source must identify a Git-tracked file within the existing coverage scope,
+including on dependency/docs-only changes; fabricated source paths are rejected.
+This identity check does not infer missing unchanged runtime files or require
+erased type-only files to have executable counters.
+
+`ts-jest` is pinned to 29.4.12: 29.4.13 emits fabricated `file:` source paths in
+coverage with both Jest 30.5.1 and 30.5.2. A future update must retain canonical
+source identities and pass the full coverage and artifact checks.
 
 The existing required Node 22 test job preserves GitHub's default synthetic PR merge
 checkout and tests the candidate together with its target branch. The gate also records
