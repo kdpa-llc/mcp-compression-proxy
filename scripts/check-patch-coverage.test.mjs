@@ -101,16 +101,61 @@ test('docs-only patches pass explicitly with no executable denominator', async (
   assert.equal(result.applicability, 'not-applicable');
 });
 
+
+test('every LCOV source must identify a tracked included file even for non-source changes', async (t) => {
+  for (const changedFile of ['README.md', 'package-lock.json']) {
+    const f = fixture(t);
+    f.put('src/entry.ts', source); // Tracked but explicitly excluded from coverage.
+    const base = f.commit('excluded entry');
+    f.put(changedFile, changedFile.endsWith('.json') ? '{}\n' : 'docs only\n');
+    const head = f.commit('non-source change');
+    const options = { cwd: f.cwd, base, head };
+    for (const name of [
+      'src/nonexistent.ts',
+      'src/file:/runner/work/project/src/example.ts',
+      'src/entry.ts',
+      changedFile,
+    ]) {
+      await assert.rejects(
+        runCoverage({ ...options, runJest: () => f.report(lcov({ name })) }),
+        /LCOV source is not a tracked file in coverage scope/
+      );
+    }
+    for (const name of ['src/example.ts', join(f.cwd, 'src/example.ts')]) {
+      const result = await runCoverage({ ...options, runJest: () => f.report(lcov({ name })) });
+      assert.equal(result.applicability, 'not-applicable');
+      assert.equal(result.status, 'passed');
+    }
+    await assert.rejects(
+      runCoverage({ ...options, runJest: () => f.report(lcov() + lcov({ name: './src/example.ts' })) }),
+      /Invalid or duplicate LCOV source/
+    );
+  }
+});
+
+test('unchanged type-only sources need not invent an executable coverage record', async (t) => {
+  const f = fixture(t);
+  f.put('src/types.ts', 'export interface Config { enabled: boolean }\n');
+  const base = f.commit('type-only source');
+  f.put('README.md', 'docs');
+  const head = f.commit('docs only');
+  const result = await runCoverage({ cwd: f.cwd, base, head, runJest: () => f.report() });
+  assert.equal(result.status, 'passed');
+  assert.equal(result.applicability, 'not-applicable');
+});
+
 test('source renames preserve unchanged lines and deletions do not invent head lines', async (t) => {
   const f = fixture(t);
+  f.put('src/other.ts', source);
+  const base = f.commit('keep a real source after deleting the renamed file');
   f.git('mv', 'src/example.ts', 'src/renamed.ts');
   let head = f.commit('rename');
-  let result = await runCoverage({ cwd: f.cwd, base: f.base, head, runJest: () => f.report(lcov({ name: 'src/renamed.ts' })) });
+  let result = await runCoverage({ cwd: f.cwd, base, head, runJest: () => f.report(lcov({ name: 'src/renamed.ts' })) });
   assert.equal(result.files[0].changedLines, 0);
   assert.equal(result.files[0].name, 'src/renamed.ts');
   f.git('rm', 'src/renamed.ts');
   head = f.commit('delete');
-  result = await runCoverage({ cwd: f.cwd, base: f.base, head, runJest: () => f.report(lcov({ name: 'src/other.ts' })) });
+  result = await runCoverage({ cwd: f.cwd, base, head, runJest: () => f.report(lcov({ name: 'src/other.ts' })) });
   assert.deepEqual(result.files, []);
 });
 

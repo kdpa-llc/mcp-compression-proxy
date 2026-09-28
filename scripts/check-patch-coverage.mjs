@@ -155,8 +155,14 @@ export async function runCoverage({ cwd = process.cwd(), base, head = 'HEAD', pr
   else execFileSync(process.execPath, [join(cwd, 'node_modules/jest/bin/jest.js'), '--coverage', '--runInBand'], { cwd, stdio: 'inherit' });
   if (snapshot(cwd) !== before || commit('HEAD') !== headSha) fail('Source, tests, configuration, or HEAD changed during coverage generation');
   const lcov = readFileSync(reportPath, 'utf8');
+  const coverage = parseLcov(lcov, cwd);
+  const tracked = new Set(git(cwd, ['ls-files', '-z']).split('\0').filter(Boolean));
+  // Validate every report identity, including when a dependency/docs-only diff is N/A.
+  for (const name of coverage.keys()) {
+    if (!tracked.has(name) || !included(name)) fail('LCOV source is not a tracked file in coverage scope: ' + name);
+  }
   const result = { baseSha, eventBaseSha: prHeadSha ? baseSha : undefined, testedBaseSha, headSha, prHeadSha, testedTreeSha, mergeBase, sourceSha256: before, lcovSha256: digest(lcov),
-    generatedAt: new Date().toISOString(), scope: config.collectCoverageFrom, excludedFiles, ...evaluatePatch(changes, parseLcov(lcov, cwd)) };
+    generatedAt: new Date().toISOString(), scope: config.collectCoverageFrom, excludedFiles, ...evaluatePatch(changes, coverage) };
   mkdirSync(coverageDir, { recursive: true });
   writeFileSync(resultPath, `${JSON.stringify(result, null, 2)}\n`);
   console.log(JSON.stringify(result, null, 2));
