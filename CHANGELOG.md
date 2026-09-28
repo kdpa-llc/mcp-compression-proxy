@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.3.2](https://github.com/kdpa-llc/mcp-compression-proxy/compare/v1.3.1...v1.3.2) (2026-09-28)
+
+### Bug Fixes
+
+* refresh tool catalogs when backend configurations change ([df3cc99](https://github.com/kdpa-llc/mcp-compression-proxy/commit/df3cc994d22eb6bb46fc61eaa2f4d0e94cae46ec))
+* retire superseded catalog requests before listing backends ([f03e8e3](https://github.com/kdpa-llc/mcp-compression-proxy/commit/f03e8e36a93047e05274897f7b3e73ea426eabbf))
+
 ## [1.3.1](https://github.com/kdpa-llc/mcp-compression-proxy/compare/v1.3.0...v1.3.1) (2026-09-26)
 
 ### Bug Fixes
