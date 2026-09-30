@@ -126,6 +126,7 @@ export class ProxySession {
     this.metaTools = new MetaTools({
       catalog: view.catalog,
       search: this.search,
+      searchLimit: () => view.config()?.search?.limit,
       usage: this.usage,
       compression: {
         getCompressedDescription: (server, tool, original) =>
