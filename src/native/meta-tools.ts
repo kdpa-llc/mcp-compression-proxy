@@ -40,7 +40,7 @@ const DEFINITIONS: Record<string, Tool> = {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'What you want to do, or part of a tool name.' },
-        limit: { type: 'number', minimum: 1, description: 'Results (default 15).' },
+        limit: { type: 'number', minimum: 1, description: 'Results (defaults to configured search.limit, otherwise 15).' },
       },
       required: ['query'],
     },
@@ -128,6 +128,8 @@ export const LAZY_KEPT_MANAGEMENT_TOOLS = [
 export interface MetaToolDeps {
   catalog: { list(): Promise<CatalogTool[]>; find(server: string, tool: string): Promise<CatalogTool | undefined> };
   search: ToolSearch;
+  /** Current client default; undefined keeps ToolSearch's default. */
+  searchLimit?(): number | undefined;
   usage?: UsageLog;
   compression: {
     getCompressedDescription(serverName: string, toolName: string, liveOriginal?: string): string | undefined;
@@ -222,7 +224,7 @@ export class MetaTools {
     const limit = Number(args.limit);
     const result = await this.deps.search.search(
       query,
-      Number.isInteger(limit) && limit > 0 ? limit : undefined
+      Number.isInteger(limit) && limit > 0 ? limit : this.deps.searchLimit?.()
     );
     return json({
       tools: result.hits.map(({ server, tool, description }) => ({ server, tool, description })),
