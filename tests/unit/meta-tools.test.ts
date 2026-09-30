@@ -215,7 +215,7 @@ describe('MetaTools edges', () => {
   const store = new PayloadStore();
   afterAll(() => store.destroy());
 
-  function metaWith(overrides: Record<string, unknown> = {}) {
+  function metaWith(overrides: Record<string, unknown> = {}, searchLimit?: () => number | undefined) {
     const compression = {
       getCompressedDescription: () => undefined,
       invalidate: jest.fn((_server: string, _tool: string) => false),
@@ -232,6 +232,7 @@ describe('MetaTools edges', () => {
       meta: new MetaTools({
         catalog,
         search: new ToolSearch(catalog, compression),
+        searchLimit,
         compression,
         payloadStore: store,
         threshold: () => 10_000,
@@ -241,6 +242,65 @@ describe('MetaTools edges', () => {
       }),
     };
   }
+
+  describe('configured search limit fallback', () => {
+    const matches = Array.from({ length: 20 }, (_, index) => ({
+      serverName: 'fixture',
+      toolName: `match_${index}`,
+      description: 'A matching fixture tool.',
+      inputSchema: { type: 'object' as const },
+    }));
+
+    it.each([
+      ['omitted', undefined],
+      ['zero', 0],
+      ['negative', -1],
+      ['fractional', 2.5],
+      ['nonnumeric', 'invalid'],
+      ['null', null],
+      ['NaN', NaN],
+      ['infinite', Infinity],
+    ])('uses the configured limit for an %s per-call value', async (_label, limit) => {
+      const { meta } = metaWith({ list: async () => matches }, () => 3);
+      const found = JSON.parse(text(await meta.call(META_TOOLS.searchTools, { query: 'match', limit })));
+      expect(found).toMatchObject({ shown: 3, total: 20 });
+      expect(found.tools).toHaveLength(3);
+    });
+
+    it.each<[number | string, number]>([
+      [1, 1],
+      ['2', 2],
+      [100, 20],
+    ])('keeps valid explicit limit %s ahead of the configured default', async (limit, count) => {
+      const configured = jest.fn(() => 3);
+      const { meta } = metaWith({ list: async () => matches }, configured);
+      const found = JSON.parse(text(await meta.call(META_TOOLS.searchTools, { query: 'match', limit })));
+      expect(found).toMatchObject({ shown: count, total: 20 });
+      expect(found.tools).toHaveLength(count);
+      expect(configured).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [18, 18],
+      [100, 20],
+      [2.5, 2],
+    ])('preserves configured limit %s without a new cap or validation rule', async (limit, count) => {
+      const { meta } = metaWith({ list: async () => matches }, () => limit);
+      const found = JSON.parse(text(await meta.call(META_TOOLS.searchTools, { query: 'match' })));
+      expect(found).toMatchObject({ shown: count, total: 20 });
+      expect(found.tools).toHaveLength(count);
+    });
+
+    it.each<[string, (() => number | undefined) | undefined]>([
+      ['no getter', undefined],
+      ['undefined default', () => undefined],
+    ])('keeps ToolSearch default 15 with %s', async (_label, searchLimit) => {
+      const { meta } = metaWith({ list: async () => matches }, searchLimit);
+      const found = JSON.parse(text(await meta.call(META_TOOLS.searchTools, { query: 'match' })));
+      expect(found).toMatchObject({ shown: 15, total: 20 });
+      expect(found.tools).toHaveLength(15);
+    });
+  });
 
   it('rejects missing names and ids', async () => {
     const { meta } = metaWith();

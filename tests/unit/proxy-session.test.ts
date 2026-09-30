@@ -125,6 +125,57 @@ describe('ProxySession', () => {
     return { client, session, cache, payloads, backends, dir, persistence, logger, call, setConfig };
   }
 
+  describe('native search limits', () => {
+    const searchServers = {
+      fixture: Array.from({ length: 20 }, (_, index) =>
+        tool(`match_${index}`, 'A matching fixture tool.')
+      ),
+    };
+
+    it('uses the configured default and preserves explicit per-call limits', async () => {
+      const { call } = await start({
+        servers: searchServers,
+        config: { toolExposure: 'lazy', search: { limit: 3 } },
+      });
+      const defaults = JSON.parse(textOf(await call(`${P}search_tools`, { query: 'match' })));
+      expect(defaults).toMatchObject({ shown: 3, total: 20 });
+      expect(defaults.tools).toHaveLength(3);
+
+      const explicit = JSON.parse(textOf(await call(`${P}search_tools`, { query: 'match', limit: 1 })));
+      expect(explicit).toMatchObject({ shown: 1, total: 20 });
+      expect(explicit.tools).toHaveLength(1);
+    });
+
+    it('reads refreshed client configuration and keeps sessions independent', async () => {
+      const first = await start({ servers: searchServers, config: { search: { limit: 3 } } });
+      const second = await start({ servers: searchServers, config: { search: { limit: 18 } } });
+      const search = async (call: typeof first.call) =>
+        JSON.parse(textOf(await call(`${P}search_tools`, { query: 'match' })));
+
+      expect(await search(first.call)).toMatchObject({ shown: 3, total: 20 });
+      expect(await search(second.call)).toMatchObject({ shown: 18, total: 20 });
+      first.setConfig({ search: { limit: 2 } });
+      expect(await search(first.call)).toMatchObject({ shown: 2, total: 20 });
+      expect(await search(second.call)).toMatchObject({ shown: 18, total: 20 });
+      first.setConfig({ search: undefined });
+      expect(await search(first.call)).toMatchObject({ shown: 15, total: 20 });
+    });
+
+    it('keeps the default of 15 when the client has no configuration', async () => {
+      const { call } = await start({ servers: searchServers, noConfig: true });
+      const found = JSON.parse(textOf(await call(`${P}search_tools`, { query: 'match' })));
+      expect(found).toMatchObject({ shown: 15, total: 20 });
+      expect(found.tools).toHaveLength(15);
+    });
+
+    it('preserves configured fractional limits and invalid per-call fallback', async () => {
+      const { call } = await start({ servers: searchServers, config: { search: { limit: 2.5 } } });
+      const found = JSON.parse(textOf(await call(`${P}search_tools`, { query: 'match', limit: 0 })));
+      expect(found).toMatchObject({ shown: 2, total: 20 });
+      expect(found.tools).toHaveLength(2);
+    });
+  });
+
   describe('tools/list', () => {
     it('lists management, wrapper and backend tools with compressed descriptions and metadata', async () => {
       const { client, cache } = await start();
