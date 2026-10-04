@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.3.3](https://github.com/kdpa-llc/mcp-compression-proxy/compare/v1.3.2...v1.3.3) (2026-10-04)
+
+### Bug Fixes
+
+* **search:** honor configured limits in native discovery ([ae5b2a0](https://github.com/kdpa-llc/mcp-compression-proxy/commit/ae5b2a0f76898d005a21f469039873bd4b11f991))
+
 ## [1.3.2](https://github.com/kdpa-llc/mcp-compression-proxy/compare/v1.3.1...v1.3.2) (2026-09-28)
 
 ### Bug Fixes
