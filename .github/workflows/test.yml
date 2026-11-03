@@ -72,22 +72,62 @@ jobs:
         if [[ -n "$COVERAGE_PR_HEAD" ]]; then args+=(--pr-head "$COVERAGE_PR_HEAD"); fi
         npm run test:coverage:patch -- "${args[@]}"
 
-    - name: Upload coverage to Codecov
-      if: github.repository == 'kdpa-llc/mcp-compression-proxy' && matrix.node-version == '22.x'
-      uses: codecov/codecov-action@v7
-      with:
-        files: ./coverage/lcov.info
-        flags: unittests
-        name: codecov-${{ matrix.node-version }}
-        fail_ci_if_error: false
-        token: ${{ secrets.CODECOV_TOKEN }}
-
     - name: Archive coverage report
       if: always() && matrix.node-version == '22.x'
       uses: actions/upload-artifact@v7
       with:
         name: coverage-report
         path: coverage/
+
+  coverage-upload:
+    name: Upload Coverage
+    needs: test
+    if: github.repository == 'kdpa-llc/mcp-compression-proxy'
+    runs-on: ubuntu-latest
+    # Keep upload identity out of the job that installs and executes dependencies.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+    - name: Checkout measured source
+      uses: actions/checkout@v7
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+
+    - name: Download validated coverage report
+      uses: actions/download-artifact@v7
+      with:
+        name: coverage-report
+        path: coverage/
+
+    - name: Verify coverage provenance
+      shell: bash
+      env:
+        COVERAGE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        COVERAGE_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+      run: |
+        set -euo pipefail
+        test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+        report_hash=$(sha256sum coverage/lcov.info | cut -d' ' -f1)
+        jq -e --arg head "$GITHUB_SHA" \
+          --arg tree "$(git rev-parse 'HEAD^{tree}')" \
+          --arg base "$COVERAGE_BASE" --arg pr_head "$COVERAGE_PR_HEAD" \
+          --arg lcov_hash "$report_hash" '
+          .headSha == $head and .testedTreeSha == $tree and
+          .baseSha == $base and (.prHeadSha // "") == $pr_head and
+          .lcovSha256 == $lcov_hash and .status == "passed" and .failures == []
+        ' coverage/patch-coverage.json > /dev/null
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v7
+      with:
+        files: ./coverage/lcov.info
+        disable_search: true
+        flags: unittests
+        name: codecov-22.x
+        fail_ci_if_error: true
+        use_oidc: true
 
   lint:
     name: Lint Code
