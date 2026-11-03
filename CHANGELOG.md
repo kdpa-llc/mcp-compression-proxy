@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.3.4](https://github.com/kdpa-llc/mcp-compression-proxy/compare/v1.3.3...v1.3.4) (2026-11-03)
+
+### Bug Fixes
+
+* **deps:** bump the production-dependencies group across 1 directory with 3 updates ([#75](https://github.com/kdpa-llc/mcp-compression-proxy/issues/75)) ([42ca2cc](https://github.com/kdpa-llc/mcp-compression-proxy/commit/42ca2cc8e0c5db59d825809ad3754a9f4e07d5eb))
+
 ## [1.3.3](https://github.com/kdpa-llc/mcp-compression-proxy/compare/v1.3.2...v1.3.3) (2026-10-04)
 
 ### Bug Fixes
