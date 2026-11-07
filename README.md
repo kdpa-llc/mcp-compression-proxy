@@ -534,7 +534,7 @@ Open source grows through the people who try it, share it, and improve it. If MC
 
 ## 📄 License
 
-[MIT](LICENSE) © 2025 KDPA. Built with the [Model Context Protocol TypeScript SDK][mcp-sdk].
+[MIT](LICENSE) © 2025 KDPA LLC. Built with the [Model Context Protocol TypeScript SDK][mcp-sdk].
 
 ---
 
