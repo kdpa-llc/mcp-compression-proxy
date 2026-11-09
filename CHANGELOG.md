@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.3.5](https://github.com/kdpa-llc/mcp-compression-proxy/compare/v1.3.4...v1.3.5) (2026-11-09)
+
+### Bug Fixes
+
+* **deps:** bump @modelcontextprotocol/sdk ([#77](https://github.com/kdpa-llc/mcp-compression-proxy/issues/77)) ([e4eb485](https://github.com/kdpa-llc/mcp-compression-proxy/commit/e4eb485a69bf8f12c3effaa8c7a57b31823de741))
+
 ## [1.3.4](https://github.com/kdpa-llc/mcp-compression-proxy/compare/v1.3.3...v1.3.4) (2026-11-03)
 
 ### Bug Fixes
